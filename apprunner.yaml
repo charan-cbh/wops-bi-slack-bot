@@ -3,10 +3,8 @@ runtime: docker
 build:
   commands:
     build:
-      - echo "No build commands"
+      - echo "Building Docker image"
 run:
-  runtime-version: latest
-  command: uvicorn app.main:app --host 0.0.0.0 --port 8000
   network:
     port: 8000
     env: PORT
