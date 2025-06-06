@@ -71,7 +71,7 @@ async def init_valkey_client():
         print(f"🔄 Attempting to connect to Valkey at {VALKEY_HOST}:{VALKEY_PORT}")
         print(f"🔐 TLS Enabled: {VALKEY_USE_TLS}")
 
-        # Configure Valkey connection for CLUSTER mode (not single node) - test git deployment
+        # Configure Valkey connection for CLUSTER mode (not single node)
         addresses = [
             NodeAddress(VALKEY_HOST, VALKEY_PORT)
         ]
@@ -1329,3 +1329,4 @@ async def check_valkey_health():
             return {"status": "unhealthy", "backend": "Valkey", "error": str(e)}
     else:
         return {"status": "fallback", "backend": "Local Memory"}
+# - test git deployment
