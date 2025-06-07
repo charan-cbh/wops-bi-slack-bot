@@ -2,7 +2,7 @@ version: 0.0
 os: linux
 files:
   - source: /
-    destination: /home/ubuntu/wops-bi-slack-bot
+    destination: /home/ec2-user/wops-bi-slack-bot
 
 hooks:
   ApplicationStop:

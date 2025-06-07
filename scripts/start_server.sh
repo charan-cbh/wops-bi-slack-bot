@@ -1,6 +1,6 @@
 #!/bin/bash
-cd /home/ubuntu/wops-bi-slack-bot
-source /home/ubuntu/venv/bin/activate
+cd /home/ec2-user/wops-bi-slack-bot
+source /home/ec2-user/venv/bin/activate
 
 # Kill previous uvicorn process if running
 pkill -f "uvicorn main:app" || true
