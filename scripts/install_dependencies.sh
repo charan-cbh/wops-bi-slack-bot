@@ -1,11 +1,4 @@
 #!/bin/bash
-
-# Remove any previous files in the deploy path to prevent overwrite errors
-rm -rf /home/ec2-user/wops-bi-slack-bot/*
-
-# Recreate scripts directory (since we wiped it)
-mkdir -p /home/ec2-user/wops-bi-slack-bot/scripts
-
 cd /home/ec2-user/wops-bi-slack-bot
 
 # Create venv if not exists
