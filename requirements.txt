@@ -53,4 +53,4 @@ uvicorn~=0.34.2
 slack_sdk~=3.35.0
 typing_extensions~=4.13.2
 pydantic_core~=2.33.2
-glide
+valkey-glide
