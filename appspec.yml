@@ -5,6 +5,10 @@ files:
     destination: /home/ubuntu/wops-bi-slack-bot
 
 hooks:
+  ApplicationStop:
+    - location: scripts/stop_server.sh
+      timeout: 60
+      runas: ubuntu
   AfterInstall:
     - location: scripts/install_dependencies.sh
       timeout: 180
