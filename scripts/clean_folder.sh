@@ -1,10 +1,7 @@
 #!/bin/bash
 
-TARGET_DIR="/home/ec2-user/wops-bi-slack-bot"
+TARGET="/home/ec2-user/wops-bi-slack-bot"
+echo "[INFO] Cleaning $TARGET"
 
-echo "[INFO] Cleaning up old app files from $TARGET_DIR"
-
-# Delete everything except the venv folder
-find "$TARGET_DIR" -mindepth 1 -not -path "$TARGET_DIR/venv*" -exec rm -rf {} + 2>> "$TARGET_DIR/clean_errors.log"
-
-echo "[INFO] Cleanup complete"
+# Delete everything except virtual env and .git, with sudo to avoid permission issues
+sudo find "$TARGET" -mindepth 1 -not -name "venv" -not -name ".git" -exec rm -rf {} + 2>/dev/null || true
