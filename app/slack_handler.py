@@ -84,13 +84,22 @@ async def handle_slack_event(request: Request):
 
 
 async def process_app_mention(event):
-    """Process app mention event with smart routing"""
+    """Process app mention event with smart routing - SIMPLIFIED"""
     user_question = event.get("text", "")
     channel_id = event.get("channel")
     user_id = event.get("user")
 
     try:
-        # Send "thinking" indicator to show bot is working
+        # Clean the question
+        clean_question = re.sub(r"<@[^>]+>", "", user_question).strip()
+        print(f"🔍 Received: {clean_question}")
+
+        # Check for special debug commands
+        if clean_question.lower().startswith("debug"):
+            await handle_debug_command(clean_question, channel_id, user_id)
+            return
+
+        # Send thinking indicator
         try:
             slack_client.chat_postMessage(
                 channel=channel_id,
@@ -99,153 +108,121 @@ async def process_app_mention(event):
         except Exception as e:
             print(f"⚠️ Could not send thinking indicator: {e}")
 
-        clean_question = re.sub(r"<@[^>]+>", "", user_question).strip()
-        print("🔍 Received question:", user_question)
-        print("🧹 Cleaned question:", clean_question)
-        print(f"👤 User: {user_id}, Channel: {channel_id}")
-
-        # Check for special debug commands
-        if clean_question.lower().startswith("debug"):
-            if USE_ASSISTANT_API and ASSISTANT_ID:
-                debug_query = clean_question.replace("debug", "").strip()
-
-                if debug_query.lower() in ["cache", "stats"]:
-                    # Show cache statistics - NOW ASYNC for Valkey
-                    stats = await get_cache_stats()
-                    learning = await get_learning_insights()
-                    debug_result = f"📊 **Cache Statistics:**\n```{json.dumps(stats, indent=2)}```\n\n🧠 **Learning Insights:**\n```{learning}```"
-                elif debug_query.lower() in ["learning", "patterns"]:
-                    # Show learning patterns - NOW ASYNC for Valkey
-                    learning = await get_learning_insights()
-                    debug_result = f"🧠 **What I've Learned:**\n```{learning}```"
-                elif debug_query.lower() in ["test", "classification"]:
-                    # Test question classification
-                    test_question_classification()
-                    debug_result = "🧪 **Classification test complete** - check server logs for results"
-                else:
-                    # Original debug search
-                    debug_result = await debug_assistant_search(debug_query, user_id, channel_id)
-
-                await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}")
-                return
-            else:
-                await send_slack_message(channel_id, "Debug only works with Assistant API enabled")
-                return
-
-        # Use smart routing instead of always generating SQL
+        # Use smart routing with assistant API
         if USE_ASSISTANT_API and ASSISTANT_ID:
-            print(f"🤖 Using Assistant API: {ASSISTANT_ID}")
+            print(f"🤖 Using Assistant API")
 
             # Smart routing - determines if SQL is needed or conversational response
             response, response_type = await handle_question(clean_question, user_id, channel_id, ASSISTANT_ID)
 
-            print(f"🔍 Question classified as: {response_type}")
+            print(f"📊 Response type: {response_type}")
 
             if response_type == 'sql':
-                # SQL was generated, execute it
-                print("📊 Executing SQL query...")
-                await send_slack_message(channel_id, "⚡ Executing query...")
-
-                sql = response
-                print("🧠 Generated SQL:\n", sql)
-
-                # Check if SQL generation failed
-                if sql.strip().lower().startswith("i don't have enough") or sql.startswith("-- Error:"):
-                    await send_slack_message(channel_id, f"❌ {sql}")
-                    return
-
-                # Execute the SQL query
-                print("🔍 Running query...")
-                df = run_query(sql)
-
-                if isinstance(df, str):
-                    # Error message from query execution
-                    result_message = f"❌ Query error: {df}"
-                    # Update cache with poor results - NOW ASYNC for Valkey
-                    await update_sql_cache_with_results(clean_question, sql, 0)
-                else:
-                    print("✅ Query returned DataFrame")
-                    result_count = len(df) if hasattr(df, '__len__') else 0
-                    print(f"📊 Results: {result_count} rows, {df.shape[1] if hasattr(df, 'shape') else 0} columns")
-
-                    # Update cache with actual results - NOW ASYNC for Valkey
-                    await update_sql_cache_with_results(clean_question, sql, result_count)
-
-                    # Summarize results
-                    print("🤖 Using Assistant for summarization")
-                    result_message = await summarize_with_assistant(
-                        clean_question,
-                        format_result_for_slack(df),
-                        user_id,
-                        channel_id,
-                        ASSISTANT_ID
-                    )
-
-                await send_slack_message(channel_id, result_message)
-
-            elif response_type == 'conversational':
-                # Conversational response - send directly, no SQL needed
-                print("💬 Providing conversational response...")
+                # Execute SQL and get results
+                await execute_sql_and_respond(
+                    clean_question, response, channel_id, user_id
+                )
+            else:
+                # Send conversational response directly
                 await send_slack_message(channel_id, response)
 
-            else:
-                # Fallback
-                print("❓ Unknown response type")
-                await send_slack_message(channel_id,
-                                         "I'm not sure how to help with that. Try asking about tickets, reviews, or agent data.")
-
         else:
-            # Fallback to embedding search (original logic)
-            print("📚 Using local embeddings with FAISS")
-            relevant_models = search_relevant_models(clean_question)
-            for match in relevant_models:
-                print(f"✅ Match found: {match['model']}")
-            print(f"📊 Found {len(relevant_models)} relevant models")
-
-            model_context = relevant_models[0]["context"] if relevant_models else ""
-            sql = ask_llm_for_sql(clean_question, model_context)
-
-            print("🧠 Generated SQL:\n", sql)
-
-            # Check if SQL generation failed
-            if sql.strip().lower().startswith("i don't have enough"):
-                await send_slack_message(channel_id, f"❌ {sql}")
-                return
-
-            # Execute the SQL query
-            print("🔍 Running query...")
-            await send_slack_message(channel_id, "⚡ Executing query...")
-
-            df = run_query(sql)
-
-            if isinstance(df, str):
-                # Error message from query execution
-                result_message = f"❌ Query error: {df}"
-                # Update cache with poor results - NOW ASYNC for Valkey
-                await update_sql_cache_with_results(clean_question, sql, 0)
-            else:
-                print("✅ Query returned DataFrame")
-                result_count = len(df) if hasattr(df, '__len__') else 0
-                print(f"📊 Results: {result_count} rows, {df.shape[1] if hasattr(df, 'shape') else 0} columns")
-
-                # Update cache with actual results - NOW ASYNC for Valkey
-                await update_sql_cache_with_results(clean_question, sql, result_count)
-
-                # Summarize results
-                print("📝 Using direct LLM for summarization")
-                result_message = summarize_results_with_llm(
-                    clean_question,
-                    format_result_for_slack(df)
-                )
-
-            await send_slack_message(channel_id, result_message)
+            # Fallback to embedding search
+            await handle_with_embeddings(clean_question, channel_id, user_id)
 
     except Exception as e:
-        print("❌ Error handling Slack event:", str(e))
+        print(f"❌ Error: {str(e)}")
         await send_slack_message(
             channel_id,
-            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question or contact support."
+            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question."
         )
+
+
+async def handle_debug_command(clean_question: str, channel_id: str, user_id: str):
+    """Handle debug commands"""
+    if not (USE_ASSISTANT_API and ASSISTANT_ID):
+        await send_slack_message(channel_id, "Debug only works with Assistant API enabled")
+        return
+
+    debug_query = clean_question.replace("debug", "").strip()
+
+    if debug_query.lower() in ["cache", "stats"]:
+        # Show cache statistics
+        stats = await get_cache_stats()
+        learning = await get_learning_insights()
+        debug_result = f"📊 **Cache Statistics:**\n```{json.dumps(stats, indent=2)}```\n\n🧠 **Learning Insights:**\n```{learning}```"
+    elif debug_query.lower() in ["learning", "patterns"]:
+        # Show learning patterns
+        learning = await get_learning_insights()
+        debug_result = f"🧠 **What I've Learned:**\n```{learning}```"
+    elif debug_query.lower() in ["test", "classification"]:
+        # Test question classification
+        test_question_classification()
+        debug_result = "🧪 **Classification test complete** - check server logs for results"
+    else:
+        # Original debug search
+        debug_result = await debug_assistant_search(debug_query, user_id, channel_id)
+
+    await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}")
+
+
+async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str):
+    """Execute SQL query and send results"""
+    print("⚡ Executing query...")
+    await send_slack_message(channel_id, "⚡ Executing query...")
+
+    print(f"🧠 SQL:\n{sql}")
+
+    # Check if SQL generation failed
+    if sql.strip().lower().startswith("i don't have enough") or sql.startswith("-- Error:"):
+        await send_slack_message(channel_id, f"❌ {sql}")
+        return
+
+    # Execute the SQL query
+    df = run_query(sql)
+
+    if isinstance(df, str):
+        # Error message from query execution
+        result_message = f"❌ Query error: {df}"
+        # Update cache with poor results
+        await update_sql_cache_with_results(clean_question, sql, 0)
+    else:
+        # Success - process results
+        result_count = len(df) if hasattr(df, '__len__') else 0
+        print(f"✅ Results: {result_count} rows")
+
+        # Update cache with actual results
+        await update_sql_cache_with_results(clean_question, sql, result_count)
+
+        # Summarize results
+        if USE_ASSISTANT_API and ASSISTANT_ID:
+            result_message = await summarize_with_assistant(
+                clean_question,
+                format_result_for_slack(df),
+                user_id,
+                channel_id,
+                ASSISTANT_ID
+            )
+        else:
+            result_message = summarize_results_with_llm(
+                clean_question,
+                format_result_for_slack(df)
+            )
+
+    await send_slack_message(channel_id, result_message)
+
+
+async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: str):
+    """Fallback handler using embeddings"""
+    print("📚 Using local embeddings with FAISS")
+
+    relevant_models = search_relevant_models(clean_question)
+    print(f"📊 Found {len(relevant_models)} relevant models")
+
+    model_context = relevant_models[0]["context"] if relevant_models else ""
+    sql = ask_llm_for_sql(clean_question, model_context)
+
+    await execute_sql_and_respond(clean_question, sql, channel_id, user_id)
 
 
 async def send_slack_message(channel_id: str, message: str):
@@ -287,4 +264,5 @@ def get_status():
         "assistant_id": ASSISTANT_ID if ASSISTANT_ID else "Not configured",
         "slack_configured": bool(SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET),
         "smart_routing_enabled": True,
+        "tl_patterns_enabled": True,
     }

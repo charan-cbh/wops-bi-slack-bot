@@ -5,7 +5,8 @@ import json
 from typing import Optional, Dict, Any, Tuple
 from dotenv import load_dotenv
 from openai import OpenAI
-from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, GlideClusterClientConfiguration
+from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
+    GlideClusterClientConfiguration
 
 load_dotenv()
 
@@ -54,6 +55,44 @@ THREAD_CACHE_PREFIX = f"{CACHE_PREFIX}:thread"
 SQL_CACHE_PREFIX = f"{CACHE_PREFIX}:sql"
 LEARNING_CACHE_PREFIX = f"{CACHE_PREFIX}:learning"
 CONVERSATION_CACHE_PREFIX = f"{CACHE_PREFIX}:conversation"
+
+# TL-focused question patterns
+TL_QUESTION_PATTERNS = {
+    'ticket_volume': {
+        'indicators': ['how many tickets', 'ticket volume', 'unassigned tickets', 'tickets by group',
+                       'messaging tickets'],
+        'sql_template': 'volume_analysis'
+    },
+    'agent_performance': {
+        'indicators': ['which agents', 'agent performance', 'agents who passed', 'agents who failed',
+                       'highest resolution', 'lowest resolution'],
+        'sql_template': 'agent_ranking'
+    },
+    'aht_analysis': {
+        'indicators': ['aht', 'average handle time', 'handling time', 'chat aht', 'average handling'],
+        'sql_template': 'time_metrics'
+    },
+    'csat_dsat': {
+        'indicators': ['csat', 'dsat', 'satisfaction', 'feedback scores', 'dsat responses'],
+        'sql_template': 'satisfaction_metrics'
+    },
+    'qa_analysis': {
+        'indicators': ['qa scores', 'qa audit', 'qa fails', 'qa reviews', 'quality audit'],
+        'sql_template': 'quality_metrics'
+    },
+    'contact_driver': {
+        'indicators': ['contact driver', 'ticket type', 'which category', 'driving consults', 'invalid consults'],
+        'sql_template': 'driver_analysis'
+    },
+    'time_based': {
+        'indicators': ['this week', 'last week', 'today', 'yesterday', 'weekly', 'daily', 'by week', 'per week'],
+        'sql_template': 'time_series'
+    },
+    'sla_compliance': {
+        'indicators': ['sla', 'compliance', 'first response', 'resolution time', 'reply time over'],
+        'sql_template': 'sla_metrics'
+    }
+}
 
 
 async def init_valkey_client():
@@ -231,64 +270,30 @@ def get_question_hash(question: str) -> str:
 
 
 def classify_question_type(question: str) -> str:
-    """Classify what type of response the question needs"""
+    """Classify what type of response the question needs - optimized for TL questions"""
     question_lower = question.lower()
 
-    # FIRST: Check for meta/capability questions (highest priority)
+    # Check against TL question patterns
+    for pattern_name, pattern_config in TL_QUESTION_PATTERNS.items():
+        if any(indicator in question_lower for indicator in pattern_config['indicators']):
+            # Double-check it's not asking about capabilities
+            if not any(meta in question_lower for meta in
+                       ['what questions', 'what can', 'examples of questions', 'sample questions']):
+                return 'sql_required'
+
+    # Meta/capability questions
     meta_indicators = [
         'what can you', 'what do you', 'what are you', 'how do you',
         'what questions can', 'what kind of questions', 'what type of questions',
         'what data do you', 'what information do you', 'what help can you',
-        'what are the top', 'what are some', 'give me examples',
         'list questions', 'example questions', 'sample questions',
         'what tables', 'what sources', 'what capabilities'
     ]
 
-    # If asking about the bot's capabilities, always conversational
     if any(indicator in question_lower for indicator in meta_indicators):
         return 'conversational'
 
-    # SECOND: Check for SQL-requiring questions (moved higher priority)
-    sql_indicators = [
-        'how many', 'count of', 'total number', 'show me all', 'list all',
-        'find tickets', 'find reviews', 'get data', 'query',
-        'highest', 'lowest', 'most', 'least', 'average', 'sum',
-        'today', 'yesterday', 'last week', 'this month', 'recent',
-        'group by', 'where', 'filter'
-    ]
-
-    # Check for SQL patterns first (before followup)
-    if any(indicator in question_lower for indicator in sql_indicators):
-        # Double-check it's not asking about capabilities
-        if not any(meta in question_lower for meta in ['what questions', 'what can', 'examples', 'sample']):
-            return 'sql_required'
-
-    # THIRD: Check for SQL follow-ups (follow-ups that still need data)
-    sql_followup_indicators = [
-        'agent names', 'agent name', 'names instead', 'with names',
-        'same info', 'same data', 'same but', 'instead of',
-        'last week', 'this week', 'last month', 'this month',
-        'only voice', 'just voice', 'voice group only',
-        'break down by', 'group by', 'split by',
-        'can i get', 'can you show', 'show me the same',
-        'what about', 'how about'
-    ]
-
-    if any(indicator in question_lower for indicator in sql_followup_indicators):
-        return 'sql_required'
-
-    # FOURTH: Check for specific data requests (very specific)
-    data_request_patterns = [
-        'tickets in', 'reviews for', 'agents with', 'performance of',
-        'data for', 'results for', 'stats for', 'metrics for',
-        'resolve', 'resolved', 'per week', 'per day', 'per month',
-        'each agent', 'by agent', 'agent performance'
-    ]
-
-    if any(pattern in question_lower for pattern in data_request_patterns):
-        return 'sql_required'
-
-    # FIFTH: Check for explicit help requests
+    # Help requests
     help_indicators = [
         'help', 'how to', 'explain', 'what is', 'tell me about',
         'describe', 'definition of', 'who are you'
@@ -297,44 +302,45 @@ def classify_question_type(question: str) -> str:
     if any(indicator in question_lower for indicator in help_indicators):
         return 'conversational'
 
-    # SIXTH: Check for conversational follow-up questions (moved lower priority)
+    # Conversational follow-ups
     conversational_followup_indicators = [
         'why', 'what does that mean', 'explain that', 'more details',
         'break that down', 'can you elaborate', 'tell me more'
     ]
 
-    # Only classify as conversational follow-up if it's clearly explanatory
     if any(indicator in question_lower for indicator in conversational_followup_indicators):
         return 'followup'
 
-    # DEFAULT: If unclear, go conversational (safer)
-    return 'conversational'
+    # DEFAULT: If unclear, assume SQL is needed for data questions
+    return 'sql_required'
 
 
 def get_question_pattern(question: str) -> str:
-    """Extract question pattern for learning"""
+    """Extract question pattern for learning - focused on TL patterns"""
+    question_lower = question.lower()
+
+    # Check TL patterns first
+    for pattern_name, pattern_config in TL_QUESTION_PATTERNS.items():
+        if any(indicator in question_lower for indicator in pattern_config['indicators']):
+            return pattern_name
+
+    # Fallback to basic patterns
     pattern_elements = []
 
-    if 'ticket' in question.lower():
+    if 'ticket' in question_lower:
         pattern_elements.append('tickets')
-    if 'voice' in question.lower():
-        pattern_elements.append('voice_group')
-    if 'agent' in question.lower():
+    if 'agent' in question_lower:
         pattern_elements.append('agent')
-    if 'highest' in question.lower() or 'most' in question.lower():
+    if any(word in question_lower for word in ['highest', 'most', 'top']):
         pattern_elements.append('top_analysis')
-    if 'today' in question.lower():
-        pattern_elements.append('today')
-    if 'last' in question.lower() and 'day' in question.lower():
-        pattern_elements.append('recent_days')
-    if any(word in question.lower() for word in ['when', 'what time', 'which hour']):
-        pattern_elements.append('time_analysis')
+    if any(word in question_lower for word in ['lowest', 'least', 'bottom']):
+        pattern_elements.append('bottom_analysis')
 
-    return '_'.join(pattern_elements)
+    return '_'.join(pattern_elements) if pattern_elements else 'general'
 
 
 def analyze_question_intent(question: str) -> dict:
-    """Analyze question to determine SQL pattern needed"""
+    """Analyze question to determine SQL pattern needed - enhanced for TL questions"""
     question_lower = question.lower()
 
     intent = {
@@ -344,31 +350,66 @@ def analyze_question_intent(question: str) -> dict:
         'time_granularity': None,
         'filters': [],
         'keywords': [],
-        'question_type': classify_question_type(question)
+        'question_type': classify_question_type(question),
+        'tl_pattern': None,
+        'aggregation': None,
+        'grouping': []
     }
 
-    # Time-based questions
+    # Check TL patterns
+    for pattern_name, pattern_config in TL_QUESTION_PATTERNS.items():
+        if any(indicator in question_lower for indicator in pattern_config['indicators']):
+            intent['tl_pattern'] = pattern_name
+            intent['type'] = pattern_config['sql_template']
+            break
+
+    # Time analysis
     if any(word in question_lower for word in ['when', 'what time', 'which hour']):
         intent['type'] = 'time_analysis'
         intent['time_analysis'] = True
         intent['time_granularity'] = 'hour'
-        intent['keywords'].append('time_analysis')
+    elif 'daily' in question_lower or 'per day' in question_lower:
+        intent['time_granularity'] = 'day'
+    elif 'weekly' in question_lower or 'per week' in question_lower:
+        intent['time_granularity'] = 'week'
+    elif 'monthly' in question_lower or 'per month' in question_lower:
+        intent['time_granularity'] = 'month'
 
-    # Peak analysis
-    if any(word in question_lower for word in ['highest', 'most', 'maximum', 'peak']):
-        intent['peak_analysis'] = True
-        intent['keywords'].append('peak_analysis')
+    # Aggregation type
+    if 'average' in question_lower or 'avg' in question_lower:
+        intent['aggregation'] = 'AVG'
+    elif 'total' in question_lower or 'sum' in question_lower:
+        intent['aggregation'] = 'SUM'
+    elif 'count' in question_lower or 'how many' in question_lower:
+        intent['aggregation'] = 'COUNT'
+    elif any(word in question_lower for word in ['highest', 'most', 'maximum']):
+        intent['aggregation'] = 'MAX'
+    elif any(word in question_lower for word in ['lowest', 'least', 'minimum']):
+        intent['aggregation'] = 'MIN'
 
-    # Filters
+    # Grouping
+    if 'by group' in question_lower or 'per group' in question_lower:
+        intent['grouping'].append('group')
+    if 'by agent' in question_lower or 'per agent' in question_lower or 'each agent' in question_lower:
+        intent['grouping'].append('agent')
+    if 'by team' in question_lower or 'per team' in question_lower:
+        intent['grouping'].append('team')
+    if 'by contact driver' in question_lower or 'by ticket type' in question_lower:
+        intent['grouping'].append('ticket_type')
+
+    # Time filters
     if 'today' in question_lower:
         intent['filters'].append('today')
-        intent['keywords'].append('today')
-    if 'voice' in question_lower:
-        intent['filters'].append('voice_group')
-        intent['keywords'].append('voice')
-    if 'ticket' in question_lower:
-        intent['filters'].append('tickets')
-        intent['keywords'].append('tickets')
+    elif 'yesterday' in question_lower:
+        intent['filters'].append('yesterday')
+    elif 'this week' in question_lower:
+        intent['filters'].append('this_week')
+    elif 'last week' in question_lower:
+        intent['filters'].append('last_week')
+    elif 'this month' in question_lower:
+        intent['filters'].append('this_month')
+    elif 'last month' in question_lower:
+        intent['filters'].append('last_month')
 
     return intent
 
@@ -740,21 +781,27 @@ async def handle_conversational_question(user_question: str, user_id: str, chann
 
     context = await get_conversation_context(user_id, channel_id)
 
-    instructions = """You are a helpful data assistant with access to business data through file_search.
+    instructions = """You are a BI assistant specialized in business metrics and KPIs.
 
-Your capabilities:
-- Generate SQL queries for business questions about tickets, reviews, agents, and performance
-- Answer questions about Klaus reviews, Zendesk tickets, and WOPs data
-- Provide insights and summaries from query results
-- Help users understand what data is available
+Available data:
+- Ticket volume and types
+- Agent performance metrics (AHT, resolution time)
+- CSAT/DSAT scores
+- QA scores and audit results
+- First response and resolution times
+- SLA compliance metrics
+- Contact drivers and categories
 
-Key data sources you have access to:
-- Klaus reviews (fct_klaus__reviews)
-- Zendesk tickets (stg_worker_ops__wfm_zendesk_tickets_data)
-- Agent performance data (fct_amazon_connect__agent_metrics)
-- Voice group data
+Common questions I help with:
+- How many tickets by group/agent/type
+- Agent performance rankings
+- AHT and handling time analysis
+- CSAT/DSAT trends
+- QA failures and categories
+- Contact driver analysis
+- Weekly/daily comparisons
 
-Be helpful, conversational, and direct. Use file_search to provide accurate information about available data and capabilities."""
+Be direct and helpful. Focus on business metrics."""
 
     context_message = ""
     if context:
@@ -762,7 +809,7 @@ Be helpful, conversational, and direct. Use file_search to provide accurate info
 
     message = f"""User question: {user_question}{context_message}
 
-Provide a helpful response about your capabilities or the available data. If the user is asking about specific data, use file_search to find relevant information."""
+Provide a helpful response about available metrics, capabilities, or guidance."""
 
     response = await send_message_and_run(thread_id, message, instructions)
 
@@ -814,91 +861,142 @@ async def ask_assistant_generate_sql(user_question: str, user_id: str, channel_i
 
     print(f"🤖 Generating SQL for: {user_question[:50]}...")
 
-    # Build intent-specific guidance
-    intent_guidance = ""
-    if question_intent['time_analysis']:
-        intent_guidance = "Use EXTRACT(HOUR FROM timestamp) for hourly analysis and GROUP BY the time component."
+    # Build SQL examples based on TL patterns
+    sql_examples = get_tl_sql_examples(question_intent)
 
-    if question_intent['peak_analysis']:
-        intent_guidance += " Use ORDER BY count DESC LIMIT 1 for highest/most questions."
+    # SIMPLIFIED INSTRUCTIONS - focused on TL metrics
+    instructions = f"""You are a SQL expert for business metrics analysis.
 
-    # SIMPLIFIED INSTRUCTIONS - much shorter and clearer
-    instructions = f"""You are a Snowflake SQL expert with access to DBT documentation via file_search.
+TABLES:
+- Tickets: stg_worker_ops__wfm_zendesk_tickets_data
+- Klaus reviews: fct_klaus__reviews (reviewer_name not assignee_name)
+- Agent metrics: fct_amazon_connect__agent_metrics
+- Voice data: stg_worker_ops__wfm_zendesk_tickets_data (filter by group)
 
-PROCESS:
-1. Use file_search to find the correct table
-2. Use file_search to verify column names exist  
-3. Generate clean SQL using only verified columns
+COMMON PATTERNS:
+{sql_examples}
 
-KEY TABLES:
-- Klaus reviews → fct_klaus__reviews (use reviewer_name, not assignee_name)
-- Tickets → stg_worker_ops__wfm_zendesk_tickets_data
-- Voice group questions → stg_worker_ops__wfm_zendesk_tickets_data
-- Agent metrics → fct_amazon_connect__agent_metrics
+RULES:
+1. Use file_search to verify exact column names
+2. Include proper time filters for "this week", "last week", etc
+3. Use DATE_TRUNC for time grouping
+4. Return only clean SQL
 
-{intent_guidance}
+Question type: {question_intent['tl_pattern'] or 'general'}
+Time filter: {', '.join(question_intent['filters'])}
 
-CRITICAL: Always verify column names through file_search before using them.
+Return ONLY the SQL query."""
 
-Return only SQL in this format:
-```sql
-SELECT columns FROM table WHERE conditions;
-```"""
-
-    # SIMPLIFIED MESSAGE - much shorter
     message = f"""Generate SQL for: {user_question}
 
-Requirements:
-- Use file_search to find the right table
-- Verify column names exist in the schema
-- Return clean SQL only
-
-Question type: {question_intent['type']}
-Keywords: {question_intent['keywords']}"""
+Intent: {question_intent['type']}
+Pattern: {question_intent['tl_pattern']}"""
 
     response = await send_message_and_run(thread_id, message, instructions)
 
-    # IMPROVED SQL extraction with better error handling
-    sql_query = None
+    # Extract SQL
+    sql_query = extract_sql_from_response(response)
 
+    print(f"🧠 Generated SQL: {sql_query}")
+    return sql_query
+
+
+def get_tl_sql_examples(intent: dict) -> str:
+    """Get SQL examples based on TL patterns"""
+    pattern = intent.get('tl_pattern', 'general')
+
+    examples = {
+        'ticket_volume': """
+-- How many tickets by group
+SELECT group_name, COUNT(*) as ticket_count
+FROM stg_worker_ops__wfm_zendesk_tickets_data
+WHERE created_at >= CURRENT_DATE - 7
+GROUP BY group_name
+ORDER BY ticket_count DESC;""",
+
+        'agent_performance': """
+-- Agents with highest resolution time
+SELECT agent_name, AVG(resolution_time_hours) as avg_resolution
+FROM tickets_table
+WHERE resolved_at >= CURRENT_DATE - 7
+GROUP BY agent_name
+ORDER BY avg_resolution DESC
+LIMIT 10;""",
+
+        'aht_analysis': """
+-- Average handling time by contact driver
+SELECT contact_driver, AVG(handle_time_seconds/60) as avg_handle_minutes
+FROM agent_metrics_table
+WHERE date >= CURRENT_DATE - 7
+GROUP BY contact_driver
+ORDER BY avg_handle_minutes DESC;""",
+
+        'csat_dsat': """
+-- DSAT responses by ticket type
+SELECT ticket_type, COUNT(*) as dsat_count
+FROM feedback_table
+WHERE satisfaction_rating < 3
+AND created_at >= CURRENT_DATE - 7
+GROUP BY ticket_type
+ORDER BY dsat_count DESC;""",
+
+        'qa_analysis': """
+-- QA failures by category
+SELECT failure_category, COUNT(*) as fail_count
+FROM qa_reviews_table
+WHERE qa_score < passing_threshold
+AND review_date >= CURRENT_DATE - 7
+GROUP BY failure_category
+ORDER BY fail_count DESC;"""
+    }
+
+    return examples.get(pattern, "-- Use appropriate aggregations and filters")
+
+
+def extract_sql_from_response(response: str) -> str:
+    """Improved SQL extraction from assistant response"""
     # First try to extract SQL from code blocks
     if "```sql" in response:
         try:
             sql_query = response.split("```sql")[1].split("```")[0].strip()
+            return sql_query
         except IndexError:
             print("❌ Failed to extract SQL from code block")
-            sql_query = None
 
-    # If no SQL found, look for SELECT statements
-    if not sql_query:
-        lines = response.split('\n')
-        for line in lines:
-            if line.strip().upper().startswith('SELECT'):
-                # Found a SELECT statement, try to extract it
-                sql_lines = []
-                for i, l in enumerate(lines[lines.index(line):]):
-                    sql_lines.append(l)
-                    if l.strip().endswith(';'):
-                        break
-                sql_query = '\n'.join(sql_lines).strip()
+    # Look for SELECT statements
+    lines = response.split('\n')
+    sql_lines = []
+    in_sql = False
+
+    for line in lines:
+        line_stripped = line.strip()
+
+        # Start capturing when we see SELECT
+        if line_stripped.upper().startswith('SELECT'):
+            in_sql = True
+            sql_lines = [line]
+        elif in_sql:
+            sql_lines.append(line)
+            # Stop when we see semicolon
+            if line_stripped.endswith(';'):
                 break
 
-    # If still no SQL, check if it's an error message
-    if not sql_query:
-        if "I don't have enough" in response or "cannot find" in response.lower():
-            sql_query = response
-        else:
-            # Something went wrong - return error
-            print(f"❌ No SQL found in response. Response was: {response[:200]}...")
-            sql_query = "-- Error: Could not extract SQL from assistant response"
+    if sql_lines:
+        return '\n'.join(sql_lines).strip()
 
-    # Validate the SQL doesn't contain instruction text
-    if sql_query and ("MANDATORY" in sql_query or "Generate SQL for:" in sql_query):
-        print("❌ Assistant returned instruction text instead of SQL")
-        sql_query = "-- Error: Assistant returned instructions instead of SQL"
+    # Check if it's an error message
+    if "I don't have enough" in response or "cannot find" in response.lower():
+        return response
 
-    print(f"🧠 Generated SQL: {sql_query}")
-    return sql_query
+    # Last resort - look for any SQL-like content
+    if 'SELECT' in response.upper():
+        # Extract everything from first SELECT to semicolon
+        start = response.upper().find('SELECT')
+        end = response.find(';', start)
+        if end != -1:
+            return response[start:end + 1].strip()
+
+    return "-- Error: Could not extract SQL from assistant response"
 
 
 async def handle_question(user_question: str, user_id: str, channel_id: str, assistant_id: str = None) -> Tuple[
@@ -911,22 +1009,23 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
     question_intent = analyze_question_intent(user_question)
     question_type = question_intent['question_type']
 
-    # ENHANCED: Check if this might be a SQL follow-up based on context
-    if question_type == 'conversational' and context:
+    # Check if this is a SQL follow-up based on context and TL patterns
+    if context and question_type != 'sql_required':
         last_question = context.get('last_question', '').lower()
         current_question = user_question.lower()
 
-        # If the last question was SQL-related and current question seems like a modification
+        # Check if previous was data-related and current has modification language
         sql_context_indicators = [
-            'tickets', 'reviews', 'agents', 'performance', 'data', 'query'
+            'tickets', 'agents', 'aht', 'csat', 'dsat', 'qa', 'performance',
+            'volume', 'count', 'average', 'highest', 'lowest'
         ]
 
         modification_indicators = [
             'same', 'instead', 'but', 'with names', 'names instead',
-            'agent names', 'can i get', 'can you show', 'what about'
+            'agent names', 'can i get', 'can you show', 'what about',
+            'break down by', 'group by', 'split by'
         ]
 
-        # If previous question had SQL context and current has modification language
         has_sql_context = any(indicator in last_question for indicator in sql_context_indicators)
         has_modification = any(indicator in current_question for indicator in modification_indicators)
 
@@ -986,7 +1085,7 @@ async def update_sql_cache_with_results(user_question: str, sql_query: str, resu
 
 async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str,
                                    assistant_id: str = None) -> str:
-    """Summarize query results using assistant"""
+    """Summarize query results using assistant - focused on business insights"""
     if assistant_id:
         global ASSISTANT_ID
         ASSISTANT_ID = assistant_id
@@ -995,22 +1094,27 @@ async def summarize_with_assistant(user_question: str, result_table: str, user_i
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = """You are a business intelligence assistant. Provide clear, concise business summaries.
+    # Detect the type of summary needed based on question
+    question_intent = analyze_question_intent(user_question)
 
-IMPORTANT RULES:
-- Focus ONLY on business insights and answers
-- DO NOT mention table names, databases, or technical details  
-- DO NOT mention "based on the data" or "using data from..."
-- Give direct, conversational business answers
-- Include relevant numbers, trends, and insights
-- Sound like a business analyst, not a database query tool"""
+    instructions = """You are a business analyst providing insights.
 
-    message = f"""User question: "{user_question}"
+RULES:
+- Give direct business answers
+- Include key numbers and percentages
+- Highlight important findings
+- Compare to expectations if relevant
+- NO technical details or table names
+- Be conversational and clear
 
-Query results:
+Focus on answering the specific question asked."""
+
+    message = f"""Question: "{user_question}"
+
+Data:
 {result_table}
 
-Provide a direct business answer without any technical references."""
+Provide business insights that directly answer the question."""
 
     response = await send_message_and_run(thread_id, message, instructions)
 
@@ -1026,15 +1130,11 @@ async def debug_assistant_search(user_question: str, user_id: str, channel_id: s
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = """You have access to a DBT manifest via vector store. Help debug by:
-1. Search the vector store for any tables related to the user's question
-2. List what tables, models, or information you can find
-3. Show the database, schema, and table names you discover
-4. If you find relevant information, show a sample of the metadata
-5. Be verbose about what you're finding or not finding
-6. Pay special attention to timestamp fields and their data types"""
+    instructions = """Debug mode: Search vector store and show what you find.
+List all tables, columns, and metadata related to the query.
+Be verbose about findings."""
 
-    message = f"Debug search for: {user_question}\n\nWhat tables and information can you find related to this question? Focus on timestamp fields and data types."
+    message = f"Debug search for: {user_question}\n\nShow all related tables and columns found."
 
     response = await send_message_and_run(thread_id, message, instructions)
     return response
@@ -1046,16 +1146,11 @@ async def test_file_search_connection(user_id: str, channel_id: str) -> str:
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = """You have access to a vector store with DBT documentation. Test your file_search capability:
+    instructions = """Test file_search capability.
+Search for DBT models and report what you find.
+If nothing found, say FILE_SEARCH_NOT_WORKING."""
 
-1. Use file_search to look for any DBT models or tables
-2. Report what you can find - be specific about table names
-3. If you find anything, show a sample of the content
-4. If you can't find anything, say "FILE_SEARCH_NOT_WORKING"
-
-This is a test to verify file_search is properly connected."""
-
-    message = "Test file_search: What DBT models and tables can you find in the vector store?"
+    message = "Test: List all DBT models and tables in the vector store."
 
     response = await send_message_and_run(thread_id, message, instructions)
 
@@ -1064,7 +1159,7 @@ This is a test to verify file_search is properly connected."""
     elif "fct_" in response or "stg_" in response or "dim_" in response:
         print("✅ File search appears to be working - found DBT models")
     else:
-        print("⚠️ File search connection unclear - response doesn't show clear DBT content")
+        print("⚠️ File search connection unclear")
 
     return response
 
@@ -1146,50 +1241,53 @@ async def clear_conversation_cache():
 def test_question_classification():
     """Test the question classification to ensure it works correctly"""
     test_cases = [
+        # TL-specific questions (should be SQL_REQUIRED)
+        ("How many unassigned tickets do we have by group?", "sql_required"),
+        ("Which agents had the highest resolution time this week?", "sql_required"),
+        ("Which ticket type is driving Chat AHT for my team this week?", "sql_required"),
+        ("Which ticket type is driving DSAT responses for agent John last week?", "sql_required"),
+        ("Which category is driving QA Fails this week?", "sql_required"),
+        ("What's the average handling time by contact driver?", "sql_required"),
+        ("How many messaging tickets had a reply time of over 15 minutes last week?", "sql_required"),
+        ("What Contact Driver is leading our inflows to increase?", "sql_required"),
+        ("What's the outlook of our inflows by MSA by average per week?", "sql_required"),
+        ("Who are the agents who passed all KPIs?", "sql_required"),
+        ("Who are the agents who have failing KPIs, and which KPI did they fail?", "sql_required"),
+
         # Should be CONVERSATIONAL
-        ("What are the top 5 questions you can answer about agent productivity?", "conversational"),
-        ("What can you help me with?", "conversational"),
-        ("What data do you have access to?", "conversational"),
-        ("Give me examples of questions I can ask", "conversational"),
         ("What questions can you answer?", "conversational"),
-        ("Tell me about Klaus reviews", "conversational"),
-        ("What is agent productivity?", "conversational"),
-        ("Help me understand what you can do", "conversational"),
+        ("What metrics do you monitor?", "conversational"),
+        ("What can you help me with?", "conversational"),
+        ("Tell me about your capabilities", "conversational"),
 
-        # Should be SQL_REQUIRED (including SQL follow-ups)
-        ("How many tickets are open today?", "sql_required"),
-        ("How many tickets does each agent resolve on average per week?", "sql_required"),
-        ("Can i get the same info with agent names instead of id's", "sql_required"),  # KEY TEST CASE
-        ("Show me all reviews for agent John", "sql_required"),
-        ("What's the highest number of tickets this week?", "sql_required"),
-        ("Count tickets in Voice group", "sql_required"),
-        ("Find tickets created yesterday", "sql_required"),
-        ("Total reviews today", "sql_required"),
-        ("Agent performance data", "sql_required"),
-        ("Tickets resolved per agent", "sql_required"),
-        ("Average tickets per week", "sql_required"),
+        # Should be SQL follow-ups
+        ("Can i get the same info with agent names instead of id's", "sql_required"),
         ("Same data but for last week", "sql_required"),
-        ("Can you show me with names instead", "sql_required"),
-        ("What about Voice group only", "sql_required"),
-        ("Same info but group by team", "sql_required"),
+        ("Break down by team", "sql_required"),
 
-        # Should be FOLLOWUP (conversational follow-ups)
+        # Should be FOLLOWUP (conversational)
         ("Why is that?", "followup"),
         ("Can you explain that more?", "followup"),
-        ("What does that mean?", "followup"),
-        ("Tell me more about this", "followup"),
-        ("Break that down for me", "followup"),
     ]
 
     print("🧪 Testing Question Classification:")
     print("=" * 50)
 
+    passed = 0
+    failed = 0
+
     for question, expected in test_cases:
         actual = classify_question_type(question)
-        status = "✅" if actual == expected else "❌"
-        print(f"{status} '{question}' → {actual} (expected: {expected})")
+        if actual == expected:
+            status = "✅"
+            passed += 1
+        else:
+            status = "❌"
+            failed += 1
+        print(f"{status} '{question[:60]}...' → {actual} (expected: {expected})")
 
     print("=" * 50)
+    print(f"Results: {passed} passed, {failed} failed")
 
 
 async def get_cache_stats():
@@ -1252,22 +1350,25 @@ async def force_new_thread(user_id: str, channel_id: str):
 def ask_llm_for_sql(user_question: str, model_context: str) -> str:
     """Fallback SQL generation using direct completion"""
     OPENAI_MODEL = "gpt-4"
-    prompt = f"""You are a Snowflake SQL expert. Based on the model documentation below, generate an accurate SQL query to answer the user's question.
 
-Model documentation:
+    # Build focused prompt for TL questions
+    prompt = f"""Generate Snowflake SQL for this business question.
+
+Context:
 {model_context}
 
-User question:
-{user_question}
+Question: {user_question}
 
-Only return the SQL query between triple backticks like this:
+Focus on:
+- Accurate time filters (this week, last week, etc)
+- Proper grouping and aggregations
+- Business metrics (AHT, CSAT, ticket volume, etc)
+
+Return ONLY the SQL query:
 ```sql
 SELECT ...
-```
+```"""
 
-If the question cannot be answered with the context, reply exactly:
-"I don't have enough model information to answer that."
-"""
     try:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -1289,22 +1390,22 @@ If the question cannot be answered with the context, reply exactly:
 def summarize_results_with_llm(user_question: str, result_table: str) -> str:
     """Fallback summarization using direct completion"""
     OPENAI_MODEL = "gpt-4"
-    prompt = f"""You are a business intelligence assistant. Provide a clear, direct business answer.
 
-User question: "{user_question}"
+    prompt = f"""Provide a business summary for this data.
 
-Query results:
+Question: "{user_question}"
+
+Data:
 {result_table}
 
-IMPORTANT RULES:
-- Give a direct business answer without technical details
-- DO NOT mention table names, databases, or "based on data"  
-- Focus on business insights and numbers
-- Sound conversational and professional
-- Answer the question directly
+Rules:
+- Direct business insights only
+- Include key numbers
+- No technical details
+- Be conversational
 
-Provide a clean business summary:
-"""
+Summary:"""
+
     try:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
