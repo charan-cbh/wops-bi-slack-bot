@@ -1329,3 +1329,4 @@ async def check_valkey_health():
             return {"status": "unhealthy", "backend": "Valkey", "error": str(e)}
     else:
         return {"status": "fallback", "backend": "Local Memory"}
+# Check deploy and app start
