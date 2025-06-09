@@ -4,6 +4,7 @@ import time
 import os
 import re
 import json
+import traceback
 from fastapi import Request, HTTPException
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -96,16 +97,15 @@ async def process_app_mention(event):
 
         try:
             slack_client.chat_postMessage(
-                channel=channel_id, text="🤔 Analyzing your question..."
+                channel=channel_id,
+                text="🤔 Analyzing your question..."
             )
         except Exception as e:
             print(f"⚠️ Could not send thinking indicator: {e}")
 
         if USE_ASSISTANT_API and ASSISTANT_ID:
             print(f"🤖 Using Assistant API")
-            response, response_type = await handle_question(
-                clean_question, user_id, channel_id, ASSISTANT_ID
-            )
+            response, response_type = await handle_question(clean_question, user_id, channel_id, ASSISTANT_ID)
             print(f"📊 Response type: {response_type}")
 
             if response_type == 'sql':
@@ -115,11 +115,19 @@ async def process_app_mention(event):
         else:
             await handle_with_embeddings(clean_question, channel_id, user_id)
 
-    except Exception as e:
-        print(f"❌ Error: {str(e)}")
+    except TypeError as te:
+        print(f"❌ Type Error: {str(te)}")
+        traceback.print_exc()
         await send_slack_message(
             channel_id,
-            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question."
+            f"❌ **Data processing error:**\n```{str(te)}```"
+        )
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        traceback.print_exc()
+        await send_slack_message(
+            channel_id,
+            f"❌ **Error processing your request:**\n```{str(e)}```"
         )
 
 
@@ -133,14 +141,13 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
     if not debug_query or debug_query.lower() == "help":
         debug_result = """🔧 **Available Debug Commands:**
 
-• `debug cache` or `debug stats` - Show cache statistics
-• `debug learning` or `debug patterns` - Show learning insights
-• `debug test` - Test question classification
-• `debug prime` - Prime schema cache (discover all table schemas)
-• `debug clear` - Clear all caches
-• `debug rediscover TABLE_NAME` - Force rediscover specific table schema
-• `debug QUERY` - Debug search for tables/columns related to query"""
-
+• `debug cache` or `debug stats`
+• `debug learning` or `debug patterns`
+• `debug test`
+• `debug prime`
+• `debug clear`
+• `debug rediscover TABLE_NAME`
+• `debug QUERY`"""
     elif debug_query.lower() in ["cache", "stats"]:
         stats = await get_cache_stats()
         learning = await get_learning_insights()
@@ -150,12 +157,16 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         debug_result = f"🧠 **What I've Learned:**\n```{learning}```"
     elif debug_query.lower() in ["test", "classification"]:
         test_question_classification()
-        debug_result = "🧪 **Classification test complete** - check server logs for results"
-    elif debug_query.lower() in ["prime", "schema", "prime schema"]:
-        await prime_schema_cache()
-        stats = await get_cache_stats()
-        debug_result = f"🚀 **Schema cache primed!**\n\nCache stats:\n```{json.dumps(stats, indent=2)}```"
-    elif debug_query.lower() in ["clear cache", "clear"]:
+        debug_result = "🧪 **Classification test complete**"
+    elif debug_query.lower() in ["prime", "schema"]:
+        try:
+            results = await prime_schema_cache()
+            stats = await get_cache_stats()
+            debug_result = f"🚀 **Schema cache primed!**\n```{json.dumps(stats, indent=2)}```"
+        except Exception as e:
+            debug_result = f"❌ **Error priming schema cache:**\n```{str(e)}```"
+            traceback.print_exc()
+    elif debug_query.lower() in ["clear", "clear cache"]:
         await clear_sql_cache()
         await clear_schema_cache()
         await clear_thread_cache()
@@ -180,10 +191,6 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
     print("⚡ Executing query...")
     await send_slack_message(channel_id, "⚡ Executing query...")
 
-    print(f"\n{'=' * 60}")
-    print(f"🧠 SQL Query to execute:\n{sql}")
-    print(f"{'=' * 60}\n")
-
     if sql.strip().lower().startswith("i don't have enough") or sql.startswith("-- Error:") or sql.startswith("⚠️"):
         await send_slack_message(channel_id, f"❌ {sql}")
         return
@@ -192,12 +199,7 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
 
     if isinstance(df, str):
         print(f"❌ Query execution error: {df}")
-        match = re.search(r"invalid identifier '([^']+)'", df, re.IGNORECASE)
-        if match:
-            bad_column = match.group(1)
-            result_message = f"❌ Query error: Column '{bad_column}' does not exist in the table.\n\nThis might mean the table schema needs to be discovered. Try:\n1. `@bot debug prime` to discover all table schemas\n2. Then ask your question again\n\nFull error: {df}"
-        else:
-            result_message = f"❌ Query error: {df}"
+        result_message = f"❌ Query error: {df}"
         await update_sql_cache_with_results(clean_question, sql, 0)
     else:
         result_count = len(df) if hasattr(df, '__len__') else 0
@@ -213,7 +215,10 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 ASSISTANT_ID
             )
         else:
-            result_message = summarize_results_with_llm(clean_question, format_result_for_slack(df))
+            result_message = summarize_results_with_llm(
+                clean_question,
+                format_result_for_slack(df)
+            )
 
     await send_slack_message(channel_id, result_message)
 
@@ -222,6 +227,7 @@ async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: 
     print("📚 Using local embeddings with FAISS")
     relevant_models = search_relevant_models(clean_question)
     print(f"📊 Found {len(relevant_models)} relevant models")
+
     model_context = relevant_models[0]["context"] if relevant_models else ""
     sql = ask_llm_for_sql(clean_question, model_context)
     await execute_sql_and_respond(clean_question, sql, channel_id, user_id)
