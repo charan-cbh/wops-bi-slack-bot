@@ -2,6 +2,7 @@ import os
 import asyncio
 import time
 import json
+import traceback
 from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -333,7 +334,38 @@ async def discover_table_schema(table_name: str) -> dict:
 
             # Extract column names and sample data
             columns = list(df.columns)
-            sample_data = df.head(3).to_dict('records') if len(df) > 0 else []
+
+            print(f"🔍 Processing {len(columns)} columns for serialization...")
+
+            # Convert timestamps and other non-serializable types to strings for caching
+            df_serializable = df.copy()
+            for col in df_serializable.columns:
+                col_dtype = str(df_serializable[col].dtype)
+                if df_serializable[
+                    col].dtype == 'datetime64[ns]' or 'timestamp' in col_dtype.lower() or 'datetime' in col_dtype.lower():
+                    print(f"   Converting timestamp column '{col}' (dtype: {col_dtype}) to string")
+                    df_serializable[col] = df_serializable[col].astype(str)
+                elif df_serializable[col].dtype == 'object':
+                    # Check if any values are timestamps
+                    try:
+                        if len(df_serializable) > 0 and hasattr(df_serializable[col].iloc[0], 'isoformat'):
+                            print(f"   Converting object column '{col}' with timestamp values to string")
+                            df_serializable[col] = df_serializable[col].astype(str)
+                    except:
+                        pass
+
+            sample_data = df_serializable.head(3).to_dict('records') if len(df_serializable) > 0 else []
+
+            # Verify serialization works
+            try:
+                test_json = json.dumps(sample_data)
+                print(f"✅ Sample data is JSON serializable")
+            except TypeError as e:
+                print(f"⚠️ Sample data still has non-serializable types: {e}")
+                # Fallback: convert everything to strings
+                sample_data = []
+                for row in df_serializable.head(3).itertuples(index=False):
+                    sample_data.append({col: str(getattr(row, col)) for col in columns})
 
             schema_info = {
                 'table': table_name,
@@ -402,6 +434,9 @@ def find_matching_columns(schema: dict, keywords: List[str]) -> List[str]:
     """Find columns that match given keywords"""
     columns = schema.get('columns', [])
     matching = []
+
+    if not columns:
+        return matching
 
     # First check for exact variations
     for keyword in keywords:
@@ -589,20 +624,29 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     """Generate SQL by discovering table structure dynamically"""
     print(f"\n🤖 Starting SQL generation for: {user_question}")
 
-    # Step 1: Identify likely table
-    table_name = identify_table_from_question(user_question)
-    print(f"📊 Identified table: {table_name}")
+    try:
+        # Step 1: Identify likely table
+        table_name = identify_table_from_question(user_question)
+        print(f"📊 Identified table: {table_name}")
 
-    # Step 2: Discover schema
-    schema = await discover_table_schema(table_name)
+        # Step 2: Discover schema
+        schema = await discover_table_schema(table_name)
 
-    if schema.get('error'):
-        print(f"⚠️ Schema discovery failed, will rely on assistant's file_search")
-        # Don't return error, continue with limited info
+        if schema.get('error'):
+            print(f"⚠️ Schema discovery failed, will rely on assistant's file_search")
+            # Don't return error, continue with limited info
+            schema = {
+                'table': table_name,
+                'columns': [],
+                'error': schema.get('error')
+            }
+    except Exception as e:
+        print(f"⚠️ Error during schema discovery: {e}")
+        print(f"⚠️ Continuing with limited schema information")
         schema = {
-            'table': table_name,
+            'table': table_name if 'table_name' in locals() else 'unknown',
             'columns': [],
-            'error': schema.get('error')
+            'error': str(e)
         }
 
     # Step 3: Find relevant columns based on question
@@ -623,14 +667,14 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     relevant_keywords.extend(['created', 'date', 'time'])
 
     print(f"🔎 Searching for columns with keywords: {relevant_keywords}")
-    matching_columns = find_matching_columns(schema, relevant_keywords)
+    matching_columns = find_matching_columns(schema, relevant_keywords) if schema.get('columns') else []
     print(f"🔍 Found relevant columns: {matching_columns}")
 
     # Special handling for common queries
     if 'messaging' in user_question.lower() and 'reply time' in user_question.lower():
         print("📌 Special case: Messaging reply time query")
         # Look specifically for reply time columns
-        reply_columns = find_matching_columns(schema, ['reply_time'])
+        reply_columns = find_matching_columns(schema, ['reply_time']) if schema.get('columns') else []
         if reply_columns:
             print(f"📌 Found reply time columns: {reply_columns}")
 
@@ -778,60 +822,83 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
     if assistant_id:
         ASSISTANT_ID = assistant_id
 
-    question_type = classify_question_type(user_question)
-    print(f"\n{'=' * 60}")
-    print(f"🔍 Processing question: {user_question}")
-    print(f"📊 Question type: {question_type}")
+    try:
+        question_type = classify_question_type(user_question)
+        print(f"\n{'=' * 60}")
+        print(f"🔍 Processing question: {user_question}")
+        print(f"📊 Question type: {question_type}")
 
-    if question_type == 'sql_required':
-        # Check cache first
-        question_hash = get_question_hash(user_question)
-        cache_key = f"{SQL_CACHE_PREFIX}:{question_hash}"
-        cached_sql = await safe_valkey_get(cache_key)
+        if question_type == 'sql_required':
+            # Check cache first
+            question_hash = get_question_hash(user_question)
+            cache_key = f"{SQL_CACHE_PREFIX}:{question_hash}"
 
-        if cached_sql and cached_sql.get('success_count', 0) > 0:
-            print(f"💰 Using cached SQL (success_count: {cached_sql['success_count']})")
-            sql = cached_sql['sql']
-            print(f"📝 Cached SQL:\n{sql}")
-            return sql, 'sql'
+            try:
+                cached_sql = await safe_valkey_get(cache_key)
+
+                if cached_sql and cached_sql.get('success_count', 0) > 0:
+                    print(f"💰 Using cached SQL (success_count: {cached_sql['success_count']})")
+                    sql = cached_sql['sql']
+                    print(f"📝 Cached SQL:\n{sql}")
+                    return sql, 'sql'
+                else:
+                    print(f"🔄 Generating new SQL (no successful cache found)")
+            except Exception as cache_error:
+                print(f"⚠️ Error checking cache: {cache_error}")
+                print(f"🔄 Proceeding to generate new SQL")
+
+            # Generate new SQL
+            sql_query = await generate_sql_intelligently(user_question, user_id, channel_id)
+            return sql_query, 'sql'
+
         else:
-            print(f"🔄 Generating new SQL (no successful cache found)")
+            # Handle conversational
+            response = await handle_conversational_question(user_question, user_id, channel_id)
+            return response, 'conversational'
 
-        # Generate new SQL
-        sql_query = await generate_sql_intelligently(user_question, user_id, channel_id)
-        return sql_query, 'sql'
+    except Exception as e:
+        print(f"❌ Error in handle_question: {e}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
 
-    else:
-        # Handle conversational
-        response = await handle_conversational_question(user_question, user_id, channel_id)
-        return response, 'conversational'
+        # Return error as SQL comment to be handled by the caller
+        return f"-- Error: {str(e)}", 'error'
 
 
 async def update_sql_cache_with_results(user_question: str, sql_query: str, result_count: int):
     """Update cache after execution"""
-    if not sql_query or sql_query.startswith("--") or sql_query.startswith("⚠️"):
-        print(f"🚫 Not caching failed query")
-        return
+    try:
+        if not sql_query or sql_query.startswith("--") or sql_query.startswith("⚠️"):
+            print(f"🚫 Not caching failed query")
+            return
 
-    question_hash = get_question_hash(user_question)
-    cache_key = f"{SQL_CACHE_PREFIX}:{question_hash}"
+        question_hash = get_question_hash(user_question)
+        cache_key = f"{SQL_CACHE_PREFIX}:{question_hash}"
 
-    # Get existing cache entry to update success count
-    existing = await safe_valkey_get(cache_key, {})
-    success_count = existing.get('success_count', 0)
+        # Get existing cache entry to update success count
+        existing = await safe_valkey_get(cache_key, {})
+        success_count = existing.get('success_count', 0)
 
-    if result_count > 0:
-        success_count += 1
+        if result_count > 0:
+            success_count += 1
 
-    cache_entry = {
-        'sql': sql_query,
-        'success_count': success_count,
-        'last_result_count': result_count,
-        'last_used': time.time()
-    }
+        cache_entry = {
+            'sql': sql_query,
+            'success_count': success_count,
+            'last_result_count': result_count,
+            'last_used': time.time()
+        }
 
-    await safe_valkey_set(cache_key, cache_entry, ex=SQL_CACHE_TTL)
-    print(f"💾 Updated SQL cache (success_count: {success_count}, results: {result_count})")
+        success = await safe_valkey_set(cache_key, cache_entry, ex=SQL_CACHE_TTL)
+        if success:
+            print(f"💾 Updated SQL cache (success_count: {success_count}, results: {result_count})")
+        else:
+            print(f"⚠️ Failed to update SQL cache (non-critical)")
+
+    except Exception as e:
+        print(f"⚠️ Error updating SQL cache: {e}")
+        # Don't raise - this is non-critical
 
 
 async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str,
@@ -1022,28 +1089,54 @@ async def prime_schema_cache():
     print("🚀 PRIMING SCHEMA CACHE")
     print("=" * 60)
 
+    results = {
+        'success': 0,
+        'failed': 0,
+        'errors': []
+    }
+
     for table_alias, table_name in KNOWN_TABLES.items():
-        print(f"\n📊 Discovering schema for {table_alias}: {table_name}")
-        schema = await discover_table_schema(table_name)
-        if not schema.get('error'):
-            print(f"✅ Successfully cached schema for {table_alias}")
-            print(f"   Columns: {len(schema.get('columns', []))}")
+        try:
+            print(f"\n📊 Discovering schema for {table_alias}: {table_name}")
+            schema = await discover_table_schema(table_name)
 
-            # Show columns that are important for common queries
-            important_cols = []
-            for col in schema.get('columns', []):
-                col_lower = col.lower()
-                if any(kw in col_lower for kw in ['reply', 'group', 'created', 'channel', 'via']):
-                    important_cols.append(col)
+            if not schema.get('error'):
+                results['success'] += 1
+                print(f"✅ Successfully cached schema for {table_alias}")
+                print(f"   Columns: {len(schema.get('columns', []))}")
 
-            if important_cols:
-                print(f"   Key columns: {', '.join(important_cols[:10])}")
-        else:
-            print(f"❌ Failed to cache schema for {table_alias}: {schema.get('error')}")
+                # Show columns that are important for common queries
+                important_cols = []
+                for col in schema.get('columns', []):
+                    col_lower = col.lower()
+                    if any(kw in col_lower for kw in ['reply', 'group', 'created', 'channel', 'via']):
+                        important_cols.append(col)
+
+                if important_cols:
+                    print(f"   Key columns: {', '.join(important_cols[:10])}")
+            else:
+                results['failed'] += 1
+                error_msg = f"Failed to cache schema for {table_alias}: {schema.get('error')}"
+                print(f"❌ {error_msg}")
+                results['errors'].append(error_msg)
+
+        except Exception as e:
+            results['failed'] += 1
+            error_msg = f"Exception caching {table_alias}: {str(e)}"
+            print(f"❌ {error_msg}")
+            results['errors'].append(error_msg)
+            import traceback
+            traceback.print_exc()
 
     print("\n" + "=" * 60)
-    print("✅ Schema cache priming complete")
+    print(f"✅ Schema cache priming complete: {results['success']} succeeded, {results['failed']} failed")
+    if results['errors']:
+        print(f"❌ Errors encountered:")
+        for error in results['errors']:
+            print(f"   - {error}")
     print("=" * 60 + "\n")
+
+    return results
 
 async def rediscover_table_schema(table_name: str) -> dict:
     """Force rediscovery of a table schema (bypassing cache)"""
