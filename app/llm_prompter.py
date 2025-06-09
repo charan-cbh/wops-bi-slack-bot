@@ -2,7 +2,7 @@ import os
 import asyncio
 import time
 import json
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 from openai import OpenAI
 from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
@@ -19,6 +19,15 @@ VALKEY_HOST = os.getenv("VALKEY_HOST", "localhost")
 VALKEY_PORT = int(os.getenv("VALKEY_PORT", 6379))
 VALKEY_USE_TLS = os.getenv("VALKEY_USE_TLS", "true").lower() == "true"
 IS_LOCAL_DEV = os.getenv("IS_LOCAL_DEV", "false").lower() == "true"
+
+# Import Snowflake runner for schema discovery
+try:
+    from app.snowflake_runner import run_query
+
+    SNOWFLAKE_AVAILABLE = True
+except ImportError:
+    SNOWFLAKE_AVAILABLE = False
+    print("⚠️ Snowflake runner not available for schema discovery")
 
 # Cache TTL settings (in seconds)
 THREAD_CACHE_TTL = 3600  # 1 hour
@@ -47,12 +56,29 @@ SQL_CACHE_PREFIX = f"{CACHE_PREFIX}:sql"
 SCHEMA_CACHE_PREFIX = f"{CACHE_PREFIX}:schema"
 CONVERSATION_CACHE_PREFIX = f"{CACHE_PREFIX}:conversation"
 
+# Known tables mapping
+KNOWN_TABLES = {
+    'tickets': 'ANALYTICS.dbt_production.fct_zendesk_tickets',
+    'messaging': 'ANALYTICS.dbt_production.fct_zendesk_tickets',
+    'agents': 'ANALYTICS.dbt_production.fct_amazon_connect__agent_metrics',
+    'reviews': 'ANALYTICS.dbt_production.fct_klaus__reviews'
+}
+
+# Common column name variations (to help the bot find the right column)
+COLUMN_VARIATIONS = {
+    'reply_time': ['reply_time_in_minutes', 'first_reply_time', 'first_reply_time_minutes',
+                   'reply_time_minutes', 'time_to_first_reply', 'first_response_time'],
+    'group': ['group_name', 'channel', 'via_channel', 'ticket_channel', 'group'],
+    'created': ['created_at', 'created_date', 'creation_date', 'ticket_created_at'],
+    'resolved': ['resolved_at', 'resolution_date', 'closed_at', 'solved_at']
+}
+
 # Minimal pattern recognition for intent
 INTENT_PATTERNS = {
     'count': ['how many', 'count', 'total number', 'number of'],
     'time_filter': ['today', 'yesterday', 'last week', 'this week', 'last month'],
     'group_filter': ['messaging', 'voice', 'email'],
-    'metrics': ['reply time', 'resolution time', 'aht', 'average handling'],
+    'metrics': ['reply time', 'response time', 'resolution time', 'aht', 'average handling', 'first reply'],
     'ranking': ['highest', 'lowest', 'top', 'bottom', 'most', 'least']
 }
 
@@ -195,7 +221,8 @@ def classify_question_type(question: str) -> str:
     data_indicators = [
         'how many', 'count', 'show me', 'list', 'find',
         'highest', 'lowest', 'average', 'total',
-        'tickets', 'agents', 'reviews', 'performance'
+        'tickets', 'agents', 'reviews', 'performance',
+        'reply time', 'response time', 'resolution'
     ]
 
     # Check for meta/help indicators
@@ -230,29 +257,175 @@ def extract_intent(question: str) -> dict:
     return intent
 
 
-async def get_table_schema_sample(table_name: str) -> dict:
-    """Get cached table schema or fetch sample data"""
+def identify_table_from_question(question: str) -> str:
+    """Identify which table to use based on question keywords"""
+    question_lower = question.lower()
+
+    # Check for specific table indicators
+    if any(word in question_lower for word in ['messaging', 'tickets', 'reply time', 'response time']):
+        return KNOWN_TABLES.get('tickets', 'ANALYTICS.dbt_production.fct_zendesk_tickets')
+    elif any(word in question_lower for word in ['agent', 'aht', 'handling time']):
+        return KNOWN_TABLES.get('agents', 'ANALYTICS.dbt_production.fct_amazon_connect__agent_metrics')
+    elif any(word in question_lower for word in ['review', 'klaus', 'qa']):
+        return KNOWN_TABLES.get('reviews', 'ANALYTICS.dbt_production.fct_klaus__reviews')
+    else:
+        # Default to tickets table
+        return KNOWN_TABLES.get('tickets', 'ANALYTICS.dbt_production.fct_zendesk_tickets')
+
+
+async def discover_table_schema(table_name: str) -> dict:
+    """Discover table schema by running SELECT * LIMIT 5"""
+    print(f"\n{'=' * 60}")
+    print(f"🔍 SCHEMA DISCOVERY for table: {table_name}")
+    print(f"{'=' * 60}")
+
+    # Check cache first
     cache_key = f"{SCHEMA_CACHE_PREFIX}:{table_name}"
     cached_schema = await safe_valkey_get(cache_key)
 
     if cached_schema:
-        print(f"📋 Using cached schema for {table_name}")
+        print(f"📋 Using cached schema (cached at: {cached_schema.get('discovered_at', 'unknown')})")
+        print(
+            f"📋 Columns ({len(cached_schema.get('columns', []))}): {', '.join(cached_schema.get('columns', [])[:10])}")
+        if len(cached_schema.get('columns', [])) > 10:
+            print(f"    ... and {len(cached_schema.get('columns', [])) - 10} more columns")
         return cached_schema
 
-    # In production, this would run a query to get sample data
-    # For now, return basic structure
-    schema_info = {
-        'table': table_name,
-        'sample_query': f"SELECT * FROM {table_name} LIMIT 5",
-        'common_filters': {
-            'messaging': "LOWER(group_name) = 'messaging'",
-            'last_week': "created_at >= DATEADD('week', -1, CURRENT_DATE) AND created_at < CURRENT_DATE",
-            'this_week': "created_at >= DATE_TRUNC('week', CURRENT_DATE)"
-        }
-    }
+    # If Snowflake is available, run actual discovery
+    if SNOWFLAKE_AVAILABLE:
+        try:
+            # Run discovery query
+            discovery_sql = f"SELECT * FROM {table_name} LIMIT 5"
+            print(f"🔍 Running schema discovery query:")
+            print(f"   {discovery_sql}")
 
-    await safe_valkey_set(cache_key, schema_info, ex=SCHEMA_CACHE_TTL)
-    return schema_info
+            df = run_query(discovery_sql)
+
+            if isinstance(df, str):
+                print(f"❌ Schema discovery failed: {df}")
+                # Try alternative table names if the exact name failed
+                if "does not exist" in df.lower() or "invalid identifier" in df.lower():
+                    print("🔄 Trying alternative table paths...")
+                    alternatives = [
+                        table_name.split('.')[-1],  # Just table name
+                        f"dbt_production.{table_name.split('.')[-1]}",  # With dbt_production
+                        f"ANALYTICS.{table_name.split('.')[-1]}",  # With ANALYTICS
+                    ]
+
+                    for alt_table in alternatives:
+                        if alt_table != table_name:
+                            print(f"🔄 Trying: {alt_table}")
+                            alt_sql = f"SELECT * FROM {alt_table} LIMIT 5"
+                            df_alt = run_query(alt_sql)
+                            if not isinstance(df_alt, str):
+                                print(f"✅ Found table at: {alt_table}")
+                                table_name = alt_table
+                                df = df_alt
+                                break
+
+                # If still a string, it's an error
+                if isinstance(df, str):
+                    return {
+                        'table': table_name,
+                        'error': df,
+                        'columns': []
+                    }
+
+            # Extract column names and sample data
+            columns = list(df.columns)
+            sample_data = df.head(3).to_dict('records') if len(df) > 0 else []
+
+            schema_info = {
+                'table': table_name,
+                'columns': columns,
+                'sample_data': sample_data,
+                'row_count': len(df),
+                'discovered_at': time.time()
+            }
+
+            print(f"✅ Schema discovered successfully!")
+            print(f"📊 Columns ({len(columns)}):")
+            for i, col in enumerate(columns):
+                if i < 15:  # Show first 15 columns
+                    print(f"   - {col}")
+                elif i == 15:
+                    print(f"   ... and {len(columns) - 15} more columns")
+
+            # Show sample data for key columns
+            if sample_data:
+                print(f"\n📊 Sample data:")
+                relevant_cols = [col for col in columns if any(
+                    kw in col.lower() for kw in ['group', 'reply', 'created', 'channel', 'via']
+                )]
+                for col in relevant_cols[:5]:
+                    if col in sample_data[0]:
+                        print(f"   {col}: {sample_data[0][col]}")
+
+            # Cache the schema
+            await safe_valkey_set(cache_key, schema_info, ex=SCHEMA_CACHE_TTL)
+            print(f"💾 Schema cached for future use")
+
+            return schema_info
+
+        except Exception as e:
+            print(f"❌ Error discovering schema: {str(e)}")
+            return {
+                'table': table_name,
+                'error': str(e),
+                'columns': []
+            }
+    else:
+        print("⚠️ Snowflake not available for schema discovery")
+        # Return mock schema for development
+        return {
+            'table': table_name,
+            'columns': ['created_at', 'group_name', 'ticket_id'],
+            'sample_data': [],
+            'note': 'Mock schema - Snowflake not available'
+        }
+
+
+async def rediscover_table_schema(table_name: str) -> dict:
+    """Force rediscovery of a table schema (bypassing cache)"""
+    print(f"🔄 Force rediscovering schema for: {table_name}")
+
+    # Clear existing cache
+    cache_key = f"{SCHEMA_CACHE_PREFIX}:{table_name}"
+    await safe_valkey_delete(cache_key)
+    print(f"🗑️ Cleared cached schema for {table_name}")
+
+    # Rediscover
+    return await discover_table_schema(table_name)
+
+
+def find_matching_columns(schema: dict, keywords: List[str]) -> List[str]:
+    """Find columns that match given keywords"""
+    columns = schema.get('columns', [])
+    matching = []
+
+    # First check for exact variations
+    for keyword in keywords:
+        # Check if we have known variations for this keyword
+        variations = COLUMN_VARIATIONS.get(keyword, [keyword])
+
+        for variation in variations:
+            for col in columns:
+                if col.lower() == variation.lower():
+                    if col not in matching:
+                        matching.append(col)
+                        print(f"✅ Found exact match: {col} for keyword: {keyword}")
+
+    # Then do fuzzy matching
+    for keyword in keywords:
+        keyword_lower = keyword.lower()
+        for col in columns:
+            col_lower = col.lower()
+            if keyword_lower in col_lower or col_lower in keyword_lower:
+                if col not in matching:
+                    matching.append(col)
+                    print(f"✅ Found fuzzy match: {col} for keyword: {keyword}")
+
+    return matching
 
 
 async def get_or_create_thread(user_id: str, channel_id: str) -> str:
@@ -414,43 +587,159 @@ Focus on available metrics: tickets, agents, performance, reviews."""
 
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> str:
     """Generate SQL by discovering table structure dynamically"""
-    thread_id = await get_or_create_thread(user_id, channel_id)
-    if not thread_id:
-        return "⚠️ Could not create conversation thread"
+    print(f"\n🤖 Starting SQL generation for: {user_question}")
 
-    # Extract basic intent
+    # Step 1: Identify likely table
+    table_name = identify_table_from_question(user_question)
+    print(f"📊 Identified table: {table_name}")
+
+    # Step 2: Discover schema
+    schema = await discover_table_schema(table_name)
+
+    if schema.get('error'):
+        print(f"⚠️ Schema discovery failed, will rely on assistant's file_search")
+        # Don't return error, continue with limited info
+        schema = {
+            'table': table_name,
+            'columns': [],
+            'error': schema.get('error')
+        }
+
+    # Step 3: Find relevant columns based on question
     intent = extract_intent(user_question)
+    print(f"🎯 Extracted intent: {intent}")
 
-    # Smart, minimal instructions
-    instructions = """You are a SQL expert. Follow this process:
-
-1. Identify the table from file_search based on the question
-2. Look up the table schema to find exact column names
-3. Generate clean SQL with proper filters
-
-Common patterns:
-- Messaging filter: LOWER(group_name) = 'messaging'
-- Last week: created_at >= DATEADD('week', -1, CURRENT_DATE) AND created_at < CURRENT_DATE
-- This week: created_at >= DATE_TRUNC('week', CURRENT_DATE)
-
-Return ONLY the SQL query."""
-
-    # Build focused message
-    message_parts = [f"Generate SQL for: {user_question}"]
+    # Look for columns related to the metric
+    relevant_keywords = []
+    if intent['metric_type']:
+        if 'reply' in intent['metric_type'] or 'response' in intent['metric_type']:
+            relevant_keywords.extend(['reply_time', 'reply', 'response', 'first'])
+        elif 'resolution' in intent['metric_type']:
+            relevant_keywords.extend(['resolution', 'resolve', 'resolved'])
 
     if intent['group_filter']:
-        message_parts.append(f"Filter for: {intent['group_filter']} group")
-    if intent['time_filter']:
-        message_parts.append(f"Time period: {intent['time_filter']}")
-    if intent['metric_type']:
-        message_parts.append(f"Metric: {intent['metric_type']}")
+        relevant_keywords.extend(['group', 'channel', 'type'])
+
+    relevant_keywords.extend(['created', 'date', 'time'])
+
+    print(f"🔎 Searching for columns with keywords: {relevant_keywords}")
+    matching_columns = find_matching_columns(schema, relevant_keywords)
+    print(f"🔍 Found relevant columns: {matching_columns}")
+
+    # Special handling for common queries
+    if 'messaging' in user_question.lower() and 'reply time' in user_question.lower():
+        print("📌 Special case: Messaging reply time query")
+        # Look specifically for reply time columns
+        reply_columns = find_matching_columns(schema, ['reply_time'])
+        if reply_columns:
+            print(f"📌 Found reply time columns: {reply_columns}")
+
+    # Step 4: Generate SQL with assistant
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return "-- Error: Could not create conversation thread"
+
+    # Build context with actual schema
+    if schema.get('columns'):
+        all_columns = schema['columns'][:30]  # Show first 30 columns
+        instructions = f"""You are a SQL expert. Generate SQL based on this ACTUAL table schema:
+
+Table: {table_name}
+ALL Available columns (use ONLY these): 
+{', '.join(all_columns)}
+
+CRITICAL: The column names above are the ACTUAL column names from the table. 
+- Do NOT make up column names
+- Do NOT use generic names like 'reply_time_in_minutes' unless it's in the list above
+- Use the EXACT column names as shown
+
+Common patterns:
+- For messaging filter: WHERE LOWER(group_name) = 'messaging' (only if 'group_name' exists above)
+- Last week: WHERE created_at >= DATEADD('week', -1, CURRENT_DATE) AND created_at < CURRENT_DATE
+- This week: WHERE created_at >= DATE_TRUNC('week', CURRENT_DATE)
+
+Return ONLY the SQL query, no explanations."""
+    else:
+        # No schema discovered, rely on file_search
+        instructions = f"""You are a SQL expert. Generate SQL for table: {table_name}
+
+IMPORTANT: I could not discover the table schema. You must:
+1. Use file_search to find the correct table and column names
+2. Look for tables related to: {table_name.split('.')[-1]}
+3. Find the exact column names before writing SQL
+
+Common patterns:
+- For messaging filter: Use appropriate group/channel column with LOWER() function
+- Last week: WHERE [date_column] >= DATEADD('week', -1, CURRENT_DATE) AND [date_column] < CURRENT_DATE
+- Reply time: Look for columns with 'reply', 'response', or 'first' in the name
+
+Return ONLY the SQL query after finding the correct columns."""
+
+    # Build message with discovered columns hint
+    message_parts = [f"Generate SQL for: {user_question}"]
+    message_parts.append(f"\nTable to query: {table_name}")
+
+    if schema.get('columns'):
+        all_columns = schema['columns']
+
+        if matching_columns:
+            message_parts.append(f"\nRelevant columns found in table:")
+            for col in matching_columns[:10]:  # Show up to 10 matching columns
+                message_parts.append(f"  - {col}")
+
+        # Provide specific column hints based on query
+        if 'reply time' in user_question.lower():
+            reply_cols = [col for col in all_columns if any(kw in col.lower() for kw in ['reply', 'response', 'first'])]
+            if reply_cols:
+                message_parts.append(f"\nFor reply time, use one of these columns: {', '.join(reply_cols[:5])}")
+
+        if intent['group_filter']:
+            group_cols = [col for col in all_columns if any(kw in col.lower() for kw in ['group', 'channel', 'via'])]
+            if group_cols:
+                message_parts.append(f"\nFor {intent['group_filter']} filter, use: {group_cols[0]}")
+
+        if intent['time_filter']:
+            time_cols = [col for col in all_columns if any(kw in col.lower() for kw in ['created', 'date', 'time'])]
+            if time_cols:
+                message_parts.append(f"\nFor date filter, use: {time_cols[0]}")
+                message_parts.append(f"Time period requested: {intent['time_filter']}")
+
+        # Add sample data if available
+        if schema.get('sample_data') and len(schema['sample_data']) > 0:
+            message_parts.append(f"\nSample data from table:")
+            # Show relevant fields from sample
+            sample = schema['sample_data'][0]
+            relevant_fields = {}
+            for key, value in sample.items():
+                if any(kw in key.lower() for kw in ['group', 'reply', 'created', 'channel']):
+                    relevant_fields[key] = value
+            if relevant_fields:
+                message_parts.append(json.dumps(relevant_fields, indent=2))
+    else:
+        # No schema discovered
+        message_parts.append("\nNOTE: Could not discover table schema. Use file_search to find correct column names.")
+        message_parts.append(f"\nLooking for columns related to:")
+        if 'reply time' in user_question.lower():
+            message_parts.append("  - Reply time or first response time")
+        if intent['group_filter']:
+            message_parts.append(f"  - Group/channel filter for '{intent['group_filter']}'")
+        if intent['time_filter']:
+            message_parts.append(f"  - Date/time filter for '{intent['time_filter']}'")
 
     message = "\n".join(message_parts)
+
+    print(f"📝 Sending to assistant with {len(schema['columns'])} discovered columns")
 
     response = await send_message_and_run(thread_id, message, instructions)
 
     # Extract SQL from response
-    return extract_sql_from_response(response)
+    sql = extract_sql_from_response(response)
+
+    print(f"\n🧠 Generated SQL:")
+    print(f"{sql}")
+    print(f"{'=' * 60}\n")
+
+    return sql
 
 
 def extract_sql_from_response(response: str) -> str:
@@ -490,7 +779,9 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         ASSISTANT_ID = assistant_id
 
     question_type = classify_question_type(user_question)
-    print(f"🔍 Question type: {question_type}")
+    print(f"\n{'=' * 60}")
+    print(f"🔍 Processing question: {user_question}")
+    print(f"📊 Question type: {question_type}")
 
     if question_type == 'sql_required':
         # Check cache first
@@ -499,8 +790,12 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         cached_sql = await safe_valkey_get(cache_key)
 
         if cached_sql and cached_sql.get('success_count', 0) > 0:
-            print(f"💰 Using cached SQL")
-            return cached_sql['sql'], 'sql'
+            print(f"💰 Using cached SQL (success_count: {cached_sql['success_count']})")
+            sql = cached_sql['sql']
+            print(f"📝 Cached SQL:\n{sql}")
+            return sql, 'sql'
+        else:
+            print(f"🔄 Generating new SQL (no successful cache found)")
 
         # Generate new SQL
         sql_query = await generate_sql_intelligently(user_question, user_id, channel_id)
@@ -514,20 +809,29 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
 
 async def update_sql_cache_with_results(user_question: str, sql_query: str, result_count: int):
     """Update cache after execution"""
-    if not sql_query or sql_query.startswith("--") or result_count == 0:
+    if not sql_query or sql_query.startswith("--") or sql_query.startswith("⚠️"):
+        print(f"🚫 Not caching failed query")
         return
 
     question_hash = get_question_hash(user_question)
     cache_key = f"{SQL_CACHE_PREFIX}:{question_hash}"
 
+    # Get existing cache entry to update success count
+    existing = await safe_valkey_get(cache_key, {})
+    success_count = existing.get('success_count', 0)
+
+    if result_count > 0:
+        success_count += 1
+
     cache_entry = {
         'sql': sql_query,
-        'success_count': 1 if result_count > 0 else 0,
+        'success_count': success_count,
+        'last_result_count': result_count,
         'last_used': time.time()
     }
 
     await safe_valkey_set(cache_key, cache_entry, ex=SQL_CACHE_TTL)
-    print(f"💾 Cached SQL (results: {result_count})")
+    print(f"💾 Updated SQL cache (success_count: {success_count}, results: {result_count})")
 
 
 async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str,
@@ -567,24 +871,52 @@ async def get_cache_stats():
     """Get cache statistics"""
     await ensure_valkey_connection()
 
-    if valkey_client:
-        return {
-            "cache_backend": "Valkey",
-            "status": "connected"
+    stats = {
+        "cache_backend": "Valkey" if valkey_client else "Local Memory",
+        "status": "connected" if valkey_client else "local",
+        "caches": {
+            "sql": len(_local_cache.get('sql', {})),
+            "schema": len(_local_cache.get('schema', {})),
+            "thread": len(_local_cache.get('thread', {})),
+            "conversation": len(_local_cache.get('conversation', {}))
         }
-    else:
-        return {
-            "cache_backend": "Local Memory",
-            "sql_cache_size": len(_local_cache.get('sql', {})),
-            "schema_cache_size": len(_local_cache.get('schema', {})),
-            "thread_cache_size": len(_local_cache.get('thread', {}))
-        }
+    }
+
+    # Add schema cache details
+    schema_cache = _local_cache.get('schema', {})
+    if schema_cache:
+        stats['cached_schemas'] = list(schema_cache.keys())
+
+    return stats
 
 
 async def get_learning_insights():
     """Get learning insights"""
     stats = await get_cache_stats()
-    return f"Cache stats: {json.dumps(stats, indent=2)}"
+
+    insights = [f"Cache Backend: {stats['cache_backend']}"]
+    insights.append(f"Status: {stats['status']}")
+    insights.append(f"\nCached Items:")
+    insights.append(f"  - SQL Queries: {stats['caches']['sql']}")
+    insights.append(f"  - Table Schemas: {stats['caches']['schema']}")
+    insights.append(f"  - Threads: {stats['caches']['thread']}")
+    insights.append(f"  - Conversations: {stats['caches']['conversation']}")
+
+    # Show cached schemas with details
+    schema_cache = _local_cache.get('schema', {})
+    if schema_cache:
+        insights.append(f"\nCached Table Schemas:")
+        for table_key, schema_info in schema_cache.items():
+            table_name = schema_info.get('table', table_key)
+            col_count = len(schema_info.get('columns', []))
+            discovered_at = schema_info.get('discovered_at', 0)
+            if discovered_at:
+                age_hours = (time.time() - discovered_at) / 3600
+                insights.append(f"  - {table_name}: {col_count} columns (cached {age_hours:.1f} hours ago)")
+            else:
+                insights.append(f"  - {table_name}: {col_count} columns")
+
+    return "\n".join(insights)
 
 
 def test_question_classification():
@@ -606,6 +938,7 @@ def test_question_classification():
 # Legacy fallback functions
 def ask_llm_for_sql(user_question: str, model_context: str) -> str:
     """Fallback SQL generation"""
+    print(f"⚠️ Using legacy SQL generation")
     prompt = f"""Generate SQL for: {user_question}
 
 Context: {model_context}
@@ -624,7 +957,9 @@ SELECT ...
         content = response.choices[0].message.content.strip()
 
         if "```sql" in content:
-            return content.split("```sql")[1].split("```")[0].strip()
+            sql = content.split("```sql")[1].split("```")[0].strip()
+            print(f"📝 Legacy generated SQL:\n{sql}")
+            return sql
         return content
     except Exception as e:
         return f"⚠️ Error: {e}"
@@ -660,6 +995,12 @@ async def clear_sql_cache():
     print("🧹 SQL cache cleared")
 
 
+async def clear_schema_cache():
+    """Clear schema cache"""
+    _local_cache['schema'].clear()
+    print("🧹 Schema cache cleared")
+
+
 async def check_valkey_health():
     """Check Valkey health"""
     await ensure_valkey_connection()
@@ -672,3 +1013,46 @@ async def check_valkey_health():
             return {"status": "unhealthy", "backend": "Valkey"}
     else:
         return {"status": "fallback", "backend": "Local Memory"}
+
+
+# Add this function to manually prime the schema cache
+async def prime_schema_cache():
+    """Prime the schema cache with known tables"""
+    print("\n" + "=" * 60)
+    print("🚀 PRIMING SCHEMA CACHE")
+    print("=" * 60)
+
+    for table_alias, table_name in KNOWN_TABLES.items():
+        print(f"\n📊 Discovering schema for {table_alias}: {table_name}")
+        schema = await discover_table_schema(table_name)
+        if not schema.get('error'):
+            print(f"✅ Successfully cached schema for {table_alias}")
+            print(f"   Columns: {len(schema.get('columns', []))}")
+
+            # Show columns that are important for common queries
+            important_cols = []
+            for col in schema.get('columns', []):
+                col_lower = col.lower()
+                if any(kw in col_lower for kw in ['reply', 'group', 'created', 'channel', 'via']):
+                    important_cols.append(col)
+
+            if important_cols:
+                print(f"   Key columns: {', '.join(important_cols[:10])}")
+        else:
+            print(f"❌ Failed to cache schema for {table_alias}: {schema.get('error')}")
+
+    print("\n" + "=" * 60)
+    print("✅ Schema cache priming complete")
+    print("=" * 60 + "\n")
+
+async def rediscover_table_schema(table_name: str) -> dict:
+    """Force rediscovery of a table schema (bypassing cache)"""
+    print(f"🔄 Force rediscovering schema for: {table_name}")
+
+    # Clear existing cache
+    cache_key = f"{SCHEMA_CACHE_PREFIX}:{table_name}"
+    await safe_valkey_delete(cache_key)
+    print(f"🗑️ Cleared cached schema for {table_name}")
+
+    # Rediscover
+    return await discover_table_schema(table_name)
