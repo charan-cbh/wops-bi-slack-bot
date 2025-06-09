@@ -10,7 +10,6 @@ from slack_sdk.errors import SlackApiError
 from app.llm_prompter import (
     ask_llm_for_sql,
     summarize_results_with_llm,
-    ask_assistant_generate_sql,
     summarize_with_assistant,
     debug_assistant_search,
     update_sql_cache_with_results,
@@ -18,6 +17,7 @@ from app.llm_prompter import (
     get_learning_insights,
     handle_question,
     test_question_classification,
+    generate_sql_intelligently,
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
