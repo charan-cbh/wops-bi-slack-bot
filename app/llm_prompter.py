@@ -11,6 +11,7 @@ from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClust
 
 load_dotenv()
 
+# Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 VECTOR_STORE_ID = os.getenv("OPENAI_VECTOR_STORE_ID")
@@ -119,6 +120,22 @@ async def ensure_valkey_connection():
         await init_valkey_client()
 
 
+def convert_to_serializable(obj):
+    """Convert non-serializable objects to serializable format"""
+    if isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(item) for item in obj]
+    elif hasattr(obj, 'isoformat'):  # datetime, Timestamp
+        return obj.isoformat()
+    elif hasattr(obj, 'to_dict'):  # DataFrame
+        return obj.to_dict()
+    elif isinstance(obj, (int, float, str, bool, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+
 async def safe_valkey_get(key: str, default=None):
     """Safely get value from Valkey with fallback"""
     await ensure_valkey_connection()
@@ -150,14 +167,40 @@ async def safe_valkey_set(key: str, value: Any, ex: int = None):
             else:
                 await valkey_client.set(key, json_value)
             return True
+        except TypeError as te:
+            print(f"⚠️ JSON serialization error for {key}: {te}")
+            print(f"⚠️ Problematic value type: {type(value)}")
+            # Try to convert to a serializable format
+            try:
+                if isinstance(value, dict):
+                    value = convert_to_serializable(value)
+                    json_value = json.dumps(value)
+                    if ex:
+                        await valkey_client.set(key, json_value)
+                        await valkey_client.expire(key, ex)
+                    else:
+                        await valkey_client.set(key, json_value)
+                    return True
+            except Exception as e2:
+                print(f"⚠️ Failed to convert to serializable: {e2}")
+                return False
         except Exception as e:
             print(f"⚠️ Valkey SET error for {key}: {e}")
             return False
     else:
+        # Fallback to local cache
         cache_type = key.split(':')[1] if ':' in key else 'thread'
         if cache_type not in _local_cache:
             _local_cache[cache_type] = {}
-        _local_cache[cache_type][key] = value
+        try:
+            # Ensure value is serializable for consistency
+            _ = json.dumps(value)
+            _local_cache[cache_type][key] = value
+        except TypeError:
+            # Convert to serializable format
+            if isinstance(value, dict):
+                value = convert_to_serializable(value)
+            _local_cache[cache_type][key] = value
         return True
 
 
@@ -218,30 +261,58 @@ def classify_question_type(question: str) -> str:
     """Simple classification - is this a data query or conversation?"""
     question_lower = question.lower()
 
+    # FIRST: Check for follow-up indicators about previous results
+    followup_about_results = [
+        'what is the source', 'where does this data', 'where is this from',
+        'how did you get', 'what table', 'which database',
+        'explain this', 'what does this mean', 'why is it',
+        'can you clarify', 'tell me more about this',
+        'break this down', 'what are these', 'who are these'
+    ]
+
+    if any(indicator in question_lower for indicator in followup_about_results):
+        return 'conversational'
+
     # Check for data query indicators
     data_indicators = [
         'how many', 'count', 'show me', 'list', 'find',
         'highest', 'lowest', 'average', 'total',
         'tickets', 'agents', 'reviews', 'performance',
-        'reply time', 'response time', 'resolution'
+        'reply time', 'response time', 'resolution',
+        'which ticket type', 'what ticket type', 'driving'
     ]
 
     # Check for meta/help indicators
     meta_indicators = [
         'what can you', 'help', 'capabilities', 'questions can',
-        'how do you work', 'what data', 'explain'
+        'how do you work', 'what data', 'explain how'
     ]
 
-    # Check for follow-up indicators
-    followup_indicators = ['why', 'what does that mean', 'explain that']
+    # Check for general follow-up indicators
+    general_followup_indicators = [
+        'why', 'what does that mean', 'explain that',
+        'can you elaborate', 'tell me more',
+        'what about', 'how about'
+    ]
 
-    if any(indicator in question_lower for indicator in data_indicators):
-        return 'sql_required'
-    elif any(indicator in question_lower for indicator in meta_indicators):
+    # Check context - short questions after data results are often follow-ups
+    word_count = len(question.split())
+    if word_count <= 8 and any(word in question_lower for word in ['this', 'that', 'these', 'it']):
         return 'conversational'
-    elif any(indicator in question_lower for indicator in followup_indicators):
-        return 'followup'
+
+    if any(indicator in question_lower for indicator in meta_indicators):
+        return 'conversational'
+    elif any(indicator in question_lower for indicator in general_followup_indicators):
+        return 'conversational'
+    elif any(indicator in question_lower for indicator in data_indicators):
+        # Double check it's not asking about the data source
+        if 'source' in question_lower or 'where' in question_lower and 'data' in question_lower:
+            return 'conversational'
+        return 'sql_required'
     else:
+        # For ambiguous cases, check if it's a short question
+        if word_count <= 6:
+            return 'conversational'  # Likely a follow-up
         return 'sql_required'  # Default to trying SQL
 
 
@@ -272,6 +343,39 @@ def identify_table_from_question(question: str) -> str:
     else:
         # Default to tickets table
         return KNOWN_TABLES.get('tickets', 'ANALYTICS.dbt_production.fct_zendesk_tickets')
+
+
+def find_matching_columns(schema: dict, keywords: List[str]) -> List[str]:
+    """Find columns that match given keywords"""
+    columns = schema.get('columns', [])
+    matching = []
+
+    if not columns:
+        return matching
+
+    # First check for exact variations
+    for keyword in keywords:
+        # Check if we have known variations for this keyword
+        variations = COLUMN_VARIATIONS.get(keyword, [keyword])
+
+        for variation in variations:
+            for col in columns:
+                if col.lower() == variation.lower():
+                    if col not in matching:
+                        matching.append(col)
+                        print(f"✅ Found exact match: {col} for keyword: {keyword}")
+
+    # Then do fuzzy matching
+    for keyword in keywords:
+        keyword_lower = keyword.lower()
+        for col in columns:
+            col_lower = col.lower()
+            if keyword_lower in col_lower or col_lower in keyword_lower:
+                if col not in matching:
+                    matching.append(col)
+                    print(f"✅ Found fuzzy match: {col} for keyword: {keyword}")
+
+    return matching
 
 
 async def discover_table_schema(table_name: str) -> dict:
@@ -394,8 +498,11 @@ async def discover_table_schema(table_name: str) -> dict:
                         print(f"   {col}: {sample_data[0][col]}")
 
             # Cache the schema
-            await safe_valkey_set(cache_key, schema_info, ex=SCHEMA_CACHE_TTL)
-            print(f"💾 Schema cached for future use")
+            cache_success = await safe_valkey_set(cache_key, schema_info, ex=SCHEMA_CACHE_TTL)
+            if cache_success:
+                print(f"💾 Schema cached for future use")
+            else:
+                print(f"⚠️ Failed to cache schema (non-critical error)")
 
             return schema_info
 
@@ -430,37 +537,35 @@ async def rediscover_table_schema(table_name: str) -> dict:
     return await discover_table_schema(table_name)
 
 
-def find_matching_columns(schema: dict, keywords: List[str]) -> List[str]:
-    """Find columns that match given keywords"""
-    columns = schema.get('columns', [])
-    matching = []
+async def get_conversation_context(user_id: str, channel_id: str) -> dict:
+    """Get recent conversation context"""
+    cache_key = f"{user_id}_{channel_id}"
+    redis_key = f"{CONVERSATION_CACHE_PREFIX}:{cache_key}"
 
-    if not columns:
-        return matching
+    context = await safe_valkey_get(redis_key, {})
 
-    # First check for exact variations
-    for keyword in keywords:
-        # Check if we have known variations for this keyword
-        variations = COLUMN_VARIATIONS.get(keyword, [keyword])
+    # Check if context is still valid (10 minutes)
+    if context and context.get('timestamp', 0) < time.time() - 600:
+        await safe_valkey_delete(redis_key)
+        return {}
 
-        for variation in variations:
-            for col in columns:
-                if col.lower() == variation.lower():
-                    if col not in matching:
-                        matching.append(col)
-                        print(f"✅ Found exact match: {col} for keyword: {keyword}")
+    return context
 
-    # Then do fuzzy matching
-    for keyword in keywords:
-        keyword_lower = keyword.lower()
-        for col in columns:
-            col_lower = col.lower()
-            if keyword_lower in col_lower or col_lower in keyword_lower:
-                if col not in matching:
-                    matching.append(col)
-                    print(f"✅ Found fuzzy match: {col} for keyword: {keyword}")
 
-    return matching
+async def update_conversation_context(user_id: str, channel_id: str, question: str, response: str,
+                                      response_type: str = None):
+    """Update conversation context for follow-up questions"""
+    cache_key = f"{user_id}_{channel_id}"
+    redis_key = f"{CONVERSATION_CACHE_PREFIX}:{cache_key}"
+
+    context = {
+        'last_question': question,
+        'last_response': response,
+        'last_response_type': response_type,
+        'timestamp': time.time()
+    }
+
+    await safe_valkey_set(redis_key, context, ex=CONVERSATION_CACHE_TTL)
 
 
 async def get_or_create_thread(user_id: str, channel_id: str) -> str:
@@ -529,12 +634,25 @@ async def wait_for_active_runs(thread_id: str, max_wait_seconds: int = 30) -> bo
 
 
 async def send_message_and_run(thread_id: str, message: str, instructions: str = None) -> str:
-    """Send message to assistant and get response"""
+    """Send message to assistant and get response - with better context awareness"""
     try:
         # Wait for any active runs
         await wait_for_active_runs(thread_id, max_wait_seconds=15)
 
         use_beta = hasattr(client, 'beta') and hasattr(client.beta, 'threads')
+
+        # Get recent messages from thread for context
+        try:
+            if use_beta:
+                recent_messages = client.beta.threads.messages.list(thread_id=thread_id, limit=5)
+            else:
+                recent_messages = client.threads.messages.list(thread_id=thread_id, limit=5)
+
+            # Log recent context
+            if recent_messages.data:
+                print(f"📝 Thread has {len(recent_messages.data)} recent messages for context")
+        except:
+            print("⚠️ Could not retrieve recent messages")
 
         # Add message
         if use_beta:
@@ -612,17 +730,70 @@ async def handle_conversational_question(user_question: str, user_id: str, chann
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = """You are a BI assistant. Be helpful and concise.
+    # Get conversation context
+    context = await get_conversation_context(user_id, channel_id)
+
+    # Build context-aware instructions
+    if context and context.get('last_response_type') == 'sql_results':
+        print(f"💬 Using SQL follow-up context")
+        print(f"   Previous question: {context.get('last_question', 'unknown')[:100]}")
+
+        instructions = """You are a BI assistant responding to a follow-up question about previous query results.
+
+The user just received data from a SQL query and is asking a follow-up question.
+Use the conversation history in this thread to understand what data they're asking about.
+Be helpful in explaining the data source, methodology, or clarifying the results.
+
+Common follow-ups and how to respond:
+- "What is the source?" → Explain that the data comes from Zendesk tickets system, stored in our data warehouse
+- "Why is it None?" → Explain that None/null values typically mean no specific ticket type was identified or categorized
+- "What are these groups?" → Explain that groups are teams handling tickets:
+  * WOPs Flex Ops - Flexible operations team
+  * WOPs - AI - AI/automation team
+  * Documents Submissions Team - Handles document processing
+  * Legacy HCF T2 - Legacy tier 2 support team
+  * Tier 2 - Payments Support - Payment-related issues
+  * WOPs - Chats - Chat support team
+  * Tier 1 - Documents Chat - First tier document support
+- "What are these channels?" → Explain ticket submission channels:
+  * API - Programmatic ticket creation
+  * email - Email-based tickets
+  * web - Web form submissions
+  * native messaging - In-app messaging
+
+Data sources:
+- Zendesk tickets (ANALYTICS.dbt_production.fct_zendesk_tickets)
+- Agent metrics (fct_amazon_connect__agent_metrics)
+- Klaus reviews (fct_klaus__reviews)"""
+    else:
+        print(f"💬 Standard conversational response")
+        instructions = """You are a BI assistant. Be helpful and concise.
 Focus on available metrics: tickets, agents, performance, reviews."""
 
-    message = f"User question: {user_question}"
+    # Add context to message if available
+    message_parts = [f"User question: {user_question}"]
 
-    return await send_message_and_run(thread_id, message, instructions)
+    if context:
+        if context.get('last_question'):
+            message_parts.append(f"\nPrevious question: {context['last_question']}")
+        if context.get('last_response_type') == 'sql_results':
+            message_parts.append("\nNote: The user just received SQL query results and is asking a follow-up question.")
+
+    message = "\n".join(message_parts)
+
+    response = await send_message_and_run(thread_id, message, instructions)
+
+    # Note: Conversation context is updated in the slack_handler
+
+    return response
 
 
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> str:
     """Generate SQL by discovering table structure dynamically"""
     print(f"\n🤖 Starting SQL generation for: {user_question}")
+
+    # Store the fact that we're generating SQL for context
+    await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
 
     try:
         # Step 1: Identify likely table
@@ -772,7 +943,7 @@ Return ONLY the SQL query after finding the correct columns."""
 
     message = "\n".join(message_parts)
 
-    print(f"📝 Sending to assistant with {len(schema['columns'])} discovered columns")
+    print(f"📝 Sending to assistant with {len(schema.get('columns', []))} discovered columns")
 
     response = await send_message_and_run(thread_id, message, instructions)
 
@@ -799,18 +970,32 @@ def extract_sql_from_response(response: str) -> str:
     in_sql = False
 
     for line in lines:
-        if line.strip().upper().startswith('SELECT'):
+        line_stripped = line.strip()
+
+        # Start capturing when we see SELECT
+        if line_stripped.upper().startswith('SELECT'):
             in_sql = True
-        if in_sql:
+            sql_lines = [line]
+        elif in_sql:
             sql_lines.append(line)
-            if line.strip().endswith(';'):
+            # Stop when we see semicolon
+            if line_stripped.endswith(';'):
                 break
 
     if sql_lines:
         return '\n'.join(sql_lines).strip()
 
+    # Check if it's an error message
     if "don't have enough" in response or "cannot find" in response.lower():
         return response
+
+    # Last resort - look for any SQL-like content
+    if 'SELECT' in response.upper():
+        # Extract everything from first SELECT to semicolon
+        start = response.upper().find('SELECT')
+        end = response.find(';', start)
+        if end != -1:
+            return response[start:end + 1].strip()
 
     return "-- Error: Could not extract SQL from response"
 
@@ -823,10 +1008,36 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         ASSISTANT_ID = assistant_id
 
     try:
+        # Get conversation context FIRST
+        context = await get_conversation_context(user_id, channel_id)
+
+        # Initial classification
         question_type = classify_question_type(user_question)
+
+        # Override classification based on context
+        if context and context.get('last_response_type') == 'sql_results':
+            # If the last response was SQL results, be more inclined to treat follow-ups as conversational
+            question_lower = user_question.lower()
+
+            # These patterns after SQL results are almost always conversational
+            if any(pattern in question_lower for pattern in [
+                'source', 'where', 'why', 'what is', 'explain',
+                'how', 'this data', 'that data', 'these',
+                'break down', 'tell me more', 'clarify'
+            ]):
+                print(f"🔄 Reclassifying as conversational (follow-up after SQL results)")
+                question_type = 'conversational'
+
+            # Short questions after SQL results are usually follow-ups
+            elif len(user_question.split()) <= 8:
+                print(f"🔄 Reclassifying as conversational (short follow-up after SQL results)")
+                question_type = 'conversational'
+
         print(f"\n{'=' * 60}")
         print(f"🔍 Processing question: {user_question}")
         print(f"📊 Question type: {question_type}")
+        if context:
+            print(f"📝 Previous response type: {context.get('last_response_type', 'none')}")
 
         if question_type == 'sql_required':
             # Check cache first
@@ -859,7 +1070,6 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
     except Exception as e:
         print(f"❌ Error in handle_question: {e}")
         print(f"❌ Error type: {type(e).__name__}")
-        import traceback
         traceback.print_exc()
 
         # Return error as SQL comment to be handled by the caller
@@ -912,7 +1122,8 @@ async def summarize_with_assistant(user_question: str, result_table: str, user_i
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = "Provide a clear business summary. Focus on insights, not technical details."
+    instructions = """Provide a clear business summary. Focus on insights, not technical details.
+Include information about the data source when relevant (e.g., which channels, groups, or systems the data comes from)."""
 
     message = f"""Question: "{user_question}"
 Data:
@@ -920,7 +1131,11 @@ Data:
 
 Summarize the key findings."""
 
-    return await send_message_and_run(thread_id, message, instructions)
+    response = await send_message_and_run(thread_id, message, instructions)
+
+    # Note: Don't update conversation context here - it's done in execute_sql_and_respond
+
+    return response
 
 
 async def debug_assistant_search(user_question: str, user_id: str, channel_id: str) -> str:
@@ -989,100 +1204,137 @@ async def get_learning_insights():
 def test_question_classification():
     """Test question classification"""
     test_cases = [
+        # SQL queries
         ("How many messaging tickets had a reply time over 15 minutes?", "sql_required"),
-        ("What can you help me with?", "conversational"),
+        ("Which ticket type is driving Chat AHT for agent Jesse?", "sql_required"),
         ("Show me ticket volume by group", "sql_required"),
-        ("Why is that?", "followup"),
+        ("List all agents with high resolution time", "sql_required"),
+        ("Find tickets created yesterday", "sql_required"),
+
+        # Conversational follow-ups about data
+        ("What is the source for this data?", "conversational"),
+        ("Where does this data come from?", "conversational"),
+        ("What table did you use?", "conversational"),
+        ("Explain these results", "conversational"),
+        ("What are these groups?", "conversational"),
+        ("Why is it showing None?", "conversational"),
+        ("How did you calculate this?", "conversational"),
+        ("What does WOPs mean?", "conversational"),
+
+        # Meta questions
+        ("What can you help me with?", "conversational"),
+        ("What data do you have access to?", "conversational"),
+
+        # Short follow-ups (likely conversational)
+        ("Why?", "conversational"),
+        ("Tell me more", "conversational"),
+        ("What about last month?", "conversational"),
+        ("Break this down", "conversational"),
+        ("This data", "conversational"),
+        ("Clarify", "conversational"),
     ]
 
-    print("🧪 Testing Classification:")
+    print("🧪 Testing Question Classification:")
+    print("=" * 60)
+
+    passed = 0
+    failed = 0
+
     for question, expected in test_cases:
         actual = classify_question_type(question)
+        if actual == expected:
+            status = "✅"
+            passed += 1
+        else:
+            status = "❌"
+            failed += 1
+        # Truncate long questions for display
+        display_q = question if len(question) <= 50 else question[:47] + "..."
+        print(f"{status} '{display_q}' → {actual} (expected: {expected})")
+
+    print("=" * 60)
+    print(f"Results: {passed} passed, {failed} failed")
+
+    # Test context-aware classification
+    print("\n🧪 Testing Context-Aware Classification:")
+    print("Simulating: User just received SQL results, then asks follow-up")
+    print("-" * 60)
+
+    # Simulate having SQL results context
+    followup_tests = [
+        ("What is the source for this data?", "conversational"),
+        ("Why is it None?", "conversational"),
+        ("Break this down by team", "sql_required"),  # This wants new SQL
+        ("What are these channels?", "conversational"),
+    ]
+
+    for question, expected in followup_tests:
+        # Note: In real usage, context would affect classification
+        actual = classify_question_type(question)
         status = "✅" if actual == expected else "❌"
-        print(f"{status} '{question}' → {actual}")
+        print(f"{status} After SQL results: '{question}' → {actual}")
+
+    print("=" * 60)
 
 
-# Legacy fallback functions
-def ask_llm_for_sql(user_question: str, model_context: str) -> str:
-    """Fallback SQL generation"""
-    print(f"⚠️ Using legacy SQL generation")
-    prompt = f"""Generate SQL for: {user_question}
+async def test_conversation_flow():
+    """Test a typical conversation flow"""
+    print("\n🧪 Testing Conversation Flow:")
+    print("=" * 60)
 
-Context: {model_context}
+    # Simulate user and channel
+    test_user = "test_user"
+    test_channel = "test_channel"
 
-Return only SQL:
-```sql
-SELECT ...
-```"""
+    # Test 1: SQL Query
+    print("\n1️⃣ Testing SQL query...")
+    response1, type1 = await handle_question(
+        "Which ticket type is driving Chat AHT for agent Jesse?",
+        test_user, test_channel
+    )
+    print(f"   Response type: {type1}")
+    if type1 == 'sql':
+        print(f"   SQL Generated: {response1[:100]}..." if len(response1) > 100 else f"   SQL: {response1}")
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2
-        )
-        content = response.choices[0].message.content.strip()
+    # Simulate that SQL was executed and results were shown
+    await update_conversation_context(
+        test_user, test_channel,
+        "Which ticket type is driving Chat AHT for agent Jesse?",
+        "Results showed: None for ticket type",
+        'sql_results'
+    )
 
-        if "```sql" in content:
-            sql = content.split("```sql")[1].split("```")[0].strip()
-            print(f"📝 Legacy generated SQL:\n{sql}")
-            return sql
-        return content
-    except Exception as e:
-        return f"⚠️ Error: {e}"
+    # Test 2: Follow-up question
+    print("\n2️⃣ Testing follow-up question...")
+    response2, type2 = await handle_question(
+        "What is the source for this data?",
+        test_user, test_channel
+    )
+    print(f"   Response type: {type2}")
+    print(f"   Should be conversational: {'✅' if type2 == 'conversational' else '❌'}")
 
+    # Test 3: Another follow-up
+    print("\n3️⃣ Testing another follow-up...")
+    response3, type3 = await handle_question(
+        "Why is it showing None?",
+        test_user, test_channel
+    )
+    print(f"   Response type: {type3}")
+    print(f"   Should be conversational: {'✅' if type3 == 'conversational' else '❌'}")
 
-def summarize_results_with_llm(user_question: str, result_table: str) -> str:
-    """Fallback summarization"""
-    prompt = f"""Question: "{user_question}"
-Data: {result_table}
+    # Test 4: New SQL query
+    print("\n4️⃣ Testing new SQL query...")
+    response4, type4 = await handle_question(
+        "Show me ticket volume by group",
+        test_user, test_channel
+    )
+    print(f"   Response type: {type4}")
+    print(f"   Should be sql_required: {'✅' if type4 == 'sql' else '❌'}")
 
-Provide a business summary:"""
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"⚠️ Error: {e}"
-
-
-async def clear_thread_cache():
-    """Clear thread cache"""
-    _local_cache['thread'].clear()
-    print("🧹 Thread cache cleared")
-
-
-async def clear_sql_cache():
-    """Clear SQL cache"""
-    _local_cache['sql'].clear()
-    print("🧹 SQL cache cleared")
+    print("\n" + "=" * 60)
+    print("✅ Conversation flow test complete")
 
 
-async def clear_schema_cache():
-    """Clear schema cache"""
-    _local_cache['schema'].clear()
-    print("🧹 Schema cache cleared")
-
-
-async def check_valkey_health():
-    """Check Valkey health"""
-    await ensure_valkey_connection()
-
-    if valkey_client:
-        try:
-            await valkey_client.ping()
-            return {"status": "healthy", "backend": "Valkey"}
-        except:
-            return {"status": "unhealthy", "backend": "Valkey"}
-    else:
-        return {"status": "fallback", "backend": "Local Memory"}
-
-
-# Add this function to manually prime the schema cache
 async def prime_schema_cache():
     """Prime the schema cache with known tables"""
     print("\n" + "=" * 60)
@@ -1125,7 +1377,6 @@ async def prime_schema_cache():
             error_msg = f"Exception caching {table_alias}: {str(e)}"
             print(f"❌ {error_msg}")
             results['errors'].append(error_msg)
-            import traceback
             traceback.print_exc()
 
     print("\n" + "=" * 60)
@@ -1138,14 +1389,89 @@ async def prime_schema_cache():
 
     return results
 
-async def rediscover_table_schema(table_name: str) -> dict:
-    """Force rediscovery of a table schema (bypassing cache)"""
-    print(f"🔄 Force rediscovering schema for: {table_name}")
 
-    # Clear existing cache
-    cache_key = f"{SCHEMA_CACHE_PREFIX}:{table_name}"
-    await safe_valkey_delete(cache_key)
-    print(f"🗑️ Cleared cached schema for {table_name}")
+# Legacy fallback functions
+def ask_llm_for_sql(user_question: str, model_context: str) -> str:
+    """Fallback SQL generation"""
+    print(f"⚠️ Using legacy SQL generation")
+    prompt = f"""Generate SQL for: {user_question}
 
-    # Rediscover
-    return await discover_table_schema(table_name)
+Context: {model_context}
+
+Return only SQL:
+```sql
+SELECT ...
+```"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
+        content = response.choices[0].message.content.strip()
+
+        if "```sql" in content:
+            sql = content.split("```sql")[1].split("```")[0].strip()
+            print(f"📝 Legacy generated SQL:\n{sql}")
+            return sql
+        return content
+    except Exception as e:
+        return f"⚠️ Error: {e}"
+
+
+def summarize_results_with_llm(user_question: str, result_table: str) -> str:
+    """Fallback summarization"""
+    prompt = f"""Question: "{user_question}"
+Data: {result_table}
+
+Provide a business summary. If asked about data source, explain it comes from our data warehouse tables."""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"⚠️ Error: {e}"
+
+
+# Cache clearing functions
+async def clear_thread_cache():
+    """Clear thread cache"""
+    _local_cache['thread'].clear()
+    print("🧹 Thread cache cleared")
+
+
+async def clear_sql_cache():
+    """Clear SQL cache"""
+    _local_cache['sql'].clear()
+    print("🧹 SQL cache cleared")
+
+
+async def clear_schema_cache():
+    """Clear schema cache"""
+    _local_cache['schema'].clear()
+    print("🧹 Schema cache cleared")
+
+
+async def clear_conversation_cache():
+    """Clear conversation context cache"""
+    _local_cache['conversation'].clear()
+    print("🧹 Conversation cache cleared")
+
+
+async def check_valkey_health():
+    """Check Valkey health"""
+    await ensure_valkey_connection()
+
+    if valkey_client:
+        try:
+            await valkey_client.ping()
+            return {"status": "healthy", "backend": "Valkey"}
+        except:
+            return {"status": "unhealthy", "backend": "Valkey"}
+    else:
+        return {"status": "fallback", "backend": "Local Memory"}
