@@ -15,28 +15,26 @@ from app.llm_prompter import (
     ask_llm_for_sql,
     summarize_results_with_llm,
     summarize_with_assistant,
-    debug_assistant_search,
     update_sql_cache_with_results,
     get_cache_stats,
     get_learning_insights,
     handle_question,
     test_question_classification,
-    test_table_identification,
     generate_sql_intelligently,
-    prime_schema_cache,
     clear_sql_cache,
     clear_schema_cache,
     clear_thread_cache,
     clear_conversation_cache,
-    clear_table_learning_cache,
+    clear_table_selection_cache,
     rediscover_table_schema,
     update_conversation_context,
     get_conversation_context,
     test_conversation_flow,
-    track_successful_query,
-    suggest_tables_for_question,
     debug_table_selection,
-    discover_all_tables,
+    sample_table_data,
+    find_relevant_tables_from_vector_store,
+    select_best_table_using_samples,
+    cache_table_selection,
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -101,7 +99,7 @@ async def handle_slack_event(request: Request):
 
 
 async def process_app_mention(event):
-    """Process app mention event with smart routing - SIMPLIFIED"""
+    """Process app mention event with smart routing"""
     user_question = event.get("text", "")
     channel_id = event.get("channel")
     user_id = event.get("user")
@@ -127,7 +125,7 @@ async def process_app_mention(event):
 
         # Use smart routing with assistant API
         if USE_ASSISTANT_API and ASSISTANT_ID:
-            print(f"🤖 Using Assistant API")
+            print(f"🤖 Using Assistant API with intelligent table selection")
 
             # Smart routing - determines if SQL is needed or conversational response
             response, response_type = await handle_question(clean_question, user_id, channel_id, ASSISTANT_ID)
@@ -189,23 +187,22 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 • `debug cache` or `debug stats` - Show cache statistics
 • `debug learning` or `debug patterns` - Show learning insights
 • `debug clear` - Clear all caches
-• `debug clear learning` - Clear table learning cache only
+• `debug clear selection` - Clear table selection cache only
 
-**Table Management:**
-• `debug tables` - List all available tables
-• `debug suggest QUESTION` - Suggest tables for a question
-• `debug score QUESTION` - Show table scoring details
+**Table Discovery:**
+• `debug find QUESTION` - Find relevant tables for a question
+• `debug sample TABLE_NAME` - Sample 5 rows from a table
+• `debug analyze QUESTION` - Full table selection analysis
+• `debug selection QUESTION` - Debug table selection process
 • `debug rediscover TABLE_NAME` - Force rediscover table schema
-• `debug prime` - Prime schema cache (discover all table schemas)
 
 **Testing:**
 • `debug test` - Test question classification
-• `debug test tables` - Test table identification
 • `debug flow` - Test conversation flow
 • `debug context` - Show current conversation context
 
 **General:**
-• `debug QUERY` - Debug search for tables/columns related to query"""
+• `debug QUERY` - Search for tables/columns related to query"""
 
     elif debug_query.lower() in ["cache", "stats"]:
         # Show cache statistics
@@ -223,11 +220,6 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         test_question_classification()
         debug_result = "🧪 **Classification test complete** - check server logs for results"
 
-    elif debug_query.lower() == "test tables":
-        # Test table identification
-        test_table_identification()
-        debug_result = "🧪 **Table identification test complete** - check server logs for results"
-
     elif debug_query.lower() in ["flow", "conversation flow"]:
         # Test conversation flow
         try:
@@ -236,42 +228,19 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         except Exception as e:
             debug_result = f"❌ **Flow test error:** {str(e)}"
 
-    elif debug_query.lower() in ["prime", "schema", "prime schema"]:
-        # Prime schema cache
-        try:
-            results = await prime_schema_cache()
-            stats = await get_cache_stats()
-            debug_result = f"🚀 **Schema cache primed!**\n\n"
-
-            if isinstance(results, dict):
-                debug_result += f"✅ Success: {results.get('success', 0)} tables\n"
-                debug_result += f"❌ Failed: {results.get('failed', 0)} tables\n"
-                if results.get('total_tables'):
-                    debug_result += f"📊 Total tables in schema: {results['total_tables']}\n"
-                if results.get('errors'):
-                    debug_result += f"\nErrors:\n"
-                    for error in results['errors'][:3]:  # Show first 3 errors
-                        debug_result += f"• {error}\n"
-
-            debug_result += f"\nCache stats:\n```{json.dumps(stats, indent=2)}```"
-        except Exception as e:
-            debug_result = f"❌ **Error priming schema cache:**\n```{str(e)}```"
-            print(f"❌ Error in prime schema cache: {e}")
-            traceback.print_exc()
-
     elif debug_query.lower() in ["clear cache", "clear"]:
         # Clear all caches
         await clear_sql_cache()
         await clear_schema_cache()
         await clear_thread_cache()
         await clear_conversation_cache()
-        await clear_table_learning_cache()
+        await clear_table_selection_cache()
         debug_result = "🧹 **All caches cleared!**"
 
-    elif debug_query.lower() == "clear learning":
-        # Clear only learning cache
-        await clear_table_learning_cache()
-        debug_result = "🧹 **Table learning cache cleared!**"
+    elif debug_query.lower() == "clear selection":
+        # Clear only table selection cache
+        await clear_table_selection_cache()
+        debug_result = "🧹 **Table selection cache cleared!**"
 
     elif debug_query.lower() in ["context", "conversation"]:
         # Show current conversation context
@@ -286,6 +255,76 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         else:
             debug_result = "💬 **No active conversation context**"
 
+    elif debug_query.lower().startswith("find"):
+        # Find relevant tables for a question
+        question = debug_query.replace("find", "").strip()
+        if question:
+            tables = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=5)
+            if tables:
+                debug_result = f"📊 **Relevant Tables for:** '{question}'\n\n"
+                for i, table in enumerate(tables, 1):
+                    debug_result += f"{i}. {table}\n"
+            else:
+                debug_result = "❌ **No relevant tables found**"
+        else:
+            debug_result = "❌ **Usage:** `debug find YOUR QUESTION HERE`"
+
+    elif debug_query.lower().startswith("sample"):
+        # Sample data from a table
+        table_name = debug_query.replace("sample", "").strip()
+        if table_name:
+            sample = await sample_table_data(table_name, sample_size=5)
+            if sample.get('error'):
+                debug_result = f"❌ **Error sampling {table_name}:** {sample['error']}"
+            else:
+                debug_result = f"📊 **Sample from {table_name}:**\n"
+                debug_result += f"Total rows: {sample.get('total_rows', 'Unknown')}\n"
+                debug_result += f"Columns ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:15])}\n\n"
+
+                if sample.get('sample_data'):
+                    debug_result += "**Sample row:**\n```json\n"
+                    sample_row = sample['sample_data'][0]
+                    # Show first 10 columns
+                    shown_cols = dict(list(sample_row.items())[:10])
+                    debug_result += json.dumps(shown_cols, indent=2)
+                    debug_result += "\n```"
+        else:
+            debug_result = "❌ **Usage:** `debug sample TABLE_NAME`"
+
+    elif debug_query.lower().startswith("analyze"):
+        # Full analysis of table selection for a question
+        question = debug_query.replace("analyze", "").strip()
+        if question:
+            debug_result = f"🔍 **Analyzing:** '{question}'\n\n"
+
+            # Find candidate tables
+            debug_result += "**1. Finding candidate tables...**\n"
+            candidates = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=4)
+
+            if candidates:
+                for table in candidates:
+                    debug_result += f"  • {table}\n"
+
+                # Select best table
+                debug_result += "\n**2. Selecting best table...**\n"
+                selected_table, reason = await select_best_table_using_samples(question, candidates, user_id,
+                                                                               channel_id)
+                debug_result += f"  Selected: {selected_table}\n"
+                debug_result += f"  Reason: {reason}\n"
+            else:
+                debug_result += "  ❌ No candidates found\n"
+        else:
+            debug_result = "❌ **Usage:** `debug analyze YOUR QUESTION HERE`"
+
+    elif debug_query.lower().startswith("selection"):
+        # Debug table selection process
+        question = debug_query.replace("selection", "").strip()
+        if question:
+            selection_debug = await debug_table_selection(question, user_id, channel_id)
+            debug_result = f"📊 **Table Selection Debug:**\n```{selection_debug}```"
+        else:
+            debug_result = "❌ **Usage:** `debug selection YOUR QUESTION HERE`"
+
     elif debug_query.lower().startswith("rediscover"):
         # Rediscover a specific table schema
         table_name = debug_query.replace("rediscover", "").strip()
@@ -294,58 +333,25 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
             if schema.get('error'):
                 debug_result = f"❌ **Failed to rediscover schema for {table_name}:**\n{schema['error']}"
             else:
-                debug_result = f"✅ **Rediscovered schema for {table_name}:**\n- Columns: {len(schema['columns'])}\n- Sample columns: {', '.join(schema['columns'][:10])}"
+                debug_result = f"✅ **Rediscovered schema for {table_name}:**\n"
+                debug_result += f"- Columns: {len(schema['columns'])}\n"
+                debug_result += f"- Sample columns: {', '.join(schema['columns'][:15])}"
+                if len(schema['columns']) > 15:
+                    debug_result += f"\n- ... and {len(schema['columns']) - 15} more columns"
         else:
             debug_result = "❌ **Usage:** `debug rediscover TABLE_NAME`"
 
-    elif debug_query.lower() == "tables":
-        # List all available tables
-        try:
-            all_tables = await discover_all_tables()
-            if all_tables:
-                debug_result = f"📊 **Available Tables ({len(all_tables)}):**\n"
-                for i, (table_name, info) in enumerate(list(all_tables.items())[:20]):
-                    debug_result += f"{i + 1}. {table_name}"
-                    if info.get('comment'):
-                        debug_result += f" - {info['comment'][:50]}"
-                    debug_result += "\n"
-
-                if len(all_tables) > 20:
-                    debug_result += f"\n... and {len(all_tables) - 20} more tables"
-            else:
-                debug_result = "❌ **No tables found or error discovering tables**"
-        except Exception as e:
-            debug_result = f"❌ **Error listing tables:** {str(e)}"
-
-    elif debug_query.lower().startswith("suggest"):
-        # Suggest tables for a question
-        question = debug_query.replace("suggest", "").strip()
-        if question:
-            suggestions = await suggest_tables_for_question(question)
-            if suggestions:
-                debug_result = f"📊 **Table Suggestions for:** '{question}'\n\n"
-                for i, suggestion in enumerate(suggestions, 1):
-                    debug_result += f"{i}. **{suggestion['table']}**\n"
-                    debug_result += f"   Confidence: {suggestion['confidence']:.2f}\n"
-                    debug_result += f"   Description: {suggestion['description']}\n"
-                    debug_result += f"   Reason: {suggestion['reason']}\n\n"
-            else:
-                debug_result = "❌ **No table suggestions found**"
-        else:
-            debug_result = "❌ **Usage:** `debug suggest YOUR QUESTION HERE`"
-
-    elif debug_query.lower().startswith("score"):
-        # Show table scoring details
-        question = debug_query.replace("score", "").strip()
-        if question:
-            scoring_details = await debug_table_selection(question)
-            debug_result = f"📊 **Table Scoring Details:**\n```{scoring_details}```"
-        else:
-            debug_result = "❌ **Usage:** `debug score YOUR QUESTION HERE`"
-
     else:
-        # Original debug search
-        debug_result = await debug_assistant_search(debug_query, user_id, channel_id)
+        # Default: search for tables/columns
+        # This uses the vector store to search for relevant information
+        debug_result = f"🔍 **Searching for:** {debug_query}\n\n"
+        tables = await find_relevant_tables_from_vector_store(debug_query, user_id, channel_id, top_k=3)
+        if tables:
+            debug_result += "**Found relevant tables:**\n"
+            for table in tables:
+                debug_result += f"  • {table}\n"
+        else:
+            debug_result += "No relevant tables found in vector search"
 
     await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}")
 
@@ -380,11 +386,11 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 bad_column = match.group(1)
                 print(f"❌ Column '{bad_column}' does not exist in the table")
 
-                # Try to suggest tables that might have this column
+                # Provide helpful suggestions
                 suggestions_msg = f"❌ Query error: Column '{bad_column}' does not exist in the table.\n\n"
                 suggestions_msg += "**Suggestions:**\n"
-                suggestions_msg += "1. Try `@bot debug prime` to discover all table schemas\n"
-                suggestions_msg += f"2. Try `@bot debug suggest {clean_question}` to see table suggestions\n"
+                suggestions_msg += f"1. Try `@bot debug analyze {clean_question}` to see table analysis\n"
+                suggestions_msg += f"2. Try `@bot debug find {clean_question}` to find relevant tables\n"
                 suggestions_msg += "3. Rephrase your question with more specific details\n\n"
                 suggestions_msg += f"Full error: {df}"
 
@@ -394,15 +400,26 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         else:
             result_message = f"❌ Query error: {df}"
 
-        # Update cache with poor results
+        # Update cache with poor results (no table info)
         await update_sql_cache_with_results(clean_question, sql, 0)
     else:
         # Success - process results
         result_count = len(df) if hasattr(df, '__len__') else 0
-        print(f"✅ Query successful - returned {result_count} rows")
+        print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
+
+        # Extract table from SQL for learning
+        selected_table = None
+        if 'FROM' in sql.upper():
+            sql_upper = sql.upper()
+            from_idx = sql_upper.find('FROM')
+            if from_idx != -1:
+                # Extract table name (handle multi-line SQL)
+                after_from = sql[from_idx + 4:].strip()
+                # Get first word (table name) - handle newlines and multiple spaces
+                selected_table = re.split(r'[\s\n]+', after_from)[0]
 
         # Update cache with actual results
-        await update_sql_cache_with_results(clean_question, sql, result_count)
+        await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
 
         # Summarize results
         if USE_ASSISTANT_API and ASSISTANT_ID:
@@ -476,7 +493,8 @@ def get_status():
         "assistant_id": ASSISTANT_ID if ASSISTANT_ID else "Not configured",
         "slack_configured": bool(SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET),
         "smart_routing_enabled": True,
-        "table_identification_enabled": True,
+        "intelligent_table_selection": True,
+        "vector_store_search": True,
         "learning_enabled": True,
         "conversational_context_enabled": True,
     }
