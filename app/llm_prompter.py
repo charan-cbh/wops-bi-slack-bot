@@ -301,31 +301,20 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
         return {'error': 'Snowflake not available'}
 
     try:
-        # Get total row count first
-        count_sql = f"SELECT COUNT(*) as total_rows FROM {table_name}"
-        count_result = run_query(count_sql)
-
-        if isinstance(count_result, str):
-            return {'error': count_result}
-
-        total_rows = count_result.iloc[0]['total_rows'] if len(count_result) > 0 else 0
-
-        # Sample random rows using TABLESAMPLE
-        sample_sql = f"""
-        SELECT * 
-        FROM {table_name} 
-        TABLESAMPLE ({sample_size} ROWS)
-        """
+        # Skip total row count - just sample directly
+        # Using LIMIT instead of TABLESAMPLE for simplicity
+        sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
+        print(f"🔍 Sampling with: {sample_sql}")
 
         df = run_query(sample_sql)
 
         if isinstance(df, str):
-            # Fallback to LIMIT if TABLESAMPLE fails
-            sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
-            df = run_query(sample_sql)
+            return {'error': df}
 
-            if isinstance(df, str):
-                return {'error': df}
+        # Handle the case where run_query returns a list (raw results)
+        if isinstance(df, list):
+            print(f"⚠️ Got raw list result, expected DataFrame")
+            return {'error': 'Unexpected result format from query'}
 
         # Get column info
         columns = list(df.columns)
@@ -345,10 +334,9 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
 
         sample_data = df_serializable.to_dict('records')
 
-        # Create sample info
+        # Create sample info (without total_rows to avoid expensive COUNT)
         sample_info = {
             'table': table_name,
-            'total_rows': total_rows,
             'columns': columns,
             'column_types': dtypes,
             'sample_data': sample_data,
@@ -359,7 +347,7 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
         # Cache the sample
         await safe_valkey_set(cache_key, sample_info, ex=3600)  # 1 hour expiry
 
-        print(f"✅ Sampled {len(df)} rows from {table_name} (Total: {total_rows} rows, {len(columns)} columns)")
+        print(f"✅ Sampled {len(df)} rows from {table_name} ({len(columns)} columns)")
 
         return sample_info
 
@@ -377,17 +365,25 @@ async def find_relevant_tables_from_vector_store(question: str, user_id: str, ch
 
     instructions = """You are a data expert. Based on the dbt manifest in your vector store, identify the most relevant tables for answering this question.
 
-Return ONLY a JSON array of table names (full names including schema), no explanations.
+IMPORTANT: 
+1. Search through the table DESCRIPTIONS and DOCUMENTATION in the dbt manifest
+2. Look for tables whose description mentions the concepts in the question
+3. Consider column descriptions and table purposes
+4. For "contact driver" questions, look for tables with contact reasons/drivers
+5. For "handling time" or "AHT", look for agent or queue metrics tables
+6. Consider both fact and dimension tables
+
+Return ONLY a JSON array of the full table names (including schema).
 Example: ["ANALYTICS.dbt_production.fct_tickets", "ANALYTICS.dbt_production.dim_agents"]
 
-Focus on:
-1. Tables that contain the metrics mentioned in the question
-2. Tables that have the entities (agents, tickets, etc.) mentioned
-3. Consider both fact and dimension tables if needed
+Focus on finding tables that:
+- Have descriptions mentioning the metrics/entities in the question
+- Contain the specific columns needed (based on their documentation)
+- Are at the right granularity for the analysis
 
 Return ONLY the JSON array, nothing else."""
 
-    message = f"Find the top {top_k} most relevant tables for this question: {question}"
+    message = f"Search the dbt manifest for tables relevant to this question: {question}\n\nLook especially at table descriptions and what each table contains."
 
     response = await send_message_and_run(thread_id, message, instructions)
 
@@ -399,7 +395,9 @@ Return ONLY the JSON array, nothing else."""
             json_str = response[json_start:json_end]
             tables = json.loads(json_str)
 
-            print(f"🔍 Vector store suggested {len(tables)} tables: {tables}")
+            print(f"🔍 Vector store found {len(tables)} relevant tables based on descriptions")
+            for i, table in enumerate(tables[:top_k], 1):
+                print(f"   {i}. {table}")
             return tables[:top_k]
     except Exception as e:
         print(f"⚠️ Error parsing table suggestions: {e}")
@@ -422,12 +420,14 @@ Tuple[str, str]:
         sample = await sample_table_data(table, sample_size=5)
         if not sample.get('error'):
             table_samples[table] = sample
+            print(f"✅ Successfully sampled {table}")
         else:
             print(f"⚠️ Could not sample {table}: {sample.get('error')}")
 
     if not table_samples:
         print("❌ Could not sample any tables")
-        return candidate_tables[0] if candidate_tables else "", "No tables could be sampled"
+        # Fall back to first candidate if we can't sample any
+        return candidate_tables[0] if candidate_tables else "", "Could not sample tables for analysis"
 
     # Use assistant to analyze samples and select best table
     thread_id = await get_or_create_thread(user_id, channel_id)
@@ -438,9 +438,11 @@ Tuple[str, str]:
 
 Consider:
 1. Which table actually contains the data needed to answer the question
-2. Look at column names and sample values
-3. Check if the metrics mentioned in the question exist in the table
-4. Verify the table has the right granularity (e.g., agent-level vs ticket-level)
+2. Look at column names and sample values carefully
+3. For "contact driver" - look for columns about contact reasons, drivers, or categories
+4. For "handling time" or "AHT" - look for time-based metrics in seconds/minutes
+5. Check if the metrics mentioned in the question exist in the table
+6. Verify the table has the right granularity (e.g., agent-level vs ticket-level vs queue-level)
 
 Return your response in this exact format:
 SELECTED_TABLE: <full table name>
@@ -452,19 +454,40 @@ Be decisive - pick the SINGLE best table."""
     message_parts = [f"User Question: {question}\n\nTable Samples:"]
 
     for table, sample in table_samples.items():
-        message_parts.append(f"\n\nTable: {table}")
-        message_parts.append(f"Total Rows: {sample.get('total_rows', 'Unknown')}")
-        message_parts.append(f"Columns: {', '.join(sample.get('columns', [])[:20])}")
+        message_parts.append(f"\n\n========================================")
+        message_parts.append(f"Table: {table}")
+        message_parts.append(f"Columns ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:20])}")
+
+        if len(sample.get('columns', [])) > 20:
+            message_parts.append(f"... and {len(sample.get('columns', [])) - 20} more columns")
 
         if sample.get('sample_data'):
-            message_parts.append("Sample Row:")
+            message_parts.append("\nSample Data (showing relevant columns):")
             # Show one sample row with key columns
             sample_row = sample['sample_data'][0]
-            relevant_cols = {k: v for k, v in sample_row.items()
-                             if k and v is not None and str(v).strip() != ''}
-            # Limit to 10 columns for readability
-            shown_cols = dict(list(relevant_cols.items())[:10])
-            message_parts.append(json.dumps(shown_cols, indent=2))
+
+            # Filter to show only non-null, relevant columns
+            relevant_keywords = ['contact', 'driver', 'reason', 'handling', 'time', 'aht', 'duration', 'category',
+                                 'type']
+            relevant_cols = {}
+
+            for col, val in sample_row.items():
+                if val is not None and str(val).strip() != '':
+                    # Include if column name contains relevant keywords
+                    if any(keyword in col.lower() for keyword in relevant_keywords):
+                        relevant_cols[col] = val
+
+            # If no relevant columns found, show first 10 non-null columns
+            if not relevant_cols:
+                relevant_cols = {k: v for k, v in sample_row.items()
+                                 if v is not None and str(v).strip() != ''}
+                relevant_cols = dict(list(relevant_cols.items())[:10])
+
+            if relevant_cols:
+                message_parts.append("```")
+                for col, val in relevant_cols.items():
+                    message_parts.append(f"{col}: {val}")
+                message_parts.append("```")
 
     message = "\n".join(message_parts)
 
@@ -1286,6 +1309,43 @@ Summarize the key findings."""
     return response
 
 
+async def get_table_descriptions_from_manifest(table_names: List[str], user_id: str, channel_id: str) -> Dict[str, str]:
+    """Get table descriptions from dbt manifest for given tables"""
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return {}
+
+    instructions = """Search the dbt manifest for the descriptions of these specific tables.
+
+Return a JSON object with table names as keys and their descriptions as values.
+Example: {"table1": "This table contains...", "table2": "This table stores..."}
+
+Look for:
+1. Table descriptions
+2. Table documentation
+3. Purpose of the table
+4. What metrics/data it contains
+
+Return ONLY the JSON object."""
+
+    message = f"Find descriptions for these tables from the dbt manifest:\n{json.dumps(table_names, indent=2)}"
+
+    response = await send_message_and_run(thread_id, message, instructions)
+
+    try:
+        # Extract JSON from response
+        if '{' in response and '}' in response:
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+            json_str = response[json_start:json_end]
+            descriptions = json.loads(json_str)
+            return descriptions
+    except Exception as e:
+        print(f"⚠️ Error parsing table descriptions: {e}")
+
+    return {}
+
+
 async def debug_table_selection(question: str, user_id: str = "debug", channel_id: str = "debug") -> str:
     """Debug the table selection process for a question"""
     result = f"🔍 Table Selection Debug for: '{question}'\n\n"
@@ -1302,8 +1362,16 @@ async def debug_table_selection(question: str, user_id: str = "debug", channel_i
     candidates = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=5)
 
     if candidates:
+        # Get descriptions for these tables
+        descriptions = await get_table_descriptions_from_manifest(candidates, user_id, channel_id)
+
         for i, table in enumerate(candidates, 1):
-            result += f"  {i}. {table}\n"
+            result += f"\n{i}. {table}\n"
+            if table in descriptions:
+                result += f"   Description: {descriptions[table][:200]}...\n" if len(
+                    descriptions[table]) > 200 else f"   Description: {descriptions[table]}\n"
+            else:
+                result += f"   Description: Not found\n"
     else:
         result += "  No tables found from vector search\n"
 
