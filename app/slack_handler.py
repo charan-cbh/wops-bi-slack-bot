@@ -21,16 +21,22 @@ from app.llm_prompter import (
     get_learning_insights,
     handle_question,
     test_question_classification,
+    test_table_identification,
     generate_sql_intelligently,
     prime_schema_cache,
     clear_sql_cache,
     clear_schema_cache,
     clear_thread_cache,
     clear_conversation_cache,
+    clear_table_learning_cache,
     rediscover_table_schema,
     update_conversation_context,
     get_conversation_context,
     test_conversation_flow,
+    track_successful_query,
+    suggest_tables_for_question,
+    debug_table_selection,
+    discover_all_tables,
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -179,14 +185,26 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         # Show available debug commands
         debug_result = """🔧 **Available Debug Commands:**
 
+**Cache & Stats:**
 • `debug cache` or `debug stats` - Show cache statistics
 • `debug learning` or `debug patterns` - Show learning insights
-• `debug test` - Test question classification
-• `debug flow` - Test conversation flow
-• `debug prime` - Prime schema cache (discover all table schemas)
 • `debug clear` - Clear all caches
+• `debug clear learning` - Clear table learning cache only
+
+**Table Management:**
+• `debug tables` - List all available tables
+• `debug suggest QUESTION` - Suggest tables for a question
+• `debug score QUESTION` - Show table scoring details
+• `debug rediscover TABLE_NAME` - Force rediscover table schema
+• `debug prime` - Prime schema cache (discover all table schemas)
+
+**Testing:**
+• `debug test` - Test question classification
+• `debug test tables` - Test table identification
+• `debug flow` - Test conversation flow
 • `debug context` - Show current conversation context
-• `debug rediscover TABLE_NAME` - Force rediscover specific table schema
+
+**General:**
 • `debug QUERY` - Debug search for tables/columns related to query"""
 
     elif debug_query.lower() in ["cache", "stats"]:
@@ -204,6 +222,11 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         # Test question classification
         test_question_classification()
         debug_result = "🧪 **Classification test complete** - check server logs for results"
+
+    elif debug_query.lower() == "test tables":
+        # Test table identification
+        test_table_identification()
+        debug_result = "🧪 **Table identification test complete** - check server logs for results"
 
     elif debug_query.lower() in ["flow", "conversation flow"]:
         # Test conversation flow
@@ -223,6 +246,8 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
             if isinstance(results, dict):
                 debug_result += f"✅ Success: {results.get('success', 0)} tables\n"
                 debug_result += f"❌ Failed: {results.get('failed', 0)} tables\n"
+                if results.get('total_tables'):
+                    debug_result += f"📊 Total tables in schema: {results['total_tables']}\n"
                 if results.get('errors'):
                     debug_result += f"\nErrors:\n"
                     for error in results['errors'][:3]:  # Show first 3 errors
@@ -240,7 +265,13 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         await clear_schema_cache()
         await clear_thread_cache()
         await clear_conversation_cache()
+        await clear_table_learning_cache()
         debug_result = "🧹 **All caches cleared!**"
+
+    elif debug_query.lower() == "clear learning":
+        # Clear only learning cache
+        await clear_table_learning_cache()
+        debug_result = "🧹 **Table learning cache cleared!**"
 
     elif debug_query.lower() in ["context", "conversation"]:
         # Show current conversation context
@@ -266,6 +297,51 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
                 debug_result = f"✅ **Rediscovered schema for {table_name}:**\n- Columns: {len(schema['columns'])}\n- Sample columns: {', '.join(schema['columns'][:10])}"
         else:
             debug_result = "❌ **Usage:** `debug rediscover TABLE_NAME`"
+
+    elif debug_query.lower() == "tables":
+        # List all available tables
+        try:
+            all_tables = await discover_all_tables()
+            if all_tables:
+                debug_result = f"📊 **Available Tables ({len(all_tables)}):**\n"
+                for i, (table_name, info) in enumerate(list(all_tables.items())[:20]):
+                    debug_result += f"{i + 1}. {table_name}"
+                    if info.get('comment'):
+                        debug_result += f" - {info['comment'][:50]}"
+                    debug_result += "\n"
+
+                if len(all_tables) > 20:
+                    debug_result += f"\n... and {len(all_tables) - 20} more tables"
+            else:
+                debug_result = "❌ **No tables found or error discovering tables**"
+        except Exception as e:
+            debug_result = f"❌ **Error listing tables:** {str(e)}"
+
+    elif debug_query.lower().startswith("suggest"):
+        # Suggest tables for a question
+        question = debug_query.replace("suggest", "").strip()
+        if question:
+            suggestions = await suggest_tables_for_question(question)
+            if suggestions:
+                debug_result = f"📊 **Table Suggestions for:** '{question}'\n\n"
+                for i, suggestion in enumerate(suggestions, 1):
+                    debug_result += f"{i}. **{suggestion['table']}**\n"
+                    debug_result += f"   Confidence: {suggestion['confidence']:.2f}\n"
+                    debug_result += f"   Description: {suggestion['description']}\n"
+                    debug_result += f"   Reason: {suggestion['reason']}\n\n"
+            else:
+                debug_result = "❌ **No table suggestions found**"
+        else:
+            debug_result = "❌ **Usage:** `debug suggest YOUR QUESTION HERE`"
+
+    elif debug_query.lower().startswith("score"):
+        # Show table scoring details
+        question = debug_query.replace("score", "").strip()
+        if question:
+            scoring_details = await debug_table_selection(question)
+            debug_result = f"📊 **Table Scoring Details:**\n```{scoring_details}```"
+        else:
+            debug_result = "❌ **Usage:** `debug score YOUR QUESTION HERE`"
 
     else:
         # Original debug search
@@ -303,7 +379,16 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
             if match:
                 bad_column = match.group(1)
                 print(f"❌ Column '{bad_column}' does not exist in the table")
-                result_message = f"❌ Query error: Column '{bad_column}' does not exist in the table.\n\nThis might mean the table schema needs to be discovered. Try:\n1. `@bot debug prime` to discover all table schemas\n2. Then ask your question again\n\nFull error: {df}"
+
+                # Try to suggest tables that might have this column
+                suggestions_msg = f"❌ Query error: Column '{bad_column}' does not exist in the table.\n\n"
+                suggestions_msg += "**Suggestions:**\n"
+                suggestions_msg += "1. Try `@bot debug prime` to discover all table schemas\n"
+                suggestions_msg += f"2. Try `@bot debug suggest {clean_question}` to see table suggestions\n"
+                suggestions_msg += "3. Rephrase your question with more specific details\n\n"
+                suggestions_msg += f"Full error: {df}"
+
+                result_message = suggestions_msg
             else:
                 result_message = f"❌ Query error: {df}"
         else:
@@ -391,6 +476,7 @@ def get_status():
         "assistant_id": ASSISTANT_ID if ASSISTANT_ID else "Not configured",
         "slack_configured": bool(SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET),
         "smart_routing_enabled": True,
-        "tl_patterns_enabled": True,
+        "table_identification_enabled": True,
+        "learning_enabled": True,
         "conversational_context_enabled": True,
     }

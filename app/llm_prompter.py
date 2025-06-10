@@ -36,6 +36,7 @@ THREAD_CACHE_TTL = 3600  # 1 hour
 SQL_CACHE_TTL = 86400  # 24 hours
 SCHEMA_CACHE_TTL = 604800  # 7 days for table schema cache
 CONVERSATION_CACHE_TTL = 600  # 10 minutes
+TABLE_LEARNING_TTL = 2592000  # 30 days for learning data
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -48,7 +49,8 @@ _local_cache = {
     'thread': {},
     'sql': {},
     'schema': {},  # Cache for table schemas
-    'conversation': {}
+    'conversation': {},
+    'table_learning': {}  # Cache for table learning
 }
 
 # Cache key prefixes
@@ -57,13 +59,47 @@ THREAD_CACHE_PREFIX = f"{CACHE_PREFIX}:thread"
 SQL_CACHE_PREFIX = f"{CACHE_PREFIX}:sql"
 SCHEMA_CACHE_PREFIX = f"{CACHE_PREFIX}:schema"
 CONVERSATION_CACHE_PREFIX = f"{CACHE_PREFIX}:conversation"
+TABLE_LEARNING_PREFIX = f"{CACHE_PREFIX}:table_learning"
 
-# Known tables mapping
-KNOWN_TABLES = {
-    'tickets': 'ANALYTICS.dbt_production.fct_zendesk_tickets',
-    'messaging': 'ANALYTICS.dbt_production.fct_zendesk_tickets',
-    'agents': 'ANALYTICS.dbt_production.fct_amazon_connect__agent_metrics',
-    'reviews': 'ANALYTICS.dbt_production.fct_klaus__reviews'
+# Enhanced table registry with metadata
+TABLE_REGISTRY = {
+    'tickets': {
+        'table_name': 'ANALYTICS.dbt_production.fct_zendesk_tickets',
+        'description': 'Zendesk support tickets data',
+        'keywords': ['ticket', 'support', 'zendesk', 'reply time', 'response time',
+                     'resolution', 'customer', 'issue', 'escalation', 'priority',
+                     'messaging', 'chat', 'email', 'channel', 'via', 'satisfaction',
+                     'solved', 'closed', 'open', 'pending'],
+        'common_metrics': ['reply_time_in_minutes', 'resolution_time', 'ticket_count',
+                           'satisfaction_score', 'first_reply_time'],
+        'common_columns': ['ticket_id', 'created_at', 'group_name', 'channel', 'status',
+                           'priority', 'assignee_id', 'requester_id'],
+        'related_tables': ['agents', 'reviews']
+    },
+    'agents': {
+        'table_name': 'ANALYTICS.dbt_production.fct_amazon_connect__agent_metrics',
+        'description': 'Amazon Connect agent performance metrics',
+        'keywords': ['agent', 'aht', 'handling time', 'calls', 'performance',
+                     'productivity', 'amazon connect', 'voice', 'phone', 'occupancy',
+                     'adherence', 'contact', 'queue', 'service level', 'abandon',
+                     'transfer', 'hold', 'talk time', 'after call work', 'acw'],
+        'common_metrics': ['aht', 'calls_handled', 'occupancy_rate', 'adherence_rate',
+                           'average_talk_time', 'average_hold_time', 'transfer_rate'],
+        'common_columns': ['agent_id', 'agent_name', 'date', 'queue_name', 'shift'],
+        'related_tables': ['tickets', 'reviews']
+    },
+    'reviews': {
+        'table_name': 'ANALYTICS.dbt_production.fct_klaus__reviews',
+        'description': 'Klaus quality assurance reviews',
+        'keywords': ['review', 'klaus', 'qa', 'quality', 'score', 'rating',
+                     'feedback', 'evaluation', 'assessment', 'scorecard',
+                     'category', 'criteria', 'reviewer', 'reviewee'],
+        'common_metrics': ['review_score', 'category_scores', 'critical_count',
+                           'avg_score', 'pass_rate'],
+        'common_columns': ['review_id', 'reviewer_id', 'reviewee_id', 'created_at',
+                           'score', 'category', 'comments'],
+        'related_tables': ['agents', 'tickets']
+    }
 }
 
 # Common column name variations (to help the bot find the right column)
@@ -75,13 +111,26 @@ COLUMN_VARIATIONS = {
     'resolved': ['resolved_at', 'resolution_date', 'closed_at', 'solved_at']
 }
 
+# Stop words for phrase extraction
+STOP_WORDS = {'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'are',
+              'was', 'were', 'been', 'be', 'have', 'has', 'had', 'do', 'does',
+              'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must',
+              'shall', 'to', 'of', 'in', 'for', 'with', 'by', 'from', 'about'}
+
 # Minimal pattern recognition for intent
 INTENT_PATTERNS = {
-    'count': ['how many', 'count', 'total number', 'number of'],
-    'time_filter': ['today', 'yesterday', 'last week', 'this week', 'last month'],
-    'group_filter': ['messaging', 'voice', 'email'],
-    'metrics': ['reply time', 'response time', 'resolution time', 'aht', 'average handling', 'first reply'],
-    'ranking': ['highest', 'lowest', 'top', 'bottom', 'most', 'least']
+    'count': ['how many', 'count', 'total number', 'number of', 'volume', 'quantity'],
+    'time_filter': ['today', 'yesterday', 'last week', 'this week', 'last month', 'this month',
+                    'last year', 'this year', 'last 7 days', 'last 30 days', 'last 90 days'],
+    'group_filter': ['messaging', 'voice', 'email', 'chat', 'phone', 'api'],
+    'metrics': ['reply time', 'response time', 'resolution time', 'aht', 'average handling',
+                'first reply', 'satisfaction', 'csat', 'occupancy', 'adherence'],
+    'ranking': ['highest', 'lowest', 'top', 'bottom', 'most', 'least', 'best', 'worst',
+                'maximum', 'minimum', 'ranked', 'order by'],
+    'comparison': ['compare', 'versus', 'vs', 'between', 'difference', 'correlation',
+                   'relationship', 'impact', 'affect', 'influence'],
+    'aggregation': ['average', 'avg', 'mean', 'sum', 'total', 'median', 'min', 'max',
+                    'percentile', 'p50', 'p90', 'p95', 'p99']
 }
 
 
@@ -257,6 +306,290 @@ def get_question_hash(question: str) -> str:
     return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
 
+def extract_key_phrases(question: str) -> List[str]:
+    """Extract key phrases from question for learning"""
+    words = question.lower().split()
+    phrases = []
+
+    # Single words (excluding stop words)
+    important_words = [w for w in words if len(w) > 3 and w not in STOP_WORDS]
+    phrases.extend(important_words)
+
+    # Bigrams for important patterns
+    for i in range(len(words) - 1):
+        bigram = f"{words[i]} {words[i + 1]}"
+        # Check if bigram matches any known pattern
+        for pattern_list in INTENT_PATTERNS.values():
+            if bigram in pattern_list:
+                phrases.append(bigram)
+                break
+
+    # Trigrams for complex patterns
+    for i in range(len(words) - 2):
+        trigram = f"{words[i]} {words[i + 1]} {words[i + 2]}"
+        if any(pattern in trigram for pattern in ['average handling time', 'first reply time']):
+            phrases.append(trigram)
+
+    return list(set(phrases))  # Remove duplicates
+
+
+def identify_table_from_question(question: str) -> Tuple[str, float]:
+    """
+    Identify which table to use based on question keywords with confidence scoring
+    Returns: (table_name, confidence_score)
+    """
+    question_lower = question.lower()
+    question_words = set(question_lower.split())
+
+    scores = {}
+
+    # Check learning data first
+    learning_data = _local_cache.get('table_learning', {}).get(f"{TABLE_LEARNING_PREFIX}:data", {})
+
+    # Apply learned patterns
+    key_phrases = extract_key_phrases(question)
+    learned_scores = {}
+
+    for phrase in key_phrases:
+        if phrase in learning_data:
+            for table, count in learning_data[phrase].items():
+                if table not in learned_scores:
+                    learned_scores[table] = 0
+                learned_scores[table] += count * 2  # Weight learned patterns higher
+
+    # Score each table
+    for table_key, table_info in TABLE_REGISTRY.items():
+        score = 0
+
+        # Add learned score if available
+        if table_info['table_name'] in learned_scores:
+            score += learned_scores[table_info['table_name']]
+
+        # Check keywords (weighted scoring)
+        for keyword in table_info['keywords']:
+            if keyword in question_lower:
+                # Exact phrase match gets higher score
+                if len(keyword.split()) > 1:  # Multi-word keyword
+                    score += 4
+                else:
+                    score += 2
+            elif any(word in keyword.split() for word in question_words):
+                # Partial match
+                score += 1
+
+        # Check for metric names
+        for metric in table_info.get('common_metrics', []):
+            if metric.replace('_', ' ') in question_lower:
+                score += 3
+
+        # Check for column names
+        for column in table_info.get('common_columns', []):
+            if column.replace('_', ' ') in question_lower:
+                score += 2
+
+        # Bonus for table name mention
+        if table_key in question_lower:
+            score += 5
+
+        scores[table_key] = score
+
+    # Get best match
+    if scores:
+        best_table = max(scores, key=scores.get)
+        max_score = max(scores.values())
+        confidence = scores[best_table] / max_score if max_score > 0 else 0
+
+        # Log scoring details
+        print(f"📊 Table scoring for '{question[:50]}...':")
+        for table, score in sorted(scores.items(), key=lambda x: x[1], reverse=True):
+            print(f"   {table}: {score} points")
+        print(f"   Selected: {best_table} (confidence: {confidence:.2f})")
+
+        # If confidence is too low, might need multiple tables
+        if confidence < 0.5 and scores[best_table] < 3:
+            print(f"⚠️ Low confidence ({confidence:.2f}) for table selection")
+
+        return TABLE_REGISTRY[best_table]['table_name'], confidence
+
+    # Default fallback
+    print("⚠️ No table matched, using default tickets table")
+    return TABLE_REGISTRY['tickets']['table_name'], 0.0
+
+
+def identify_tables_for_complex_query(question: str) -> List[Tuple[str, float]]:
+    """
+    Identify multiple tables that might be needed for a complex query
+    Returns: List of (table_name, relevance_score) tuples
+    """
+    question_lower = question.lower()
+    tables_scores = []
+
+    # Check each table's relevance
+    for table_key, table_info in TABLE_REGISTRY.items():
+        score = 0
+
+        # Count keyword matches
+        for keyword in table_info['keywords']:
+            if keyword in question_lower:
+                score += 2 if len(keyword.split()) > 1 else 1
+
+        # Check metrics
+        for metric in table_info.get('common_metrics', []):
+            if metric.replace('_', ' ') in question_lower:
+                score += 2
+
+        if score > 0:
+            tables_scores.append((table_info['table_name'], score))
+
+    # Sort by relevance score
+    tables_scores.sort(key=lambda x: x[1], reverse=True)
+
+    # Normalize scores
+    if tables_scores and tables_scores[0][1] > 0:
+        max_score = tables_scores[0][1]
+        tables_scores = [(table, score / max_score) for table, score in tables_scores]
+
+    return tables_scores
+
+
+async def validate_table_exists(table_name: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check if a table exists and return its correct name
+    Returns: (exists, correct_table_name)
+    """
+    if not SNOWFLAKE_AVAILABLE:
+        return True, table_name  # Assume exists in dev mode
+
+    # Check various possible formats
+    table_parts = table_name.split('.')
+    table_only = table_parts[-1]
+
+    check_sql = f"""
+    SELECT 
+        CONCAT(table_schema, '.', table_name) as full_name
+    FROM information_schema.tables
+    WHERE (
+        CONCAT(table_schema, '.', table_name) = '{table_name}'
+        OR table_name = '{table_only}'
+    )
+    AND table_type = 'BASE TABLE'
+    LIMIT 1
+    """
+
+    try:
+        result = run_query(check_sql)
+        if not isinstance(result, str) and len(result) > 0:
+            return True, result.iloc[0]['full_name']
+    except Exception as e:
+        print(f"⚠️ Error validating table: {e}")
+
+    return False, None
+
+
+async def track_successful_query(question: str, table_used: str, result_count: int):
+    """Track successful queries to improve future table selection"""
+    if result_count <= 0:
+        return  # Only track successful queries
+
+    cache_key = f"{TABLE_LEARNING_PREFIX}:data"
+    learning_data = await safe_valkey_get(cache_key, {})
+
+    # Extract key phrases from question
+    key_phrases = extract_key_phrases(question)
+
+    for phrase in key_phrases:
+        if phrase not in learning_data:
+            learning_data[phrase] = {}
+
+        if table_used not in learning_data[phrase]:
+            learning_data[phrase][table_used] = 0
+
+        learning_data[phrase][table_used] += 1
+
+    # Save to both caches
+    await safe_valkey_set(cache_key, learning_data, ex=TABLE_LEARNING_TTL)
+    _local_cache['table_learning'][cache_key] = learning_data
+
+    print(f"📚 Tracked successful query pattern: {len(key_phrases)} phrases learned")
+
+
+async def suggest_tables_for_question(question: str) -> List[Dict]:
+    """Suggest possible tables for a question with reasoning"""
+    suggestions = []
+
+    # Get all tables with scores
+    all_tables = identify_tables_for_complex_query(question)
+
+    for table_name, score in all_tables[:3]:  # Top 3 suggestions
+        # Find the table info
+        table_info = None
+        for key, info in TABLE_REGISTRY.items():
+            if info['table_name'] == table_name:
+                table_info = info
+                break
+
+        if table_info and score > 0:
+            # Find matching keywords
+            question_lower = question.lower()
+            matched_keywords = [k for k in table_info['keywords'] if k in question_lower]
+
+            suggestions.append({
+                'table': table_name,
+                'description': table_info['description'],
+                'confidence': score,
+                'reason': f"Keywords matched: {', '.join(matched_keywords[:5])}"
+            })
+
+    return suggestions
+
+
+async def discover_all_tables(schema_name: str = 'ANALYTICS.dbt_production') -> Dict[str, Any]:
+    """Discover all tables in the schema"""
+    cache_key = f"{SCHEMA_CACHE_PREFIX}:all_tables_{schema_name}"
+
+    # Check cache first
+    cached_tables = await safe_valkey_get(cache_key)
+    if cached_tables:
+        print(f"📋 Using cached table list for {schema_name}")
+        return cached_tables
+
+    discovery_sql = f"""
+    SELECT 
+        table_schema,
+        table_name,
+        table_type,
+        comment
+    FROM information_schema.tables
+    WHERE table_schema = '{schema_name}'
+    AND table_type = 'BASE TABLE'
+    ORDER BY table_name
+    """
+
+    if SNOWFLAKE_AVAILABLE:
+        try:
+            df = run_query(discovery_sql)
+            if not isinstance(df, str):
+                tables = {}
+                for _, row in df.iterrows():
+                    table_full_name = f"{row['TABLE_SCHEMA']}.{row['TABLE_NAME']}"
+                    tables[row['TABLE_NAME']] = {
+                        'full_name': table_full_name,
+                        'comment': row.get('COMMENT', ''),
+                        'discovered_at': time.time()
+                    }
+
+                print(f"🔍 Discovered {len(tables)} tables in {schema_name}")
+
+                # Cache the discovered tables
+                await safe_valkey_set(cache_key, tables, ex=SCHEMA_CACHE_TTL)
+
+                return tables
+        except Exception as e:
+            print(f"❌ Error discovering tables: {e}")
+
+    return {}
+
+
 def classify_question_type(question: str) -> str:
     """Simple classification - is this a data query or conversation?"""
     question_lower = question.lower()
@@ -279,7 +612,8 @@ def classify_question_type(question: str) -> str:
         'highest', 'lowest', 'average', 'total',
         'tickets', 'agents', 'reviews', 'performance',
         'reply time', 'response time', 'resolution',
-        'which ticket type', 'what ticket type', 'driving'
+        'which ticket type', 'what ticket type', 'driving',
+        'volume', 'trend', 'compare', 'by group', 'by channel'
     ]
 
     # Check for meta/help indicators
@@ -317,32 +651,19 @@ def classify_question_type(question: str) -> str:
 
 
 def extract_intent(question: str) -> dict:
-    """Extract basic intent from question"""
+    """Extract comprehensive intent from question"""
     question_lower = question.lower()
     intent = {
         'needs_count': any(p in question_lower for p in INTENT_PATTERNS['count']),
         'time_filter': next((t for t in INTENT_PATTERNS['time_filter'] if t in question_lower), None),
         'group_filter': next((g for g in INTENT_PATTERNS['group_filter'] if g in question_lower), None),
         'metric_type': next((m for m in INTENT_PATTERNS['metrics'] if m in question_lower), None),
-        'needs_ranking': any(r in question_lower for r in INTENT_PATTERNS['ranking'])
+        'needs_ranking': any(r in question_lower for r in INTENT_PATTERNS['ranking']),
+        'needs_comparison': any(c in question_lower for c in INTENT_PATTERNS['comparison']),
+        'aggregation_type': next((a for a in INTENT_PATTERNS['aggregation'] if a in question_lower), None),
+        'possible_join': any(j in question_lower for j in ['and their', 'with their', 'between', 'across'])
     }
     return intent
-
-
-def identify_table_from_question(question: str) -> str:
-    """Identify which table to use based on question keywords"""
-    question_lower = question.lower()
-
-    # Check for specific table indicators
-    if any(word in question_lower for word in ['messaging', 'tickets', 'reply time', 'response time']):
-        return KNOWN_TABLES.get('tickets', 'ANALYTICS.dbt_production.fct_zendesk_tickets')
-    elif any(word in question_lower for word in ['agent', 'aht', 'handling time']):
-        return KNOWN_TABLES.get('agents', 'ANALYTICS.dbt_production.fct_amazon_connect__agent_metrics')
-    elif any(word in question_lower for word in ['review', 'klaus', 'qa']):
-        return KNOWN_TABLES.get('reviews', 'ANALYTICS.dbt_production.fct_klaus__reviews')
-    else:
-        # Default to tickets table
-        return KNOWN_TABLES.get('tickets', 'ANALYTICS.dbt_production.fct_zendesk_tickets')
 
 
 def find_matching_columns(schema: dict, keywords: List[str]) -> List[str]:
@@ -396,6 +717,20 @@ async def discover_table_schema(table_name: str) -> dict:
             print(f"    ... and {len(cached_schema.get('columns', [])) - 10} more columns")
         return cached_schema
 
+    # Validate table exists first
+    exists, correct_name = await validate_table_exists(table_name)
+    if not exists:
+        print(f"❌ Table {table_name} does not exist")
+        return {
+            'table': table_name,
+            'error': f"Table {table_name} not found",
+            'columns': []
+        }
+
+    if correct_name and correct_name != table_name:
+        print(f"📝 Using correct table name: {correct_name}")
+        table_name = correct_name
+
     # If Snowflake is available, run actual discovery
     if SNOWFLAKE_AVAILABLE:
         try:
@@ -408,33 +743,11 @@ async def discover_table_schema(table_name: str) -> dict:
 
             if isinstance(df, str):
                 print(f"❌ Schema discovery failed: {df}")
-                # Try alternative table names if the exact name failed
-                if "does not exist" in df.lower() or "invalid identifier" in df.lower():
-                    print("🔄 Trying alternative table paths...")
-                    alternatives = [
-                        table_name.split('.')[-1],  # Just table name
-                        f"dbt_production.{table_name.split('.')[-1]}",  # With dbt_production
-                        f"ANALYTICS.{table_name.split('.')[-1]}",  # With ANALYTICS
-                    ]
-
-                    for alt_table in alternatives:
-                        if alt_table != table_name:
-                            print(f"🔄 Trying: {alt_table}")
-                            alt_sql = f"SELECT * FROM {alt_table} LIMIT 5"
-                            df_alt = run_query(alt_sql)
-                            if not isinstance(df_alt, str):
-                                print(f"✅ Found table at: {alt_table}")
-                                table_name = alt_table
-                                df = df_alt
-                                break
-
-                # If still a string, it's an error
-                if isinstance(df, str):
-                    return {
-                        'table': table_name,
-                        'error': df,
-                        'columns': []
-                    }
+                return {
+                    'table': table_name,
+                    'error': df,
+                    'columns': []
+                }
 
             # Extract column names and sample data
             columns = list(df.columns)
@@ -745,30 +1058,22 @@ Use the conversation history in this thread to understand what data they're aski
 Be helpful in explaining the data source, methodology, or clarifying the results.
 
 Common follow-ups and how to respond:
-- "What is the source?" → Explain that the data comes from Zendesk tickets system, stored in our data warehouse
-- "Why is it None?" → Explain that None/null values typically mean no specific ticket type was identified or categorized
-- "What are these groups?" → Explain that groups are teams handling tickets:
-  * WOPs Flex Ops - Flexible operations team
-  * WOPs - AI - AI/automation team
-  * Documents Submissions Team - Handles document processing
-  * Legacy HCF T2 - Legacy tier 2 support team
-  * Tier 2 - Payments Support - Payment-related issues
-  * WOPs - Chats - Chat support team
-  * Tier 1 - Documents Chat - First tier document support
-- "What are these channels?" → Explain ticket submission channels:
-  * API - Programmatic ticket creation
-  * email - Email-based tickets
-  * web - Web form submissions
-  * native messaging - In-app messaging
+- "What is the source?" → Explain that the data comes from our data warehouse tables:
+  * Zendesk tickets (fct_zendesk_tickets) - Support ticket data
+  * Amazon Connect (fct_amazon_connect__agent_metrics) - Agent performance
+  * Klaus (fct_klaus__reviews) - Quality reviews
+- "Why is it None?" → Explain that None/null values typically mean no specific value was recorded
+- "What are these groups?" → Explain team names and their functions
+- "What are these channels?" → Explain ticket submission channels
 
-Data sources:
-- Zendesk tickets (ANALYTICS.dbt_production.fct_zendesk_tickets)
-- Agent metrics (fct_amazon_connect__agent_metrics)
-- Klaus reviews (fct_klaus__reviews)"""
+Be specific about which table the data came from if you can determine it from the context."""
     else:
         print(f"💬 Standard conversational response")
         instructions = """You are a BI assistant. Be helpful and concise.
-Focus on available metrics: tickets, agents, performance, reviews."""
+Available data sources:
+- Zendesk tickets data (reply times, resolution, channels)
+- Agent performance metrics (AHT, calls, productivity)
+- Quality review scores"""
 
     # Add context to message if available
     message_parts = [f"User question: {user_question}"]
@@ -796,9 +1101,20 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
 
     try:
-        # Step 1: Identify likely table
-        table_name = identify_table_from_question(user_question)
-        print(f"📊 Identified table: {table_name}")
+        # Step 1: Identify likely table with confidence
+        table_name, confidence = identify_table_from_question(user_question)
+        print(f"📊 Identified table: {table_name} (confidence: {confidence:.2f})")
+
+        # Check if we need multiple tables
+        intent = extract_intent(user_question)
+        possible_tables = []
+
+        if confidence < 0.5 or intent.get('possible_join'):
+            # Get other relevant tables
+            all_tables = identify_tables_for_complex_query(user_question)
+            possible_tables = [t for t, s in all_tables if s > 0.3 and t != table_name]
+            if possible_tables:
+                print(f"📊 Additional tables might be needed: {possible_tables}")
 
         # Step 2: Discover schema
         schema = await discover_table_schema(table_name)
@@ -821,7 +1137,6 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
         }
 
     # Step 3: Find relevant columns based on question
-    intent = extract_intent(user_question)
     print(f"🎯 Extracted intent: {intent}")
 
     # Look for columns related to the metric
@@ -831,6 +1146,8 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
             relevant_keywords.extend(['reply_time', 'reply', 'response', 'first'])
         elif 'resolution' in intent['metric_type']:
             relevant_keywords.extend(['resolution', 'resolve', 'resolved'])
+        elif 'aht' in intent['metric_type'] or 'handling' in intent['metric_type']:
+            relevant_keywords.extend(['aht', 'handling', 'average', 'time'])
 
     if intent['group_filter']:
         relevant_keywords.extend(['group', 'channel', 'type'])
@@ -841,105 +1158,78 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     matching_columns = find_matching_columns(schema, relevant_keywords) if schema.get('columns') else []
     print(f"🔍 Found relevant columns: {matching_columns}")
 
-    # Special handling for common queries
-    if 'messaging' in user_question.lower() and 'reply time' in user_question.lower():
-        print("📌 Special case: Messaging reply time query")
-        # Look specifically for reply time columns
-        reply_columns = find_matching_columns(schema, ['reply_time']) if schema.get('columns') else []
-        if reply_columns:
-            print(f"📌 Found reply time columns: {reply_columns}")
-
     # Step 4: Generate SQL with assistant
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return "-- Error: Could not create conversation thread"
 
-    # Build context with actual schema
-    if schema.get('columns'):
-        all_columns = schema['columns'][:30]  # Show first 30 columns
-        instructions = f"""You are a SQL expert. Generate SQL based on this ACTUAL table schema:
+    # Build comprehensive instructions
+    instructions = f"""You are a SQL expert with deep knowledge of our data warehouse.
+
+CRITICAL RULES FOR SQL GENERATION:
+1. Primary table selected: {table_name} (confidence: {confidence:.2f})
+2. Table description: {TABLE_REGISTRY.get(table_name.split('.')[-1].replace('fct_zendesk_', '').replace('fct_amazon_connect__', '').replace('fct_klaus__', ''), {}).get('description', 'Data table')}
+3. {"⚠️ Low confidence - verify this is the correct table" if confidence < 0.5 else "✅ High confidence table match"}
+
+AVAILABLE TABLES AND THEIR PURPOSE:
+- ANALYTICS.dbt_production.fct_zendesk_tickets: Ticket data (reply times, resolution, channels, groups)
+- ANALYTICS.dbt_production.fct_amazon_connect__agent_metrics: Agent performance (AHT, calls, productivity)
+- ANALYTICS.dbt_production.fct_klaus__reviews: Quality review scores
+
+{"CONSIDER JOINS: These tables might also be relevant: " + ", ".join(possible_tables) if possible_tables else ""}
 
 Table: {table_name}
-ALL Available columns (use ONLY these): 
-{', '.join(all_columns)}
+{"Available columns: " + ", ".join(schema['columns'][:50]) if schema.get('columns') else "Columns not discovered - use file_search to find them"}
 
-CRITICAL: The column names above are the ACTUAL column names from the table. 
-- Do NOT make up column names
-- Do NOT use generic names like 'reply_time_in_minutes' unless it's in the list above
-- Use the EXACT column names as shown
-
-Common patterns:
-- For messaging filter: WHERE LOWER(group_name) = 'messaging' (only if 'group_name' exists above)
-- Last week: WHERE created_at >= DATEADD('week', -1, CURRENT_DATE) AND created_at < CURRENT_DATE
-- This week: WHERE created_at >= DATE_TRUNC('week', CURRENT_DATE)
+QUERY REQUIREMENTS:
+- Use ONLY columns that exist in the table
+- For date filters, use appropriate date functions
+- For text filters, use LOWER() for case-insensitive matching
+- Include meaningful column aliases
+- Sort results appropriately
 
 Return ONLY the SQL query, no explanations."""
-    else:
-        # No schema discovered, rely on file_search
-        instructions = f"""You are a SQL expert. Generate SQL for table: {table_name}
 
-IMPORTANT: I could not discover the table schema. You must:
-1. Use file_search to find the correct table and column names
-2. Look for tables related to: {table_name.split('.')[-1]}
-3. Find the exact column names before writing SQL
-
-Common patterns:
-- For messaging filter: Use appropriate group/channel column with LOWER() function
-- Last week: WHERE [date_column] >= DATEADD('week', -1, CURRENT_DATE) AND [date_column] < CURRENT_DATE
-- Reply time: Look for columns with 'reply', 'response', or 'first' in the name
-
-Return ONLY the SQL query after finding the correct columns."""
-
-    # Build message with discovered columns hint
+    # Build detailed message
     message_parts = [f"Generate SQL for: {user_question}"]
-    message_parts.append(f"\nTable to query: {table_name}")
+    message_parts.append(f"\nPrimary table: {table_name}")
 
     if schema.get('columns'):
         all_columns = schema['columns']
 
         if matching_columns:
-            message_parts.append(f"\nRelevant columns found in table:")
-            for col in matching_columns[:10]:  # Show up to 10 matching columns
+            message_parts.append(f"\nRelevant columns found:")
+            for col in matching_columns[:10]:
                 message_parts.append(f"  - {col}")
 
-        # Provide specific column hints based on query
-        if 'reply time' in user_question.lower():
-            reply_cols = [col for col in all_columns if any(kw in col.lower() for kw in ['reply', 'response', 'first'])]
-            if reply_cols:
-                message_parts.append(f"\nFor reply time, use one of these columns: {', '.join(reply_cols[:5])}")
-
-        if intent['group_filter']:
-            group_cols = [col for col in all_columns if any(kw in col.lower() for kw in ['group', 'channel', 'via'])]
-            if group_cols:
-                message_parts.append(f"\nFor {intent['group_filter']} filter, use: {group_cols[0]}")
+        # Provide specific hints based on intent
+        if intent['metric_type']:
+            metric_cols = [col for col in all_columns if intent['metric_type'].replace(' ', '_') in col.lower()]
+            if metric_cols:
+                message_parts.append(f"\nFor {intent['metric_type']}, consider: {', '.join(metric_cols[:3])}")
 
         if intent['time_filter']:
             time_cols = [col for col in all_columns if any(kw in col.lower() for kw in ['created', 'date', 'time'])]
             if time_cols:
-                message_parts.append(f"\nFor date filter, use: {time_cols[0]}")
-                message_parts.append(f"Time period requested: {intent['time_filter']}")
+                message_parts.append(f"\nFor date filtering, use: {time_cols[0]}")
+                message_parts.append(f"Time period: {intent['time_filter']}")
 
-        # Add sample data if available
+        if intent['needs_ranking']:
+            message_parts.append(f"\nInclude ORDER BY clause for ranking")
+
+        if intent['aggregation_type']:
+            message_parts.append(f"\nUse {intent['aggregation_type'].upper()} aggregation")
+
+        # Add sample data context
         if schema.get('sample_data') and len(schema['sample_data']) > 0:
-            message_parts.append(f"\nSample data from table:")
-            # Show relevant fields from sample
+            message_parts.append(f"\nSample data structure:")
             sample = schema['sample_data'][0]
-            relevant_fields = {}
-            for key, value in sample.items():
-                if any(kw in key.lower() for kw in ['group', 'reply', 'created', 'channel']):
-                    relevant_fields[key] = value
-            if relevant_fields:
-                message_parts.append(json.dumps(relevant_fields, indent=2))
+            relevant_sample = {k: v for k, v in sample.items()
+                               if any(kw in k.lower() for kw in relevant_keywords)}
+            if relevant_sample:
+                message_parts.append(json.dumps(relevant_sample, indent=2)[:500])
     else:
-        # No schema discovered
-        message_parts.append("\nNOTE: Could not discover table schema. Use file_search to find correct column names.")
-        message_parts.append(f"\nLooking for columns related to:")
-        if 'reply time' in user_question.lower():
-            message_parts.append("  - Reply time or first response time")
-        if intent['group_filter']:
-            message_parts.append(f"  - Group/channel filter for '{intent['group_filter']}'")
-        if intent['time_filter']:
-            message_parts.append(f"  - Date/time filter for '{intent['time_filter']}'")
+        message_parts.append("\n⚠️ Could not discover columns. Search for the correct column names.")
 
     message = "\n".join(message_parts)
 
@@ -949,6 +1239,10 @@ Return ONLY the SQL query after finding the correct columns."""
 
     # Extract SQL from response
     sql = extract_sql_from_response(response)
+
+    # Track the table usage for learning
+    if not sql.startswith("--") and not sql.startswith("⚠️"):
+        asyncio.create_task(track_successful_query(user_question, table_name, 1))
 
     print(f"\n🧠 Generated SQL:")
     print(f"{sql}")
@@ -1093,6 +1387,14 @@ async def update_sql_cache_with_results(user_question: str, sql_query: str, resu
         if result_count > 0:
             success_count += 1
 
+            # Also track for learning
+            # Extract table from SQL
+            sql_upper = sql_query.upper()
+            from_idx = sql_upper.find('FROM')
+            if from_idx != -1:
+                table_part = sql_query[from_idx + 4:].strip().split()[0]
+                await track_successful_query(user_question, table_part, result_count)
+
         cache_entry = {
             'sql': sql_query,
             'success_count': success_count,
@@ -1123,7 +1425,8 @@ async def summarize_with_assistant(user_question: str, result_table: str, user_i
         return "⚠️ Could not create conversation thread"
 
     instructions = """Provide a clear business summary. Focus on insights, not technical details.
-Include information about the data source when relevant (e.g., which channels, groups, or systems the data comes from)."""
+Include information about the data source when relevant (e.g., which channels, groups, or systems the data comes from).
+If you can identify which table this data came from based on the columns shown, mention it."""
 
     message = f"""Question: "{user_question}"
 Data:
@@ -1149,6 +1452,59 @@ async def debug_assistant_search(user_question: str, user_id: str, channel_id: s
     return response
 
 
+async def debug_table_selection(question: str) -> str:
+    """Debug why a specific table was selected"""
+    all_scores = {}
+
+    # Get scores for all tables
+    for table_key, table_info in TABLE_REGISTRY.items():
+        question_lower = question.lower()
+        question_words = set(question_lower.split())
+
+        score = 0
+        matched_keywords = []
+
+        # Check keywords
+        for keyword in table_info['keywords']:
+            if keyword in question_lower:
+                score += 4 if len(keyword.split()) > 1 else 2
+                matched_keywords.append(keyword)
+            elif any(word in keyword.split() for word in question_words):
+                score += 1
+                matched_keywords.append(f"{keyword} (partial)")
+
+        # Check metrics
+        matched_metrics = []
+        for metric in table_info.get('common_metrics', []):
+            if metric.replace('_', ' ') in question_lower:
+                score += 3
+                matched_metrics.append(metric)
+
+        all_scores[table_key] = {
+            'table': table_info['table_name'],
+            'score': score,
+            'keywords_matched': matched_keywords,
+            'metrics_matched': matched_metrics,
+            'description': table_info['description']
+        }
+
+    # Sort by score
+    sorted_tables = sorted(all_scores.items(), key=lambda x: x[1]['score'], reverse=True)
+
+    result = f"Table scoring for: '{question}'\n\n"
+    for table_key, info in sorted_tables:
+        result += f"{table_key}: {info['score']} points\n"
+        result += f"  Table: {info['table']}\n"
+        result += f"  Description: {info['description']}\n"
+        if info['keywords_matched']:
+            result += f"  Keywords: {', '.join(info['keywords_matched'][:5])}\n"
+        if info['metrics_matched']:
+            result += f"  Metrics: {', '.join(info['metrics_matched'])}\n"
+        result += "\n"
+
+    return result
+
+
 async def get_cache_stats():
     """Get cache statistics"""
     await ensure_valkey_connection()
@@ -1160,7 +1516,8 @@ async def get_cache_stats():
             "sql": len(_local_cache.get('sql', {})),
             "schema": len(_local_cache.get('schema', {})),
             "thread": len(_local_cache.get('thread', {})),
-            "conversation": len(_local_cache.get('conversation', {}))
+            "conversation": len(_local_cache.get('conversation', {})),
+            "table_learning": len(_local_cache.get('table_learning', {}))
         }
     }
 
@@ -1168,6 +1525,11 @@ async def get_cache_stats():
     schema_cache = _local_cache.get('schema', {})
     if schema_cache:
         stats['cached_schemas'] = list(schema_cache.keys())
+
+    # Add learning stats
+    learning_cache = _local_cache.get('table_learning', {})
+    if learning_cache:
+        stats['learned_patterns'] = len(learning_cache.get(f"{TABLE_LEARNING_PREFIX}:data", {}))
 
     return stats
 
@@ -1183,6 +1545,7 @@ async def get_learning_insights():
     insights.append(f"  - Table Schemas: {stats['caches']['schema']}")
     insights.append(f"  - Threads: {stats['caches']['thread']}")
     insights.append(f"  - Conversations: {stats['caches']['conversation']}")
+    insights.append(f"  - Learned Patterns: {stats['caches']['table_learning']}")
 
     # Show cached schemas with details
     schema_cache = _local_cache.get('schema', {})
@@ -1198,6 +1561,20 @@ async def get_learning_insights():
             else:
                 insights.append(f"  - {table_name}: {col_count} columns")
 
+    # Show learning data
+    learning_data = _local_cache.get('table_learning', {}).get(f"{TABLE_LEARNING_PREFIX}:data", {})
+    if learning_data:
+        insights.append(f"\nLearned Patterns:")
+        # Show top 5 patterns
+        pattern_scores = {}
+        for pattern, tables in learning_data.items():
+            total = sum(tables.values())
+            pattern_scores[pattern] = total
+
+        top_patterns = sorted(pattern_scores.items(), key=lambda x: x[1], reverse=True)[:5]
+        for pattern, score in top_patterns:
+            insights.append(f"  - '{pattern}': {score} uses")
+
     return "\n".join(insights)
 
 
@@ -1210,6 +1587,8 @@ def test_question_classification():
         ("Show me ticket volume by group", "sql_required"),
         ("List all agents with high resolution time", "sql_required"),
         ("Find tickets created yesterday", "sql_required"),
+        ("Compare agent performance across teams", "sql_required"),
+        ("What's the trend in ticket volume this month?", "sql_required"),
 
         # Conversational follow-ups about data
         ("What is the source for this data?", "conversational"),
@@ -1273,6 +1652,39 @@ def test_question_classification():
         actual = classify_question_type(question)
         status = "✅" if actual == expected else "❌"
         print(f"{status} After SQL results: '{question}' → {actual}")
+
+    print("=" * 60)
+
+
+def test_table_identification():
+    """Test table identification accuracy"""
+    test_cases = [
+        ("How many tickets did we get yesterday?", "tickets"),
+        ("Show me agent AHT for this week", "agents"),
+        ("What's the average Klaus score?", "reviews"),
+        ("Reply time for messaging tickets", "tickets"),
+        ("Agent performance in voice queue", "agents"),
+        ("Quality scores by reviewer", "reviews"),
+        ("Tickets by channel and group", "tickets"),
+        ("Average handling time by agent", "agents"),
+        ("Review categories with low scores", "reviews"),
+    ]
+
+    print("\n🧪 Testing Table Identification:")
+    print("=" * 60)
+
+    for question, expected_key in test_cases:
+        table_name, confidence = identify_table_from_question(question)
+        expected_table = TABLE_REGISTRY[expected_key]['table_name']
+
+        if table_name == expected_table:
+            status = "✅"
+        else:
+            status = "❌"
+
+        print(f"{status} '{question[:40]}...' → {table_name.split('.')[-1]} (conf: {confidence:.2f})")
+        if status == "❌":
+            print(f"   Expected: {expected_table.split('.')[-1]}")
 
     print("=" * 60)
 
@@ -1347,7 +1759,16 @@ async def prime_schema_cache():
         'errors': []
     }
 
-    for table_alias, table_name in KNOWN_TABLES.items():
+    # First, discover all tables in the schema
+    print("\n📊 Discovering all tables in ANALYTICS.dbt_production...")
+    all_tables = await discover_all_tables()
+    if all_tables:
+        print(f"✅ Found {len(all_tables)} tables in the schema")
+        results['total_tables'] = len(all_tables)
+
+    # Prime schemas for registered tables
+    for table_alias, table_info in TABLE_REGISTRY.items():
+        table_name = table_info['table_name']
         try:
             print(f"\n📊 Discovering schema for {table_alias}: {table_name}")
             schema = await discover_table_schema(table_name)
@@ -1381,6 +1802,8 @@ async def prime_schema_cache():
 
     print("\n" + "=" * 60)
     print(f"✅ Schema cache priming complete: {results['success']} succeeded, {results['failed']} failed")
+    if results.get('total_tables'):
+        print(f"📊 Total tables in schema: {results['total_tables']}")
     if results['errors']:
         print(f"❌ Errors encountered:")
         for error in results['errors']:
@@ -1461,6 +1884,14 @@ async def clear_conversation_cache():
     """Clear conversation context cache"""
     _local_cache['conversation'].clear()
     print("🧹 Conversation cache cleared")
+
+
+async def clear_table_learning_cache():
+    """Clear table learning cache"""
+    _local_cache['table_learning'].clear()
+    cache_key = f"{TABLE_LEARNING_PREFIX}:data"
+    await safe_valkey_delete(cache_key)
+    print("🧹 Table learning cache cleared")
 
 
 async def check_valkey_health():
