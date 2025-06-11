@@ -54,6 +54,7 @@ slack_client = WebClient(token=SLACK_BOT_TOKEN)
 recent_event_ids = set()
 # Store message timestamps for feedback tracking
 message_to_question_map = {}  # {channel_ts: {question, sql, table}}
+processed_reactions = set()  # Track processed reactions to avoid duplicates
 
 
 async def handle_slack_event(request: Request):
@@ -124,6 +125,14 @@ async def process_reaction_added(event):
         channel = item.get("channel")
         ts = item.get("ts")
 
+        # Create unique key for this reaction
+        reaction_key = f"{channel}_{ts}_{user}"
+
+        # Check if we've already processed this reaction
+        if reaction_key in processed_reactions:
+            print(f"🔄 Already processed reaction from {user}, skipping")
+            return
+
         # Check if this is a bot message we're tracking
         channel_ts = f"{channel}_{ts}"
         if channel_ts not in message_to_question_map:
@@ -135,6 +144,8 @@ async def process_reaction_added(event):
         if reaction in ["white_check_mark", "heavy_check_mark", "thumbsup", "100"]:
             # Positive feedback
             print(f"✅ Received positive feedback from {user}")
+            processed_reactions.add(reaction_key)
+
             await record_feedback(
                 message_data['question'],
                 message_data['sql'],
@@ -142,7 +153,7 @@ async def process_reaction_added(event):
                 'positive'
             )
 
-            # Send acknowledgment
+            # Send acknowledgment only once
             await send_slack_message(
                 channel,
                 f"Thanks for the feedback! I'll remember this worked well for similar questions. ✅",
@@ -152,6 +163,8 @@ async def process_reaction_added(event):
         elif reaction in ["x", "heavy_multiplication_x", "thumbsdown", "disappointed"]:
             # Negative feedback
             print(f"❌ Received negative feedback from {user}")
+            processed_reactions.add(reaction_key)
+
             await record_feedback(
                 message_data['question'],
                 message_data['sql'],
@@ -165,6 +178,11 @@ async def process_reaction_added(event):
                 f"Thanks for the feedback. I'll avoid this approach for similar questions. ❌\n\nCould you tell me what was wrong? This helps me improve.",
                 thread_ts=ts
             )
+
+        # Clean up old processed reactions (older than 24 hours)
+        # This is done periodically to prevent memory growth
+        if len(processed_reactions) > 1000:
+            processed_reactions.clear()
 
     except Exception as e:
         print(f"❌ Error processing reaction: {e}")
@@ -235,7 +253,8 @@ async def process_app_mention(event):
                         slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
                     except:
                         pass
-                await send_slack_message(channel_id, f"❌ Error generating response: {response}")
+                await send_slack_message(channel_id, f"❌ Error generating response: {response}",
+                                         include_feedback_hint=False)
             else:
                 # Send conversational response directly
                 if thinking_msg:
@@ -243,7 +262,7 @@ async def process_app_mention(event):
                         slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
                     except:
                         pass
-                await send_slack_message(channel_id, response)
+                await send_slack_message(channel_id, response, include_feedback_hint=False)
                 # Update context for conversational responses
                 await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
 
@@ -263,7 +282,8 @@ async def process_app_mention(event):
 
         await send_slack_message(
             channel_id,
-            f"❌ **Data processing error:**\n```{str(te)}```\n\nThis usually happens with timestamp data. Try:\n1. `@bot debug clear` to clear caches\n2. Ask your question again"
+            f"❌ **Data processing error:**\n```{str(te)}```\n\nThis usually happens with timestamp data. Try:\n1. `@bot debug clear` to clear caches\n2. Ask your question again",
+            include_feedback_hint=False
         )
     except Exception as e:
         print(f"❌ Error: {str(e)}")
@@ -273,14 +293,15 @@ async def process_app_mention(event):
 
         await send_slack_message(
             channel_id,
-            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question or try `@bot debug analyze YOUR QUESTION` to see what's happening."
+            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question or try `@bot debug analyze YOUR QUESTION` to see what's happening.",
+            include_feedback_hint=False
         )
 
 
 async def handle_debug_command(clean_question: str, channel_id: str, user_id: str):
     """Handle debug commands"""
     if not (USE_ASSISTANT_API and ASSISTANT_ID):
-        await send_slack_message(channel_id, "Debug only works with Assistant API enabled")
+        await send_slack_message(channel_id, "Debug only works with Assistant API enabled", include_feedback_hint=False)
         return
 
     debug_query = clean_question.replace("debug", "").strip()
@@ -492,14 +513,14 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
         else:
             debug_result += "No relevant tables found in vector search"
 
-    await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}")
+    await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}", include_feedback_hint=False)
 
 
 async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str,
                                   original_ts: str = None):
     """Execute SQL query and send results"""
     print("⚡ Executing query...")
-    await send_slack_message(channel_id, "⚡ Executing query...")
+    await send_slack_message(channel_id, "⚡ Executing query...", include_feedback_hint=False)
 
     print(f"\n{'=' * 60}")
     print(f"🧠 SQL Query to execute:")
@@ -512,11 +533,12 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
 
     # Check if SQL generation failed
     if sql.strip().lower().startswith("i don't have enough") or sql.startswith("-- Error:") or sql.startswith("⚠️"):
-        await send_slack_message(channel_id, f"❌ {sql}")
+        await send_slack_message(channel_id, f"❌ {sql}", include_feedback_hint=False)
         return
 
     # Execute the SQL query
     df = run_query(sql)
+    result_count = 0  # Initialize result_count
 
     if isinstance(df, str):
         # Error message from query execution
@@ -584,10 +606,11 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                                           selected_table)
 
     # Send the result message
-    response = await send_slack_message(channel_id, result_message)
+    is_success = result_count > 0
+    response = await send_slack_message(channel_id, result_message, include_feedback_hint=is_success)
 
     # Store message info for feedback tracking if successful
-    if response and result_count > 0 and selected_table:
+    if response and is_success and selected_table:
         msg_ts = response.get("ts")
         if msg_ts:
             channel_ts = f"{channel_id}_{msg_ts}"
@@ -622,15 +645,15 @@ async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: 
     await execute_sql_and_respond(clean_question, sql, channel_id, user_id)
 
 
-async def send_slack_message(channel_id: str, message: str, thread_ts: str = None):
+async def send_slack_message(channel_id: str, message: str, thread_ts: str = None, include_feedback_hint: bool = False):
     """Send message to Slack with error handling"""
     try:
         # Ensure message isn't too long for Slack (4000 char limit)
         if len(message) > 3900:
             message = message[:3900] + "\n\n... (truncated due to length)"
 
-        # Add feedback hint for data responses
-        if not message.startswith("❌") and not message.startswith("🔍") and not thread_ts:
+        # Add feedback hint only when explicitly requested
+        if include_feedback_hint:
             message += "\n\n_React with ✅ if this is helpful, or ❌ if not accurate_"
 
         params = {

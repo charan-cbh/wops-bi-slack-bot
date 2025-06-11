@@ -1480,15 +1480,24 @@ async def summarize_with_assistant(user_question: str, result_table: str, user_i
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = """Provide a clear business summary. Focus on insights, not technical details.
-If you can identify which table this data came from based on the columns shown, mention it.
-Use your knowledge from the dbt manifest to provide context about what the data represents."""
+    instructions = """Provide a concise business summary with key insights. 
+
+IMPORTANT RULES:
+1. Do NOT repeat or rephrase the user's question at the beginning
+2. Start directly with the findings or answer
+3. Keep the response focused and to-the-point (2-3 paragraphs max)
+4. Use bullet points for multiple items or metrics
+5. Include specific numbers and percentages from the data
+6. If data is incomplete or shows many null values, mention this as a key finding
+7. End with actionable insights or implications when relevant
+
+Focus on what the data shows, not technical details."""
 
     message = f"""Question: "{user_question}"
 Data:
 {result_table}
 
-Summarize the key findings."""
+Provide a concise summary of the key findings."""
 
     response = await send_message_and_run(thread_id, message, instructions)
 
