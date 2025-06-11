@@ -37,6 +37,7 @@ SQL_CACHE_TTL = 86400  # 24 hours
 SCHEMA_CACHE_TTL = 604800  # 7 days for table schema cache
 CONVERSATION_CACHE_TTL = 600  # 10 minutes
 TABLE_SELECTION_CACHE_TTL = 2592000  # 30 days for table selection patterns
+FEEDBACK_CACHE_TTL = 7776000  # 90 days for feedback data
 
 # Initialize OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -51,7 +52,8 @@ _local_cache = {
     'schema': {},  # Cache for table schemas
     'conversation': {},
     'table_selection': {},  # Cache for question->table mappings
-    'table_samples': {}  # Cache for table sample data
+    'table_samples': {},  # Cache for table sample data
+    'feedback': {}  # Cache for user feedback
 }
 
 # Cache key prefixes
@@ -62,6 +64,7 @@ SCHEMA_CACHE_PREFIX = f"{CACHE_PREFIX}:schema"
 CONVERSATION_CACHE_PREFIX = f"{CACHE_PREFIX}:conversation"
 TABLE_SELECTION_PREFIX = f"{CACHE_PREFIX}:table_selection"
 TABLE_SAMPLES_PREFIX = f"{CACHE_PREFIX}:table_samples"
+FEEDBACK_PREFIX = f"{CACHE_PREFIX}:feedback"
 
 # Stop words for phrase extraction
 STOP_WORDS = {'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'are',
@@ -76,13 +79,15 @@ INTENT_PATTERNS = {
                     'last year', 'this year', 'last 7 days', 'last 30 days', 'last 90 days'],
     'group_filter': ['messaging', 'voice', 'email', 'chat', 'phone', 'api'],
     'metrics': ['reply time', 'response time', 'resolution time', 'aht', 'average handling',
-                'first reply', 'satisfaction', 'csat', 'occupancy', 'adherence'],
+                'first reply', 'satisfaction', 'csat', 'occupancy', 'adherence', 'kpi',
+                'performance', 'productivity', 'agent performance'],
     'ranking': ['highest', 'lowest', 'top', 'bottom', 'most', 'least', 'best', 'worst',
                 'maximum', 'minimum', 'ranked', 'order by'],
     'comparison': ['compare', 'versus', 'vs', 'between', 'difference', 'correlation',
                    'relationship', 'impact', 'affect', 'influence'],
     'aggregation': ['average', 'avg', 'mean', 'sum', 'total', 'median', 'min', 'max',
-                    'percentile', 'p50', 'p90', 'p95', 'p99']
+                    'percentile', 'p50', 'p90', 'p95', 'p99'],
+    'entities': ['agent', 'team', 'leader', 'supervisor', 'ticket', 'customer', 'contact']
 }
 
 
@@ -279,7 +284,7 @@ def extract_key_phrases(question: str) -> List[str]:
     # Trigrams for complex patterns
     for i in range(len(words) - 2):
         trigram = f"{words[i]} {words[i + 1]} {words[i + 2]}"
-        if any(pattern in trigram for pattern in ['average handling time', 'first reply time']):
+        if any(pattern in trigram for pattern in ['average handling time', 'first reply time', 'agent performance']):
             phrases.append(trigram)
 
     return list(set(phrases))  # Remove duplicates
@@ -309,12 +314,18 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
         df = run_query(sample_sql)
 
         if isinstance(df, str):
+            print(f"❌ Sample query failed: {df}")
             return {'error': df}
 
         # Handle the case where run_query returns a list (raw results)
         if isinstance(df, list):
             print(f"⚠️ Got raw list result, expected DataFrame")
             return {'error': 'Unexpected result format from query'}
+
+        # Ensure we have a DataFrame
+        if not hasattr(df, 'columns'):
+            print(f"⚠️ Result doesn't have columns attribute")
+            return {'error': 'Invalid result format'}
 
         # Get column info
         columns = list(df.columns)
@@ -353,6 +364,7 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
 
     except Exception as e:
         print(f"❌ Error sampling table {table_name}: {str(e)}")
+        traceback.print_exc()
         return {'error': str(e)}
 
 
@@ -361,33 +373,38 @@ async def find_relevant_tables_from_vector_store(question: str, user_id: str, ch
     """Use assistant's file_search to find relevant tables from dbt manifest"""
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
+        print("❌ Could not create thread for vector search")
         return []
 
-    instructions = """You are a data expert. Based on the dbt manifest in your vector store, identify the most relevant tables for answering this question.
+    instructions = """You are a data expert analyzing the dbt manifest to find relevant tables.
 
-IMPORTANT: 
-1. Search through the table DESCRIPTIONS and DOCUMENTATION in the dbt manifest
-2. Look for tables whose description mentions the concepts in the question
-3. Consider column descriptions and table purposes
-4. For "contact driver" questions, look for tables with contact reasons/drivers
-5. For "handling time" or "AHT", look for agent or queue metrics tables
-6. Consider both fact and dimension tables
+CRITICAL RULES:
+1. Search through table DESCRIPTIONS and COLUMN DESCRIPTIONS in the dbt manifest
+2. Look for tables whose description or columns match the concepts in the question
+3. For KPIs and performance metrics, look for tables with agent performance data
+4. Consider column names and their descriptions carefully
+5. Return ONLY tables that actually contain the requested metrics
 
 Return ONLY a JSON array of the full table names (including schema).
 Example: ["ANALYTICS.dbt_production.fct_tickets", "ANALYTICS.dbt_production.dim_agents"]
 
 Focus on finding tables that:
-- Have descriptions mentioning the metrics/entities in the question
-- Contain the specific columns needed (based on their documentation)
+- Have columns matching the metrics in the question (e.g., "handling time" → look for AHT columns)
+- Contain the specific entities mentioned (agents, tickets, etc.)
 - Are at the right granularity for the analysis
 
 Return ONLY the JSON array, nothing else."""
 
-    message = f"Search the dbt manifest for tables relevant to this question: {question}\n\nLook especially at table descriptions and what each table contains."
+    message = f"""Find tables for this question: {question}
 
-    response = await send_message_and_run(thread_id, message, instructions)
+Key concepts to search for:
+- Metrics: {', '.join([m for m in INTENT_PATTERNS['metrics'] if m in question.lower()])}
+- Entities: {', '.join([e for e in INTENT_PATTERNS['entities'] if e in question.lower()])}
+- Look especially at column descriptions for relevant metrics"""
 
     try:
+        response = await send_message_and_run(thread_id, message, instructions)
+
         # Extract JSON array from response
         if '[' in response and ']' in response:
             json_start = response.find('[')
@@ -398,12 +415,22 @@ Return ONLY the JSON array, nothing else."""
             print(f"🔍 Vector store found {len(tables)} relevant tables based on descriptions")
             for i, table in enumerate(tables[:top_k], 1):
                 print(f"   {i}. {table}")
-            return tables[:top_k]
-    except Exception as e:
-        print(f"⚠️ Error parsing table suggestions: {e}")
-        print(f"⚠️ Raw response: {response}")
 
-    return []
+            # Return the tables if we found any
+            if tables:
+                return tables[:top_k]
+            else:
+                print("⚠️ Vector search returned empty list")
+                return []
+        else:
+            print(f"⚠️ Could not extract JSON from vector search response")
+            print(f"⚠️ Raw response: {response[:200]}...")
+            return []
+
+    except Exception as e:
+        print(f"❌ Error in vector search: {e}")
+        traceback.print_exc()
+        return []
 
 
 async def select_best_table_using_samples(question: str, candidate_tables: List[str], user_id: str, channel_id: str) -> \
@@ -416,81 +443,110 @@ Tuple[str, str]:
 
     # Sample data from each candidate table
     table_samples = {}
+    sample_errors = []
+
     for table in candidate_tables:
         sample = await sample_table_data(table, sample_size=5)
         if not sample.get('error'):
             table_samples[table] = sample
             print(f"✅ Successfully sampled {table}")
         else:
-            print(f"⚠️ Could not sample {table}: {sample.get('error')}")
+            error_msg = f"Could not sample {table}: {sample.get('error')}"
+            print(f"⚠️ {error_msg}")
+            sample_errors.append(error_msg)
 
     if not table_samples:
         print("❌ Could not sample any tables")
-        # Fall back to first candidate if we can't sample any
-        return candidate_tables[0] if candidate_tables else "", "Could not sample tables for analysis"
+        # Return first candidate with explanation
+        if candidate_tables:
+            return candidate_tables[0], f"Could not sample tables. Errors: {'; '.join(sample_errors)}"
+        return "", "No tables could be sampled"
 
     # Use assistant to analyze samples and select best table
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return list(table_samples.keys())[0], "Could not create analysis thread"
 
-    instructions = """You are a data expert. Analyze the sample data from each table and determine which table is BEST suited to answer the user's question.
+    instructions = """You are a data expert analyzing table samples to select the BEST table for answering the user's question.
 
-Consider:
-1. Which table actually contains the data needed to answer the question
-2. Look at column names and sample values carefully
-3. For "contact driver" - look for columns about contact reasons, drivers, or categories
-4. For "handling time" or "AHT" - look for time-based metrics in seconds/minutes
-5. Check if the metrics mentioned in the question exist in the table
-6. Verify the table has the right granularity (e.g., agent-level vs ticket-level vs queue-level)
+CRITICAL ANALYSIS STEPS:
+1. Look at the actual column names in each table
+2. Check if the table contains the specific metrics mentioned in the question
+3. For "KPIs that determine agent performance" - look for tables with performance metrics like AHT, CSAT, QA scores, FCR
+4. Verify the table has the right granularity (agent-level for agent questions, ticket-level for ticket questions)
+5. Consider the sample data values to understand what each column contains
+
+IMPORTANT:
+- "handling time" or "AHT" should have columns with time values (usually in seconds or minutes)
+- "agent performance" should have columns with scores, percentages, or time metrics
+- Look for columns that directly answer the question, not just related concepts
 
 Return your response in this exact format:
 SELECTED_TABLE: <full table name>
-REASON: <brief explanation of why this table is best>
+REASON: <specific explanation mentioning which columns contain the needed metrics>
 
-Be decisive - pick the SINGLE best table."""
+Be specific about WHY this table is best - mention the actual column names that contain the data."""
 
     # Build message with table samples
-    message_parts = [f"User Question: {question}\n\nTable Samples:"]
+    message_parts = [f"User Question: {question}\n\nAnalyze these table samples:"]
 
     for table, sample in table_samples.items():
-        message_parts.append(f"\n\n========================================")
-        message_parts.append(f"Table: {table}")
-        message_parts.append(f"Columns ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:20])}")
+        message_parts.append(f"\n\n{'=' * 60}")
+        message_parts.append(f"TABLE: {table}")
+        message_parts.append(f"COLUMNS ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:30])}")
 
-        if len(sample.get('columns', [])) > 20:
-            message_parts.append(f"... and {len(sample.get('columns', [])) - 20} more columns")
+        if len(sample.get('columns', [])) > 30:
+            message_parts.append(f"... and {len(sample.get('columns', [])) - 30} more columns")
 
-        if sample.get('sample_data'):
+        # Show column types for key columns
+        if sample.get('column_types'):
+            key_cols = [col for col in sample['columns'][:20] if any(
+                kw in col.lower() for kw in
+                ['time', 'aht', 'score', 'rate', 'percentage', 'kpi', 'performance', 'csat', 'fcr']
+            )]
+            if key_cols:
+                message_parts.append("\nKey Column Types:")
+                for col in key_cols[:10]:
+                    message_parts.append(f"  - {col}: {sample['column_types'].get(col, 'unknown')}")
+
+        if sample.get('sample_data') and len(sample['sample_data']) > 0:
             message_parts.append("\nSample Data (showing relevant columns):")
             # Show one sample row with key columns
             sample_row = sample['sample_data'][0]
 
-            # Filter to show only non-null, relevant columns
-            relevant_keywords = ['contact', 'driver', 'reason', 'handling', 'time', 'aht', 'duration', 'category',
-                                 'type']
-            relevant_cols = {}
+            # Filter to show only relevant columns based on question
+            relevant_keywords = ['kpi', 'performance', 'agent', 'aht', 'handling', 'time', 'score',
+                                 'csat', 'satisfaction', 'fcr', 'resolution', 'rate', 'percentage',
+                                 'productivity', 'quality', 'metric']
 
+            # Add keywords from the question
+            question_words = question.lower().split()
+            relevant_keywords.extend([w for w in question_words if len(w) > 3])
+
+            relevant_cols = {}
             for col, val in sample_row.items():
                 if val is not None and str(val).strip() != '':
                     # Include if column name contains relevant keywords
                     if any(keyword in col.lower() for keyword in relevant_keywords):
                         relevant_cols[col] = val
 
-            # If no relevant columns found, show first 10 non-null columns
+            # If no relevant columns found, show first 15 non-null columns
             if not relevant_cols:
                 relevant_cols = {k: v for k, v in sample_row.items()
                                  if v is not None and str(v).strip() != ''}
-                relevant_cols = dict(list(relevant_cols.items())[:10])
+                relevant_cols = dict(list(relevant_cols.items())[:15])
 
             if relevant_cols:
                 message_parts.append("```")
-                for col, val in relevant_cols.items():
-                    message_parts.append(f"{col}: {val}")
+                for col, val in list(relevant_cols.items())[:20]:
+                    # Truncate long values
+                    val_str = str(val)[:100] + "..." if len(str(val)) > 100 else str(val)
+                    message_parts.append(f"{col}: {val_str}")
                 message_parts.append("```")
 
     message = "\n".join(message_parts)
 
+    print("📤 Sending table analysis request to assistant...")
     response = await send_message_and_run(thread_id, message, instructions)
 
     # Parse response
@@ -498,9 +554,9 @@ Be decisive - pick the SINGLE best table."""
     reason = ""
 
     for line in response.split('\n'):
-        if line.startswith('SELECTED_TABLE:'):
+        if line.strip().startswith('SELECTED_TABLE:'):
             selected_table = line.replace('SELECTED_TABLE:', '').strip()
-        elif line.startswith('REASON:'):
+        elif line.strip().startswith('REASON:'):
             reason = line.replace('REASON:', '').strip()
 
     if not selected_table and table_samples:
@@ -512,6 +568,42 @@ Be decisive - pick the SINGLE best table."""
     print(f"📝 Reason: {reason}")
 
     return selected_table, reason
+
+
+async def get_table_descriptions_from_manifest(table_names: List[str], user_id: str, channel_id: str) -> Dict[str, str]:
+    """Get table descriptions from dbt manifest for given tables"""
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return {}
+
+    instructions = """Search the dbt manifest for the descriptions of these specific tables.
+
+Return a JSON object with table names as keys and their descriptions as values.
+Include information about:
+1. Table purpose and description
+2. What kind of data it contains
+3. Key metrics available in the table
+
+Example: {"table1": "This table contains agent performance metrics including AHT, CSAT scores...", "table2": "This table stores..."}
+
+Return ONLY the JSON object."""
+
+    message = f"Find descriptions for these tables from the dbt manifest:\n{json.dumps(table_names, indent=2)}"
+
+    response = await send_message_and_run(thread_id, message, instructions)
+
+    try:
+        # Extract JSON from response
+        if '{' in response and '}' in response:
+            json_start = response.find('{')
+            json_end = response.rfind('}') + 1
+            json_str = response[json_start:json_end]
+            descriptions = json.loads(json_str)
+            return descriptions
+    except Exception as e:
+        print(f"⚠️ Error parsing table descriptions: {e}")
+
+    return {}
 
 
 async def cache_table_selection(question: str, selected_table: str, reason: str, success: bool = True):
@@ -560,6 +652,14 @@ async def get_cached_table_suggestion(question: str) -> Optional[str]:
     cached_selection = await safe_valkey_get(selection_key)
 
     if cached_selection and cached_selection.get('success'):
+        # Check if there's negative feedback for this selection
+        feedback_key = f"{FEEDBACK_PREFIX}:{get_question_hash(question)}"
+        feedback = await safe_valkey_get(feedback_key, {})
+
+        if feedback.get('negative_count', 0) > feedback.get('positive_count', 0):
+            print(f"⚠️ Skipping cached suggestion due to negative feedback")
+            return None
+
         print(f"💰 Found exact cached table selection: {cached_selection['selected_table']}")
         return cached_selection['selected_table']
 
@@ -590,6 +690,39 @@ async def get_cached_table_suggestion(question: str) -> Optional[str]:
     return None
 
 
+async def record_feedback(question: str, sql: str, table: str, feedback_type: str):
+    """Record user feedback (positive or negative) for a query"""
+    feedback_key = f"{FEEDBACK_PREFIX}:{get_question_hash(question)}"
+    feedback_data = await safe_valkey_get(feedback_key, {
+        'question': question,
+        'sql': sql,
+        'table': table,
+        'positive_count': 0,
+        'negative_count': 0,
+        'last_feedback': None
+    })
+
+    if feedback_type == 'positive':
+        feedback_data['positive_count'] += 1
+        # Boost the table selection cache for positive feedback
+        await cache_table_selection(question, table, "User confirmed this was correct", success=True)
+    else:
+        feedback_data['negative_count'] += 1
+        # Mark the table selection as unsuccessful
+        await cache_table_selection(question, table, "User indicated this was incorrect", success=False)
+
+    feedback_data['last_feedback'] = {
+        'type': feedback_type,
+        'timestamp': time.time()
+    }
+
+    await safe_valkey_set(feedback_key, feedback_data, ex=FEEDBACK_CACHE_TTL)
+
+    print(
+        f"{'✅' if feedback_type == 'positive' else '❌'} Recorded {feedback_type} feedback for question: {question[:50]}...")
+    print(f"   Stats: {feedback_data['positive_count']} positive, {feedback_data['negative_count']} negative")
+
+
 def classify_question_type(question: str) -> str:
     """Simple classification - is this a data query or conversation?"""
     question_lower = question.lower()
@@ -614,7 +747,8 @@ def classify_question_type(question: str) -> str:
         'reply time', 'response time', 'resolution',
         'which ticket type', 'what ticket type', 'driving',
         'volume', 'trend', 'compare', 'by group', 'by channel',
-        'contact driver', 'handling time', 'aht'
+        'contact driver', 'handling time', 'aht', 'kpi', 'kpis',
+        'determine', 'metrics', 'performance metrics'
     ]
 
     # Check for meta/help indicators
@@ -662,7 +796,8 @@ def extract_intent(question: str) -> dict:
         'needs_ranking': any(r in question_lower for r in INTENT_PATTERNS['ranking']),
         'needs_comparison': any(c in question_lower for c in INTENT_PATTERNS['comparison']),
         'aggregation_type': next((a for a in INTENT_PATTERNS['aggregation'] if a in question_lower), None),
-        'possible_join': any(j in question_lower for j in ['and their', 'with their', 'between', 'across'])
+        'possible_join': any(j in question_lower for j in ['and their', 'with their', 'between', 'across']),
+        'entities': [e for e in INTENT_PATTERNS['entities'] if e in question_lower]
     }
     return intent
 
@@ -793,7 +928,7 @@ async def get_conversation_context(user_id: str, channel_id: str) -> dict:
 
 
 async def update_conversation_context(user_id: str, channel_id: str, question: str, response: str,
-                                      response_type: str = None):
+                                      response_type: str = None, table_used: str = None):
     """Update conversation context for follow-up questions"""
     cache_key = f"{user_id}_{channel_id}"
     redis_key = f"{CONVERSATION_CACHE_PREFIX}:{cache_key}"
@@ -802,6 +937,7 @@ async def update_conversation_context(user_id: str, channel_id: str, question: s
         'last_question': question,
         'last_response': response,
         'last_response_type': response_type,
+        'last_table_used': table_used,
         'timestamp': time.time()
     }
 
@@ -989,6 +1125,8 @@ Use your knowledge from the dbt manifest to answer questions about available dat
             message_parts.append(f"\nPrevious question: {context['last_question']}")
         if context.get('last_response_type') == 'sql_results':
             message_parts.append("\nNote: The user just received SQL query results and is asking a follow-up question.")
+        if context.get('last_table_used'):
+            message_parts.append(f"Table used in previous query: {context['last_table_used']}")
 
     message = "\n".join(message_parts)
 
@@ -997,12 +1135,17 @@ Use your knowledge from the dbt manifest to answer questions about available dat
     return response
 
 
-async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> str:
-    """Generate SQL using intelligent table discovery and sampling"""
+async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
+    """
+    Generate SQL using intelligent table discovery and sampling
+    Returns: (sql_query, selected_table)
+    """
     print(f"\n🤖 Starting intelligent SQL generation for: {user_question}")
 
     # Store the fact that we're generating SQL for context
     await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
+
+    selected_table = None
 
     try:
         # Step 1: Check cache for similar questions
@@ -1019,7 +1162,9 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
 
             if not candidate_tables:
                 print("⚠️ No candidate tables found from vector search")
-                return "-- Error: Could not find relevant tables for this question"
+                return "-- Error: Could not find relevant tables for this question. Please ensure your question mentions specific metrics or entities.", None
+
+            print(f"📊 Found {len(candidate_tables)} candidate tables")
 
             # Step 3: Sample data from candidate tables and select best one
             selected_table, selection_reason = await select_best_table_using_samples(
@@ -1027,7 +1172,7 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
             )
 
             if not selected_table:
-                return "-- Error: Could not determine appropriate table"
+                return "-- Error: Could not determine appropriate table", None
 
             # Cache this selection for future use
             await cache_table_selection(user_question, selected_table, selection_reason)
@@ -1043,15 +1188,20 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
                 'columns': [],
                 'error': schema.get('error')
             }
+
+        # Step 5: Get table description from manifest
+        table_descriptions = await get_table_descriptions_from_manifest([selected_table], user_id, channel_id)
+        table_description = table_descriptions.get(selected_table, "No description available")
+
     except Exception as e:
         print(f"⚠️ Error during intelligent table selection: {e}")
         traceback.print_exc()
-        return f"-- Error: {str(e)}"
+        return f"-- Error: {str(e)}", None
 
-    # Step 5: Generate SQL with assistant
+    # Step 6: Generate SQL with assistant
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
-        return "-- Error: Could not create conversation thread"
+        return "-- Error: Could not create conversation thread", selected_table
 
     # Extract intent for better SQL generation
     intent = extract_intent(user_question)
@@ -1061,10 +1211,11 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     instructions = f"""You are a SQL expert. Generate SQL for the following question using the selected table.
 
 SELECTED TABLE: {selected_table}
+TABLE DESCRIPTION: {table_description}
 SELECTION REASON: {selection_reason}
 
 Table Schema:
-- Columns: {', '.join(schema.get('columns', [])[:30]) if schema.get('columns') else 'Use file_search to find columns'}
+- Columns: {', '.join(schema.get('columns', [])[:50]) if schema.get('columns') else 'Use file_search to find columns'}
 {"- Total columns: " + str(len(schema.get('columns', []))) if schema.get('columns') else ""}
 
 CRITICAL RULES:
@@ -1075,32 +1226,54 @@ CRITICAL RULES:
 5. Include meaningful column aliases
 6. Sort results appropriately
 7. Limit results to 100 rows unless specifically asked for more
+8. For "KPIs that determine agent performance", include multiple relevant metrics (AHT, CSAT, FCR, etc.)
+9. Use appropriate aggregations when needed (AVG, SUM, COUNT, etc.)
 
 Return ONLY the SQL query, no explanations."""
 
     # Build detailed message
     message_parts = [f"Generate SQL for: {user_question}"]
     message_parts.append(f"\nTable: {selected_table}")
+    message_parts.append(f"Table Purpose: {table_description[:200]}..." if len(
+        table_description) > 200 else f"Table Purpose: {table_description}")
 
     if schema.get('columns'):
+        all_columns = schema['columns']
+
+        # Find columns that might be relevant
+        relevant_keywords = []
+
+        # Add keywords based on the question
+        if 'kpi' in user_question.lower() or 'performance' in user_question.lower():
+            relevant_keywords.extend(['kpi', 'performance', 'score', 'rate', 'percentage', 'aht',
+                                      'csat', 'fcr', 'quality', 'productivity', 'metric'])
+        if 'agent' in user_question.lower():
+            relevant_keywords.extend(['agent', 'employee', 'staff', 'rep'])
+        if 'contact' in user_question.lower() or 'driver' in user_question.lower():
+            relevant_keywords.extend(['contact', 'driver', 'reason', 'category', 'type'])
+        if 'handling' in user_question.lower() or 'aht' in user_question.lower():
+            relevant_keywords.extend(['handling', 'time', 'aht', 'duration', 'seconds', 'minutes'])
+
+        relevant_cols = [col for col in all_columns if any(kw in col.lower() for kw in relevant_keywords)]
+
+        if relevant_cols:
+            message_parts.append(f"\nPotentially relevant columns: {', '.join(relevant_cols[:20])}")
+
         # Add intent-based hints
         if intent['time_filter']:
-            date_cols = [col for col in schema['columns'] if
-                         any(d in col.lower() for d in ['date', 'created', 'updated', 'time'])]
+            date_cols = [col for col in all_columns if
+                         any(d in col.lower() for d in ['date', 'created', 'updated', 'time', 'timestamp'])]
             if date_cols:
                 message_parts.append(f"\nFor time filter '{intent['time_filter']}', use column: {date_cols[0]}")
-
-        if intent['metric_type']:
-            metric_cols = [col for col in schema['columns'] if intent['metric_type'].replace(' ', '_') in col.lower()]
-            if metric_cols:
-                message_parts.append(
-                    f"\nFor metric '{intent['metric_type']}', found columns: {', '.join(metric_cols[:3])}")
 
         if intent['needs_ranking']:
             message_parts.append("\nInclude ORDER BY clause for ranking")
 
         if intent['aggregation_type']:
             message_parts.append(f"\nUse {intent['aggregation_type'].upper()} aggregation function")
+
+        if intent['entities']:
+            message_parts.append(f"\nFocus on these entities: {', '.join(intent['entities'])}")
 
     message = "\n".join(message_parts)
 
@@ -1114,7 +1287,7 @@ Return ONLY the SQL query, no explanations."""
     print(f"{sql}")
     print(f"{'=' * 60}\n")
 
-    return sql
+    return sql, selected_table
 
 
 def extract_sql_from_response(response: str) -> str:
@@ -1208,10 +1381,17 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
                 cached_sql = await safe_valkey_get(cache_key)
 
                 if cached_sql and cached_sql.get('success_count', 0) > 0:
-                    print(f"💰 Using cached SQL (success_count: {cached_sql['success_count']})")
-                    sql = cached_sql['sql']
-                    print(f"📝 Cached SQL:\n{sql}")
-                    return sql, 'sql'
+                    # Check feedback before using cache
+                    feedback_key = f"{FEEDBACK_PREFIX}:{question_hash}"
+                    feedback = await safe_valkey_get(feedback_key, {})
+
+                    if feedback.get('negative_count', 0) > feedback.get('positive_count', 0):
+                        print(f"⚠️ Skipping cached SQL due to negative feedback")
+                    else:
+                        print(f"💰 Using cached SQL (success_count: {cached_sql['success_count']})")
+                        sql = cached_sql['sql']
+                        print(f"📝 Cached SQL:\n{sql}")
+                        return sql, 'sql'
                 else:
                     print(f"🔄 Generating new SQL (no successful cache found)")
             except Exception as cache_error:
@@ -1219,7 +1399,12 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
                 print(f"🔄 Proceeding to generate new SQL")
 
             # Generate new SQL using intelligent table discovery
-            sql_query = await generate_sql_intelligently(user_question, user_id, channel_id)
+            sql_query, selected_table = await generate_sql_intelligently(user_question, user_id, channel_id)
+
+            # Store the selected table in context for feedback
+            if selected_table:
+                await update_conversation_context(user_id, channel_id, user_question, sql_query, 'sql', selected_table)
+
             return sql_query, 'sql'
 
         else:
@@ -1269,7 +1454,8 @@ async def update_sql_cache_with_results(user_question: str, sql_query: str, resu
             'sql': sql_query,
             'success_count': success_count,
             'last_result_count': result_count,
-            'last_used': time.time()
+            'last_used': time.time(),
+            'selected_table': selected_table
         }
 
         success = await safe_valkey_set(cache_key, cache_entry, ex=SQL_CACHE_TTL)
@@ -1307,43 +1493,6 @@ Summarize the key findings."""
     response = await send_message_and_run(thread_id, message, instructions)
 
     return response
-
-
-async def get_table_descriptions_from_manifest(table_names: List[str], user_id: str, channel_id: str) -> Dict[str, str]:
-    """Get table descriptions from dbt manifest for given tables"""
-    thread_id = await get_or_create_thread(user_id, channel_id)
-    if not thread_id:
-        return {}
-
-    instructions = """Search the dbt manifest for the descriptions of these specific tables.
-
-Return a JSON object with table names as keys and their descriptions as values.
-Example: {"table1": "This table contains...", "table2": "This table stores..."}
-
-Look for:
-1. Table descriptions
-2. Table documentation
-3. Purpose of the table
-4. What metrics/data it contains
-
-Return ONLY the JSON object."""
-
-    message = f"Find descriptions for these tables from the dbt manifest:\n{json.dumps(table_names, indent=2)}"
-
-    response = await send_message_and_run(thread_id, message, instructions)
-
-    try:
-        # Extract JSON from response
-        if '{' in response and '}' in response:
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-            json_str = response[json_start:json_end]
-            descriptions = json.loads(json_str)
-            return descriptions
-    except Exception as e:
-        print(f"⚠️ Error parsing table descriptions: {e}")
-
-    return {}
 
 
 async def debug_table_selection(question: str, user_id: str = "debug", channel_id: str = "debug") -> str:
@@ -1396,6 +1545,14 @@ async def debug_table_selection(question: str, user_id: str = "debug", channel_i
     if not found_any:
         result += "  No phrase matches found in cache\n"
 
+    # Check feedback
+    feedback_key = f"{FEEDBACK_PREFIX}:{get_question_hash(question)}"
+    feedback = await safe_valkey_get(feedback_key, {})
+    if feedback:
+        result += f"\n📝 Feedback History:\n"
+        result += f"  ✅ Positive: {feedback.get('positive_count', 0)}\n"
+        result += f"  ❌ Negative: {feedback.get('negative_count', 0)}\n"
+
     return result
 
 
@@ -1412,7 +1569,8 @@ async def get_cache_stats():
             "thread": len(_local_cache.get('thread', {})),
             "conversation": len(_local_cache.get('conversation', {})),
             "table_selection": len(_local_cache.get('table_selection', {})),
-            "table_samples": len(_local_cache.get('table_samples', {}))
+            "table_samples": len(_local_cache.get('table_samples', {})),
+            "feedback": len(_local_cache.get('feedback', {}))
         }
     }
 
@@ -1435,6 +1593,7 @@ async def get_learning_insights():
     insights.append(f"  - Table Schemas: {stats['caches']['schema']}")
     insights.append(f"  - Table Selections: {stats['caches']['table_selection']}")
     insights.append(f"  - Table Samples: {stats['caches']['table_samples']}")
+    insights.append(f"  - User Feedback: {stats['caches']['feedback']}")
     insights.append(f"  - Threads: {stats['caches']['thread']}")
     insights.append(f"  - Conversations: {stats['caches']['conversation']}")
 
@@ -1459,6 +1618,22 @@ async def get_learning_insights():
     else:
         insights.append("  No patterns learned yet")
 
+    # Show feedback summary
+    feedback_stats = {'positive': 0, 'negative': 0}
+    for key in _local_cache.get('feedback', {}).keys():
+        feedback_data = await safe_valkey_get(key, {})
+        if feedback_data:
+            feedback_stats['positive'] += feedback_data.get('positive_count', 0)
+            feedback_stats['negative'] += feedback_data.get('negative_count', 0)
+
+    if feedback_stats['positive'] or feedback_stats['negative']:
+        insights.append(f"\n📝 User Feedback Summary:")
+        insights.append(f"  ✅ Positive: {feedback_stats['positive']}")
+        insights.append(f"  ❌ Negative: {feedback_stats['negative']}")
+        if feedback_stats['positive'] + feedback_stats['negative'] > 0:
+            success_rate = feedback_stats['positive'] / (feedback_stats['positive'] + feedback_stats['negative']) * 100
+            insights.append(f"  📊 Success Rate: {success_rate:.1f}%")
+
     return "\n".join(insights)
 
 
@@ -1468,6 +1643,7 @@ def test_question_classification():
         # SQL queries
         ("How many messaging tickets had a reply time over 15 minutes?", "sql_required"),
         ("Which ticket type is driving Chat AHT for agent Jesse?", "sql_required"),
+        ("What are the KPIs that determine agent performance?", "sql_required"),
         ("Show me ticket volume by group", "sql_required"),
         ("What is the contact driver with the highest Handling Time?", "sql_required"),
         ("List all agents with high resolution time", "sql_required"),
@@ -1532,7 +1708,7 @@ async def test_conversation_flow():
     # Test 1: SQL Query
     print("\n1️⃣ Testing SQL query...")
     response1, type1 = await handle_question(
-        "What is the contact driver with the highest Handling Time?",
+        "What are the KPIs that determine agent performance?",
         test_user, test_channel
     )
     print(f"   Response type: {type1}")
@@ -1542,8 +1718,8 @@ async def test_conversation_flow():
     # Simulate that SQL was executed and results were shown
     await update_conversation_context(
         test_user, test_channel,
-        "What is the contact driver with the highest Handling Time?",
-        "Results showed: Contact driver X with 45 minutes average handling time",
+        "What are the KPIs that determine agent performance?",
+        "Results showed: AHT, CSAT, FCR metrics",
         'sql_results'
     )
 
@@ -1559,7 +1735,7 @@ async def test_conversation_flow():
     # Test 3: Another follow-up
     print("\n3️⃣ Testing another follow-up...")
     response3, type3 = await handle_question(
-        "Which table contains this handling time data?",
+        "Which table contains this performance data?",
         test_user, test_channel
     )
     print(f"   Response type: {type3}")
@@ -1659,6 +1835,12 @@ async def clear_table_selection_cache():
     for key in list(_local_cache.get('table_selection', {}).keys()):
         await safe_valkey_delete(key)
     print("🧹 Table selection cache cleared")
+
+
+async def clear_feedback_cache():
+    """Clear feedback cache"""
+    _local_cache['feedback'].clear()
+    print("🧹 Feedback cache cleared")
 
 
 async def check_valkey_health():

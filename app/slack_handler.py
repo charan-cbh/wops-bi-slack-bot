@@ -26,6 +26,7 @@ from app.llm_prompter import (
     clear_thread_cache,
     clear_conversation_cache,
     clear_table_selection_cache,
+    clear_feedback_cache,
     rediscover_table_schema,
     update_conversation_context,
     get_conversation_context,
@@ -35,6 +36,8 @@ from app.llm_prompter import (
     find_relevant_tables_from_vector_store,
     select_best_table_using_samples,
     cache_table_selection,
+    get_table_descriptions_from_manifest,
+    record_feedback,
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -49,6 +52,8 @@ ASSISTANT_ID = os.getenv("ASSISTANT_ID", "")
 slack_client = WebClient(token=SLACK_BOT_TOKEN)
 
 recent_event_ids = set()
+# Store message timestamps for feedback tracking
+message_to_question_map = {}  # {channel_ts: {question, sql, table}}
 
 
 async def handle_slack_event(request: Request):
@@ -86,6 +91,7 @@ async def handle_slack_event(request: Request):
     event_type = event.get("type")
     event_id = payload.get("event_id")
 
+    # Handle app mentions
     if event_type == "app_mention":
         if event_id in recent_event_ids:
             print(f"🔁 Skipping duplicate event: {event_id}")
@@ -93,9 +99,84 @@ async def handle_slack_event(request: Request):
         recent_event_ids.add(event_id)
 
         # Process the mention asynchronously
-        await process_app_mention(event)
+        asyncio.create_task(process_app_mention(event))
+
+    # Handle reactions (emoji feedback)
+    elif event_type == "reaction_added":
+        asyncio.create_task(process_reaction_added(event))
+
+    elif event_type == "reaction_removed":
+        asyncio.create_task(process_reaction_removed(event))
 
     return {"message": "Slack event received"}
+
+
+async def process_reaction_added(event):
+    """Process reaction added event for feedback"""
+    try:
+        reaction = event.get("reaction", "")
+        user = event.get("user", "")
+        item = event.get("item", {})
+
+        if item.get("type") != "message":
+            return
+
+        channel = item.get("channel")
+        ts = item.get("ts")
+
+        # Check if this is a bot message we're tracking
+        channel_ts = f"{channel}_{ts}"
+        if channel_ts not in message_to_question_map:
+            return
+
+        message_data = message_to_question_map[channel_ts]
+
+        # Process feedback based on emoji
+        if reaction in ["white_check_mark", "heavy_check_mark", "thumbsup", "100"]:
+            # Positive feedback
+            print(f"✅ Received positive feedback from {user}")
+            await record_feedback(
+                message_data['question'],
+                message_data['sql'],
+                message_data['table'],
+                'positive'
+            )
+
+            # Send acknowledgment
+            await send_slack_message(
+                channel,
+                f"Thanks for the feedback! I'll remember this worked well for similar questions. ✅",
+                thread_ts=ts
+            )
+
+        elif reaction in ["x", "heavy_multiplication_x", "thumbsdown", "disappointed"]:
+            # Negative feedback
+            print(f"❌ Received negative feedback from {user}")
+            await record_feedback(
+                message_data['question'],
+                message_data['sql'],
+                message_data['table'],
+                'negative'
+            )
+
+            # Send acknowledgment and ask for clarification
+            await send_slack_message(
+                channel,
+                f"Thanks for the feedback. I'll avoid this approach for similar questions. ❌\n\nCould you tell me what was wrong? This helps me improve.",
+                thread_ts=ts
+            )
+
+    except Exception as e:
+        print(f"❌ Error processing reaction: {e}")
+        traceback.print_exc()
+
+
+async def process_reaction_removed(event):
+    """Process reaction removed event - could implement feedback reversal if needed"""
+    # For now, we'll just log it
+    reaction = event.get("reaction", "")
+    user = event.get("user", "")
+    print(f"🔄 User {user} removed reaction {reaction}")
 
 
 async def process_app_mention(event):
@@ -103,6 +184,7 @@ async def process_app_mention(event):
     user_question = event.get("text", "")
     channel_id = event.get("channel")
     user_id = event.get("user")
+    ts = event.get("ts")  # Message timestamp
 
     try:
         # Clean the question
@@ -115,11 +197,13 @@ async def process_app_mention(event):
             return
 
         # Send thinking indicator
+        thinking_msg = None
         try:
-            slack_client.chat_postMessage(
+            response = slack_client.chat_postMessage(
                 channel=channel_id,
                 text="🤔 Analyzing your question..."
             )
+            thinking_msg = response.get("ts")
         except Exception as e:
             print(f"⚠️ Could not send thinking indicator: {e}")
 
@@ -133,21 +217,43 @@ async def process_app_mention(event):
             print(f"📊 Response type: {response_type}")
 
             if response_type == 'sql':
+                # Delete thinking message before executing
+                if thinking_msg:
+                    try:
+                        slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                    except:
+                        pass
+
                 # Execute SQL and get results
                 await execute_sql_and_respond(
-                    clean_question, response, channel_id, user_id
+                    clean_question, response, channel_id, user_id, ts
                 )
             elif response_type == 'error':
                 # Handle error response
+                if thinking_msg:
+                    try:
+                        slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                    except:
+                        pass
                 await send_slack_message(channel_id, f"❌ Error generating response: {response}")
             else:
                 # Send conversational response directly
+                if thinking_msg:
+                    try:
+                        slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                    except:
+                        pass
                 await send_slack_message(channel_id, response)
                 # Update context for conversational responses
                 await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
 
         else:
             # Fallback to embedding search
+            if thinking_msg:
+                try:
+                    slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                except:
+                    pass
             await handle_with_embeddings(clean_question, channel_id, user_id)
 
     except TypeError as te:
@@ -167,7 +273,7 @@ async def process_app_mention(event):
 
         await send_slack_message(
             channel_id,
-            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question."
+            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question or try `@bot debug analyze YOUR QUESTION` to see what's happening."
         )
 
 
@@ -188,9 +294,11 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 • `debug learning` or `debug patterns` - Show learning insights
 • `debug clear` - Clear all caches
 • `debug clear selection` - Clear table selection cache only
+• `debug clear feedback` - Clear feedback cache
 
 **Table Discovery:**
 • `debug find QUESTION` - Find relevant tables for a question
+• `debug describe TABLE1 TABLE2` - Get table descriptions from dbt manifest
 • `debug sample TABLE_NAME` - Sample 5 rows from a table
 • `debug analyze QUESTION` - Full table selection analysis
 • `debug selection QUESTION` - Debug table selection process
@@ -202,7 +310,10 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 • `debug context` - Show current conversation context
 
 **General:**
-• `debug QUERY` - Search for tables/columns related to query"""
+• `debug QUERY` - Search for tables/columns related to query
+
+**Feedback:**
+React with ✅ or ❌ to any bot response to provide feedback!"""
 
     elif debug_query.lower() in ["cache", "stats"]:
         # Show cache statistics
@@ -235,12 +346,18 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
         await clear_thread_cache()
         await clear_conversation_cache()
         await clear_table_selection_cache()
+        await clear_feedback_cache()
         debug_result = "🧹 **All caches cleared!**"
 
     elif debug_query.lower() == "clear selection":
         # Clear only table selection cache
         await clear_table_selection_cache()
         debug_result = "🧹 **Table selection cache cleared!**"
+
+    elif debug_query.lower() == "clear feedback":
+        # Clear only feedback cache
+        await clear_feedback_cache()
+        debug_result = "🧹 **Feedback cache cleared!**"
 
     elif debug_query.lower() in ["context", "conversation"]:
         # Show current conversation context
@@ -249,11 +366,29 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
             debug_result = f"💬 **Current Conversation Context:**\n"
             debug_result += f"• Last question: {context.get('last_question', 'None')}\n"
             debug_result += f"• Last response type: {context.get('last_response_type', 'None')}\n"
+            debug_result += f"• Last table used: {context.get('last_table_used', 'None')}\n"
             debug_result += f"• Context age: {int(time.time() - context.get('timestamp', 0))} seconds\n"
             if context.get('last_response'):
                 debug_result += f"• Last response preview: {context['last_response'][:200]}..."
         else:
             debug_result = "💬 **No active conversation context**"
+
+    elif debug_query.lower().startswith("describe"):
+        # Get descriptions for tables
+        tables_str = debug_query.replace("describe", "").strip()
+        if tables_str:
+            # Split by comma or space
+            tables = [t.strip() for t in re.split(r'[,\s]+', tables_str) if t.strip()]
+            descriptions = await get_table_descriptions_from_manifest(tables, user_id, channel_id)
+
+            if descriptions:
+                debug_result = "📊 **Table Descriptions from dbt manifest:**\n\n"
+                for table, desc in descriptions.items():
+                    debug_result += f"**{table}**\n{desc}\n\n"
+            else:
+                debug_result = "❌ **No descriptions found for these tables**"
+        else:
+            debug_result = "❌ **Usage:** `debug describe TABLE1 TABLE2` or `debug describe TABLE1,TABLE2`"
 
     elif debug_query.lower().startswith("find"):
         # Find relevant tables for a question
@@ -262,8 +397,13 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
             tables = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=5)
             if tables:
                 debug_result = f"📊 **Relevant Tables for:** '{question}'\n\n"
+                descriptions = await get_table_descriptions_from_manifest(tables, user_id, channel_id)
+
                 for i, table in enumerate(tables, 1):
-                    debug_result += f"{i}. {table}\n"
+                    debug_result += f"{i}. **{table}**\n"
+                    if table in descriptions:
+                        desc = descriptions[table]
+                        debug_result += f"   {desc[:200]}{'...' if len(desc) > 200 else ''}\n\n"
             else:
                 debug_result = "❌ **No relevant tables found**"
         else:
@@ -278,7 +418,6 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
                 debug_result = f"❌ **Error sampling {table_name}:** {sample['error']}"
             else:
                 debug_result = f"📊 **Sample from {table_name}:**\n"
-                debug_result += f"Total rows: {sample.get('total_rows', 'Unknown')}\n"
                 debug_result += f"Columns ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:15])}\n\n"
 
                 if sample.get('sample_data'):
@@ -309,8 +448,8 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
                 debug_result += "\n**2. Selecting best table...**\n"
                 selected_table, reason = await select_best_table_using_samples(question, candidates, user_id,
                                                                                channel_id)
-                debug_result += f"  Selected: {selected_table}\n"
-                debug_result += f"  Reason: {reason}\n"
+                debug_result += f"  **Selected:** {selected_table}\n"
+                debug_result += f"  **Reason:** {reason}\n"
             else:
                 debug_result += "  ❌ No candidates found\n"
         else:
@@ -356,7 +495,8 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
     await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}")
 
 
-async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str):
+async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str,
+                                  original_ts: str = None):
     """Execute SQL query and send results"""
     print("⚡ Executing query...")
     await send_slack_message(channel_id, "⚡ Executing query...")
@@ -365,6 +505,10 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
     print(f"🧠 SQL Query to execute:")
     print(f"{sql}")
     print(f"{'=' * 60}\n")
+
+    # Get context to find the selected table
+    context = await get_conversation_context(user_id, channel_id)
+    selected_table = context.get('last_table_used') if context else None
 
     # Check if SQL generation failed
     if sql.strip().lower().startswith("i don't have enough") or sql.startswith("-- Error:") or sql.startswith("⚠️"):
@@ -400,16 +544,15 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         else:
             result_message = f"❌ Query error: {df}"
 
-        # Update cache with poor results (no table info)
-        await update_sql_cache_with_results(clean_question, sql, 0)
+        # Update cache with poor results
+        await update_sql_cache_with_results(clean_question, sql, 0, selected_table)
     else:
         # Success - process results
         result_count = len(df) if hasattr(df, '__len__') else 0
         print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
 
-        # Extract table from SQL for learning
-        selected_table = None
-        if 'FROM' in sql.upper():
+        # Extract table from SQL if we don't have it
+        if not selected_table and 'FROM' in sql.upper():
             sql_upper = sql.upper()
             from_idx = sql_upper.find('FROM')
             if from_idx != -1:
@@ -437,9 +580,33 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
             )
 
         # Update conversation context to indicate SQL results were returned
-        await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results')
+        await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
+                                          selected_table)
 
-    await send_slack_message(channel_id, result_message)
+    # Send the result message
+    response = await send_slack_message(channel_id, result_message)
+
+    # Store message info for feedback tracking if successful
+    if response and result_count > 0 and selected_table:
+        msg_ts = response.get("ts")
+        if msg_ts:
+            channel_ts = f"{channel_id}_{msg_ts}"
+            message_to_question_map[channel_ts] = {
+                'question': clean_question,
+                'sql': sql,
+                'table': selected_table,
+                'timestamp': time.time()
+            }
+            print(f"📝 Stored message {channel_ts} for feedback tracking")
+
+            # Clean up old entries (older than 24 hours)
+            current_time = time.time()
+            to_remove = []
+            for key, data in message_to_question_map.items():
+                if current_time - data.get('timestamp', 0) > 86400:  # 24 hours
+                    to_remove.append(key)
+            for key in to_remove:
+                del message_to_question_map[key]
 
 
 async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: str):
@@ -455,27 +622,43 @@ async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: 
     await execute_sql_and_respond(clean_question, sql, channel_id, user_id)
 
 
-async def send_slack_message(channel_id: str, message: str):
+async def send_slack_message(channel_id: str, message: str, thread_ts: str = None):
     """Send message to Slack with error handling"""
     try:
         # Ensure message isn't too long for Slack (4000 char limit)
         if len(message) > 3900:
             message = message[:3900] + "\n\n... (truncated due to length)"
 
-        slack_client.chat_postMessage(channel=channel_id, text=message)
+        # Add feedback hint for data responses
+        if not message.startswith("❌") and not message.startswith("🔍") and not thread_ts:
+            message += "\n\n_React with ✅ if this is helpful, or ❌ if not accurate_"
+
+        params = {
+            "channel": channel_id,
+            "text": message
+        }
+
+        if thread_ts:
+            params["thread_ts"] = thread_ts
+
+        response = slack_client.chat_postMessage(**params)
         print(f"📤 Sent message to channel {channel_id}")
+        return response
     except SlackApiError as e:
         print(f"❌ Slack API error: {e.response['error']}")
         # Try sending a simpler error message
         try:
-            slack_client.chat_postMessage(
+            response = slack_client.chat_postMessage(
                 channel=channel_id,
                 text="❌ Sorry, I encountered an error sending the response. Please try again."
             )
+            return response
         except Exception as fallback_error:
             print(f"❌ Failed to send fallback message: {fallback_error}")
     except Exception as e:
         print(f"❌ Unexpected error sending message: {e}")
+
+    return None
 
 
 # Helper function to clear assistant thread cache (useful for testing)
@@ -497,4 +680,5 @@ def get_status():
         "vector_store_search": True,
         "learning_enabled": True,
         "conversational_context_enabled": True,
+        "emoji_feedback_enabled": True,
     }
