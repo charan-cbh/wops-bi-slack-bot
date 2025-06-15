@@ -540,11 +540,32 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
         return {'error': 'Snowflake not available'}
 
     try:
-        # Skip total row count - just sample directly
-        # Using LIMIT instead of TABLESAMPLE for simplicity
-        sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
-        print(f"🔍 Sampling with: {sample_sql}")
+        # First, try to discover columns to find timestamp/audit columns
+        schema_sql = f"SELECT * FROM {table_name} LIMIT 1"
+        df_schema = run_query(schema_sql)
 
+        if isinstance(df_schema, str):
+            # If error, fall back to simple sampling
+            sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
+        else:
+            # Look for timestamp/audit columns to sort by
+            columns = list(df_schema.columns)
+            timestamp_cols = [col for col in columns if any(
+                indicator in col.lower() for indicator in
+                ['created_at', 'updated_at', 'timestamp', 'date', 'modified', 'audit']
+            )]
+
+            if timestamp_cols:
+                # Use the first timestamp column found for ordering
+                order_col = timestamp_cols[0]
+                sample_sql = f"SELECT * FROM {table_name} ORDER BY {order_col} DESC LIMIT {sample_size}"
+                print(f"🔍 Sampling with timestamp ordering: {order_col} DESC")
+            else:
+                # No timestamp column found, use simple sampling
+                sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
+                print(f"🔍 No timestamp column found, using simple sampling")
+
+        print(f"🔍 Executing: {sample_sql}")
         df = run_query(sample_sql)
 
         if isinstance(df, str):
@@ -913,9 +934,36 @@ async def discover_table_schema(table_name: str) -> dict:
     # If Snowflake is available, run actual discovery
     if SNOWFLAKE_AVAILABLE:
         try:
-            # Run discovery query
-            discovery_sql = f"SELECT * FROM {table_name} LIMIT 5"
-            print(f"🔍 Running schema discovery query")
+            # First get column names with a simple query
+            column_sql = f"SELECT * FROM {table_name} LIMIT 1"
+            df_columns = run_query(column_sql)
+
+            if isinstance(df_columns, str):
+                # If error, return error
+                print(f"❌ Schema discovery failed: {df_columns}")
+                return {
+                    'table': table_name,
+                    'error': df_columns,
+                    'columns': []
+                }
+
+            # Extract column names
+            columns = list(df_columns.columns)
+
+            # Look for timestamp/audit columns to sort by
+            timestamp_cols = [col for col in columns if any(
+                indicator in col.lower() for indicator in
+                ['created_at', 'updated_at', 'timestamp', 'date', 'modified', 'audit', '_at']
+            )]
+
+            # Run discovery query with ordering if timestamp column found
+            if timestamp_cols:
+                order_col = timestamp_cols[0]
+                discovery_sql = f"SELECT * FROM {table_name} ORDER BY {order_col} DESC LIMIT 5"
+                print(f"🔍 Running schema discovery with timestamp ordering: {order_col} DESC")
+            else:
+                discovery_sql = f"SELECT * FROM {table_name} LIMIT 5"
+                print(f"🔍 Running schema discovery query (no timestamp column found)")
 
             df = run_query(discovery_sql)
 
@@ -1201,11 +1249,22 @@ Use your knowledge from the dbt manifest to provide accurate information about:
 - Table purposes and contents
 - Column meanings and relationships
 - Data sources and transformations
-- Business logic and definitions"""
+- Business logic and definitions
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
+- Use `text` for code/table names
+- Use bullet points with •"""
     else:
         print(f"💬 Standard conversational response")
         instructions = """You are a BI assistant. Be helpful and concise.
-Use your knowledge from the dbt manifest to answer questions about available data."""
+Use your knowledge from the dbt manifest to answer questions about available data.
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
+- Use `text` for code/table names"""
 
     # Add context to message if available
     message_parts = [f"User question: {user_question}"]
@@ -1221,6 +1280,9 @@ Use your knowledge from the dbt manifest to answer questions about available dat
     message = "\n".join(message_parts)
 
     response = await send_message_and_run(thread_id, message, instructions)
+
+    # Additional safety check - convert any remaining markdown bold to Slack format
+    response = response.replace("**", "*")
 
     return response
 
@@ -1809,31 +1871,43 @@ RESPONSE FORMAT:
 2. Provide a brief (1 sentence) explanation of what each KPI measures
 3. If all values are 0 or NULL, mention this as a data quality issue
 
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
+- Use `text` for code/metrics
+- Use bullet points with •
+
 Example response:
 "The agent performance KPIs include:
-• **AHT (Average Handling Time)**: Time agents spend resolving tickets
-• **CSAT Score**: Customer satisfaction rating 
-• **FCR (First Contact Resolution)**: Percentage of tickets resolved on first contact
-• **QA Score**: Quality assurance evaluation score"
+• *AHT (Average Handling Time)*: Time agents spend resolving tickets
+• *CSAT Score*: Customer satisfaction rating 
+• *FCR (First Contact Resolution)*: Percentage of tickets resolved on first contact
+• *QA Score*: Quality assurance evaluation score"
 
 Keep it SHORT and FACTUAL. No analysis of values unless they indicate a problem."""
 
     elif question_intent['type'] == 'count':
         instructions = """State the count in one sentence.
-Example: "There are 247 tickets created today."
-If count is 0, suggest checking date filters or data availability."""
+Example: "There are *247* tickets created today."
+If count is 0, suggest checking date filters or data availability.
+
+Use Slack formatting: *text* for bold numbers."""
 
     elif question_intent['type'] == 'summary_stats':
         instructions = """Show key statistics as bullet points:
-• Metric name: value
-Maximum 4 bullet points. No lengthy explanations."""
+• Metric name: *value*
+Maximum 4 bullet points. No lengthy explanations.
+
+Use Slack formatting: *text* for bold values."""
 
     elif question_intent['type'] == 'ranking':
         instructions = """List the top/bottom results:
-1. Name - value
-2. Name - value
+1. *Name* - value
+2. *Name* - value
 (etc.)
-One line summary at end if pattern is notable."""
+One line summary at end if pattern is notable.
+
+Use Slack formatting: *text* for bold names."""
 
     else:
         # Default concise summary
@@ -1841,15 +1915,21 @@ One line summary at end if pattern is notable."""
 - First sentence: Direct answer to the question
 - Second sentence: Key insight or notable finding (if any)
 - Use bullet points for lists
-- Include specific numbers"""
+- Include specific numbers
+
+Use Slack formatting: *text* for bold, NOT **text**"""
 
     message = f"""Question: "{user_question}"
 Data:
 {result_table}
 
-Provide a concise answer following the instructions. Be brief and direct."""
+Provide a concise answer following the instructions. Be brief and direct.
+Remember to use Slack formatting: *text* for bold, _text_ for italic."""
 
     response = await send_message_and_run(thread_id, message, instructions)
+
+    # Additional safety check - convert any remaining markdown bold to Slack format
+    response = response.replace("**", "*")
 
     return response
 
@@ -2149,7 +2229,13 @@ def summarize_results_with_llm(user_question: str, result_table: str) -> str:
     prompt = f"""Question: "{user_question}"
 Data: {result_table}
 
-Provide a business summary. If asked about data source, explain it comes from our data warehouse tables."""
+Provide a business summary. If asked about data source, explain it comes from our data warehouse tables.
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
+- Use `text` for code/table names
+- Use bullet points with •"""
 
     try:
         response = client.chat.completions.create(
@@ -2157,7 +2243,10 @@ Provide a business summary. If asked about data source, explain it comes from ou
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4
         )
-        return response.choices[0].message.content.strip()
+        result = response.choices[0].message.content.strip()
+        # Safety check - convert any remaining markdown bold to Slack format
+        result = result.replace("**", "*")
+        return result
     except Exception as e:
         return f"⚠️ Error: {e}"
 
