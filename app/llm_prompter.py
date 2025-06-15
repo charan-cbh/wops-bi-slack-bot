@@ -1225,9 +1225,293 @@ Use your knowledge from the dbt manifest to answer questions about available dat
     return response
 
 
+def analyze_question_intent(question_lower: str) -> dict:
+    """Analyze the intent behind the question to generate appropriate SQL"""
+
+    intent = {
+        'type': 'unknown',
+        'needs_aggregation': False,
+        'time_filter': None,
+        'group_by': None,
+        'order_by': None,
+        'limit': 100
+    }
+
+    # Pattern 1: "What are the..." - asking for list/definition
+    if any(phrase in question_lower for phrase in [
+        "what are the", "which are the", "list the", "show me the",
+        "what kpis", "which kpis", "available kpis", "kpi list"
+    ]):
+        intent['type'] = 'list_or_sample'
+        intent['limit'] = 5  # Just show a few examples
+
+    # Pattern 2: Counting/Volume questions
+    elif any(phrase in question_lower for phrase in [
+        "how many", "count", "total number", "number of",
+        "volume", "quantity"
+    ]):
+        intent['type'] = 'count'
+        intent['needs_aggregation'] = True
+
+    # Pattern 3: Average/Summary statistics
+    elif any(phrase in question_lower for phrase in [
+        "average", "mean", "avg", "typical", "usual",
+        "median", "summary", "overview"
+    ]):
+        intent['type'] = 'summary_stats'
+        intent['needs_aggregation'] = True
+
+    # Pattern 4: Ranking/Top/Bottom
+    elif any(phrase in question_lower for phrase in [
+        "top", "bottom", "highest", "lowest", "best", "worst",
+        "most", "least", "ranked"
+    ]):
+        intent['type'] = 'ranking'
+        intent['needs_aggregation'] = True
+        intent['order_by'] = 'DESC' if any(w in question_lower for w in ['top', 'highest', 'best', 'most']) else 'ASC'
+        intent['limit'] = 10
+
+    # Pattern 5: Trend/Time series
+    elif any(phrase in question_lower for phrase in [
+        "trend", "over time", "by date", "daily", "weekly",
+        "monthly", "timeline"
+    ]):
+        intent['type'] = 'trend'
+        intent['needs_aggregation'] = True
+        intent['group_by'] = 'date'
+
+    # Pattern 6: Comparison/Breakdown
+    elif any(phrase in question_lower for phrase in [
+        "by", "per", "breakdown", "compare", "versus", "vs",
+        "across", "between", "group by"
+    ]):
+        intent['type'] = 'breakdown'
+        intent['needs_aggregation'] = True
+        # Try to identify what to group by
+        if "agent" in question_lower:
+            intent['group_by'] = 'agent'
+        elif "team" in question_lower:
+            intent['group_by'] = 'team'
+        elif "channel" in question_lower:
+            intent['group_by'] = 'channel'
+        elif "group" in question_lower:
+            intent['group_by'] = 'group'
+
+    # Time filters
+    if "today" in question_lower:
+        intent['time_filter'] = 'today'
+    elif "yesterday" in question_lower:
+        intent['time_filter'] = 'yesterday'
+    elif "last week" in question_lower:
+        intent['time_filter'] = 'last_week'
+    elif "this week" in question_lower:
+        intent['time_filter'] = 'this_week'
+    elif "last month" in question_lower:
+        intent['time_filter'] = 'last_month'
+    elif "this month" in question_lower:
+        intent['time_filter'] = 'this_month'
+
+    # Default to simple query if no pattern matched
+    if intent['type'] == 'unknown':
+        intent['type'] = 'simple_query'
+        intent['limit'] = 100
+
+    return intent
+
+
+def build_sql_instructions(intent: dict, table: str, schema: dict, description: str, original_question: str) -> dict:
+    """Build specific SQL instructions based on question intent"""
+
+    columns = schema.get('columns', [])
+
+    # Base instructions
+    base_instructions = f"""You are a SQL expert. Generate ONLY valid Snowflake SQL for this question.
+
+TABLE: {table}
+DESCRIPTION: {description}
+AVAILABLE COLUMNS: {', '.join(columns[:50]) if columns else 'Unknown'}
+
+CRITICAL RULES:
+1. Return ONLY the SQL query - no explanations, no markdown, no backticks
+2. Use exact column names from the schema - never make up columns
+3. Always use the full table name: {table}
+4. For date filters, use Snowflake date functions (CURRENT_DATE(), DATEADD(), etc.)
+5. Always include appropriate LIMIT unless counting
+6. NEVER use MIN() for "what are" questions - show actual data instead"""
+
+    # Intent-specific instructions
+    if intent['type'] == 'list_or_sample':
+        # For "What are the KPIs" type questions
+        specific_instructions = f"""
+This is a DISCOVERY question - the user wants to know what data is available.
+
+For "{original_question}":
+- If asking about KPIs/metrics, SELECT all metric columns with sample data
+- Show 5 sample rows to demonstrate what's in the table
+- Include agent/entity names if available to make it meaningful
+
+Example for "What are the KPIs?":
+SELECT 
+    agent_name,
+    aht_minutes,
+    positive_res_csat,
+    negative_res_csat,
+    fcr_percentage,
+    qa_score,
+    productivity_score
+FROM {table}
+WHERE agent_name IS NOT NULL
+LIMIT 5;
+"""
+
+    elif intent['type'] == 'count':
+        specific_instructions = f"""
+This is a COUNT question - return the total number.
+
+For "{original_question}":
+- Use COUNT(*) or COUNT(DISTINCT column) as appropriate
+- Apply date filters if mentioned
+- Return a single number with clear alias
+
+Example: SELECT COUNT(*) as ticket_count FROM {table} WHERE DATE(created_at) = CURRENT_DATE();
+"""
+
+    elif intent['type'] == 'summary_stats':
+        specific_instructions = f"""
+This is a SUMMARY STATISTICS question.
+
+For "{original_question}":
+- Calculate averages, sums, or other aggregates for relevant metrics
+- Use meaningful aliases
+- Round numbers to 2 decimal places
+- Include COUNT(*) to show sample size
+
+Example: 
+SELECT 
+    ROUND(AVG(aht_minutes), 2) as avg_handling_time_minutes,
+    ROUND(AVG(positive_res_csat), 2) as avg_positive_csat,
+    ROUND(AVG(fcr_percentage), 2) as avg_fcr_percentage,
+    COUNT(*) as total_records
+FROM {table};
+"""
+
+    elif intent['type'] == 'ranking':
+        specific_instructions = f"""
+This is a RANKING question - show top/bottom performers.
+
+For "{original_question}":
+- Order by the relevant metric {intent.get('order_by', 'DESC')}
+- Include the entity name (agent, team, etc.) and the metric
+- LIMIT to {intent.get('limit', 10)} results
+
+Example:
+SELECT 
+    agent_name,
+    ROUND(AVG(metric_name), 2) as avg_metric
+FROM {table}
+GROUP BY agent_name
+ORDER BY avg_metric {intent.get('order_by', 'DESC')}
+LIMIT {intent.get('limit', 10)};
+"""
+
+    elif intent['type'] == 'breakdown':
+        specific_instructions = f"""
+This is a BREAKDOWN question - group and aggregate data.
+
+For "{original_question}":
+- GROUP BY the appropriate dimension
+- Calculate relevant aggregates
+- Order by the aggregate DESC
+- Include count per group
+
+Example:
+SELECT 
+    group_dimension,
+    COUNT(*) as count,
+    ROUND(AVG(metric), 2) as avg_metric
+FROM {table}
+GROUP BY group_dimension
+ORDER BY count DESC;
+"""
+
+    else:
+        # Default simple query
+        specific_instructions = f"""
+Generate appropriate SQL for: "{original_question}"
+- If asking about specific data, filter appropriately
+- Show sample rows with LIMIT 100
+- Include relevant columns based on the question
+"""
+
+    # Add time filter instructions if needed
+    if intent.get('time_filter'):
+        time_instructions = f"\n\nTIME FILTER REQUIRED: {intent['time_filter']}"
+        if 'created_at' in columns or 'date' in columns:
+            date_col = 'created_at' if 'created_at' in columns else 'date'
+            if intent['time_filter'] == 'today':
+                time_instructions += f"\nAdd: WHERE DATE({date_col}) = CURRENT_DATE()"
+            elif intent['time_filter'] == 'yesterday':
+                time_instructions += f"\nAdd: WHERE DATE({date_col}) = DATEADD(day, -1, CURRENT_DATE())"
+            elif intent['time_filter'] == 'last_week':
+                time_instructions += f"\nAdd: WHERE {date_col} >= DATEADD(week, -1, CURRENT_DATE())"
+    else:
+        time_instructions = ""
+
+    full_instructions = base_instructions + "\n" + specific_instructions + time_instructions
+
+    # Build the message to the assistant
+    message = f"""Generate SQL for: {original_question}
+
+Table: {table}
+Question Intent: {intent['type']}
+
+Generate SQL that directly answers this question."""
+
+    return {
+        'instructions': full_instructions,
+        'message': message
+    }
+
+
+def validate_and_fix_sql(sql: str, question: str, table: str) -> str:
+    """Validate generated SQL and fix common issues"""
+
+    sql_upper = sql.upper()
+    question_lower = question.lower()
+
+    # Fix 1: MIN() function misuse for "what are" questions
+    if ("what are" in question_lower or "which are" in question_lower) and "MIN(" in sql_upper:
+        print("⚠️ Detected MIN() in a 'what are' question - fixing...")
+        # Replace with proper sample query
+        if "kpi" in question_lower and "performance" in table.lower():
+            sql = f"""SELECT 
+    agent_name,
+    aht_minutes,
+    positive_res_csat,
+    negative_res_csat,
+    fcr_percentage,
+    qa_score,
+    productivity_score
+FROM {table}
+WHERE agent_name IS NOT NULL
+LIMIT 5"""
+
+    # Fix 2: Missing LIMIT for non-aggregation queries
+    if not any(agg in sql_upper for agg in ["COUNT(", "SUM(", "AVG(", "MAX(", "MIN(", "GROUP BY"]):
+        if "LIMIT" not in sql_upper:
+            print("⚠️ Adding LIMIT to prevent large result sets")
+            sql = sql.rstrip(';').rstrip() + "\nLIMIT 100;"
+
+    # Fix 3: Ensure semicolon at end
+    if not sql.rstrip().endswith(';'):
+        sql = sql.rstrip() + ';'
+
+    return sql
+
+
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
-    Generate SQL using intelligent table discovery and sampling
+    Generate SQL using intelligent table discovery and intent analysis
     Returns: (sql_query, selected_table)
     """
     print(f"\n🤖 Starting intelligent SQL generation for: {user_question}")
@@ -1287,111 +1571,32 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
         traceback.print_exc()
         return f"-- Error: {str(e)}", None
 
-    # Step 6: Generate SQL with assistant
+    # Step 6: Analyze question intent
+    question_lower = user_question.lower()
+    question_intent = analyze_question_intent(question_lower)
+    print(f"🎯 Question intent: {question_intent['type']}")
+
+    # Step 7: Generate SQL with assistant
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return "-- Error: Could not create conversation thread", selected_table
 
-    # Extract intent for better SQL generation
-    intent = extract_intent(user_question)
-    print(f"🎯 Extracted intent: {intent}")
+    # Build SQL generation instructions based on intent
+    sql_instructions = build_sql_instructions(
+        question_intent,
+        selected_table,
+        schema,
+        table_description,
+        user_question
+    )
 
-    # Determine query type based on question
-    question_lower = user_question.lower()
-    is_asking_what_kpis = any(phrase in question_lower for phrase in [
-        "what are the kpis", "which kpis", "what kpis", "list kpis",
-        "show me kpis", "kpi columns", "performance metrics"
-    ])
-
-    is_asking_count = any(phrase in question_lower for phrase in [
-        "how many", "count", "number of", "total", "volume"
-    ])
-
-    # Build comprehensive instructions
-    instructions = f"""You are a SQL expert. Generate SQL for the following question using the selected table.
-
-SELECTED TABLE: {selected_table}
-TABLE DESCRIPTION: {table_description}
-SELECTION REASON: {selection_reason}
-
-Table Schema:
-- Columns: {', '.join(schema.get('columns', [])[:50]) if schema.get('columns') else 'Use file_search to find columns'}
-{"- Total columns: " + str(len(schema.get('columns', []))) if schema.get('columns') else ""}
-
-CRITICAL RULES:
-1. Use ONLY the selected table and its actual columns
-2. Do NOT make up column names - use exact names from the schema
-3. For date filters, use appropriate Snowflake date functions
-4. For text filters, use LOWER() for case-insensitive matching
-5. Include meaningful column aliases
-6. Sort results appropriately
-7. Limit results to 100 rows unless specifically asked for more
-8. For "What are the KPIs" questions, SELECT a sample row to show all KPI columns
-9. For COUNT/volume questions, use COUNT(*) with appropriate filters
-10. Use appropriate aggregations when needed (AVG, SUM, COUNT, etc.)
-
-SPECIAL HANDLING:
-- If asked "What are the KPIs that determine agent performance?", show a sample of data with all performance metric columns
-- If asked for ticket volume/count, use COUNT(*) with date filters
-- If asked for specific metrics, calculate them appropriately
-
-Return ONLY the SQL query, no explanations."""
-
-    # Build detailed message
-    message_parts = [f"Generate SQL for: {user_question}"]
-    message_parts.append(f"\nTable: {selected_table}")
-    message_parts.append(f"Table Purpose: {table_description[:200]}..." if len(
-        table_description) > 200 else f"Table Purpose: {table_description}")
-
-    if schema.get('columns'):
-        all_columns = schema['columns']
-
-        # Special handling for "what are the KPIs" questions
-        if is_asking_what_kpis:
-            message_parts.append("\nIMPORTANT: The user is asking WHAT KPIs exist, not for calculations.")
-            message_parts.append(
-                "Show a sample row with all KPI/metric columns to demonstrate what metrics are available.")
-
-            # Find KPI-related columns
-            kpi_keywords = ['kpi', 'performance', 'score', 'rate', 'percentage', 'aht',
-                            'csat', 'fcr', 'quality', 'productivity', 'metric', 'avg',
-                            'resolution', 'satisfaction', 'efficiency']
-            kpi_cols = [col for col in all_columns if any(kw in col.lower() for kw in kpi_keywords)]
-
-            if kpi_cols:
-                message_parts.append(f"\nKPI columns found: {', '.join(kpi_cols[:20])}")
-                message_parts.append("Generate SQL to show these KPI columns with sample data (LIMIT 5)")
-
-        # Special handling for count/volume questions
-        elif is_asking_count:
-            message_parts.append("\nIMPORTANT: Use COUNT(*) for volume/count questions")
-
-            # Find date columns for filtering
-            date_cols = [col for col in all_columns if
-                         any(d in col.lower() for d in ['date', 'created', 'updated', 'time', 'timestamp'])]
-            if date_cols and 'today' in question_lower:
-                message_parts.append(f"\nUse date column '{date_cols[0]}' with CURRENT_DATE() for today's filter")
-
-        # Add intent-based hints
-        if intent['time_filter']:
-            date_cols = [col for col in all_columns if
-                         any(d in col.lower() for d in ['date', 'created', 'updated', 'time', 'timestamp'])]
-            if date_cols:
-                message_parts.append(f"\nFor time filter '{intent['time_filter']}', use column: {date_cols[0]}")
-
-        if intent['needs_ranking']:
-            message_parts.append("\nInclude ORDER BY clause for ranking")
-
-        if intent['aggregation_type']:
-            message_parts.append(f"\nUse {intent['aggregation_type'].upper()} aggregation function")
-
-    message = "\n".join(message_parts)
-
-    print(f"📝 Sending SQL generation request to assistant")
-    response = await send_message_and_run(thread_id, message, instructions)
+    response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
 
     # Extract SQL from response
     sql = extract_sql_from_response(response)
+
+    # Validate and fix common SQL issues
+    sql = validate_and_fix_sql(sql, user_question, selected_table)
 
     print(f"\n🧠 Generated SQL:")
     print(f"{sql}")
@@ -1581,7 +1786,7 @@ async def update_sql_cache_with_results(user_question: str, sql_query: str, resu
 
 async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str,
                                    assistant_id: str = None) -> str:
-    """Summarize results - keep it simple"""
+    """Summarize results based on question type - more concise and focused"""
     if assistant_id:
         global ASSISTANT_ID
         ASSISTANT_ID = assistant_id
@@ -1590,24 +1795,59 @@ async def summarize_with_assistant(user_question: str, result_table: str, user_i
     if not thread_id:
         return "⚠️ Could not create conversation thread"
 
-    instructions = """Provide a concise business summary with key insights. 
+    # Analyze the question to determine response style
+    question_lower = user_question.lower()
+    question_intent = analyze_question_intent(question_lower)
 
-IMPORTANT RULES:
-1. Do NOT repeat or rephrase the user's question at the beginning
-2. Start directly with the findings or answer
-3. Keep the response focused and to-the-point (2-3 paragraphs max)
-4. Use bullet points for multiple items or metrics
-5. Include specific numbers and percentages from the data
-6. If data is incomplete or shows many null values, mention this as a key finding
-7. End with actionable insights or implications when relevant
+    # Build appropriate summarization instructions
+    if question_intent['type'] == 'list_or_sample':
+        # For "What are the KPIs" questions
+        instructions = """You are explaining what KPIs/metrics are available in the data.
 
-Focus on what the data shows, not technical details."""
+RESPONSE FORMAT:
+1. List the KPI names found in the data
+2. Provide a brief (1 sentence) explanation of what each KPI measures
+3. If all values are 0 or NULL, mention this as a data quality issue
+
+Example response:
+"The agent performance KPIs include:
+• **AHT (Average Handling Time)**: Time agents spend resolving tickets
+• **CSAT Score**: Customer satisfaction rating 
+• **FCR (First Contact Resolution)**: Percentage of tickets resolved on first contact
+• **QA Score**: Quality assurance evaluation score"
+
+Keep it SHORT and FACTUAL. No analysis of values unless they indicate a problem."""
+
+    elif question_intent['type'] == 'count':
+        instructions = """State the count in one sentence.
+Example: "There are 247 tickets created today."
+If count is 0, suggest checking date filters or data availability."""
+
+    elif question_intent['type'] == 'summary_stats':
+        instructions = """Show key statistics as bullet points:
+• Metric name: value
+Maximum 4 bullet points. No lengthy explanations."""
+
+    elif question_intent['type'] == 'ranking':
+        instructions = """List the top/bottom results:
+1. Name - value
+2. Name - value
+(etc.)
+One line summary at end if pattern is notable."""
+
+    else:
+        # Default concise summary
+        instructions = """Answer in 2-3 sentences maximum.
+- First sentence: Direct answer to the question
+- Second sentence: Key insight or notable finding (if any)
+- Use bullet points for lists
+- Include specific numbers"""
 
     message = f"""Question: "{user_question}"
 Data:
 {result_table}
 
-Provide a concise summary of the key findings."""
+Provide a concise answer following the instructions. Be brief and direct."""
 
     response = await send_message_and_run(thread_id, message, instructions)
 

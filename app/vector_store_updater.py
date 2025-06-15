@@ -198,12 +198,14 @@ def fetch_manifest_from_dbt() -> Optional[Dict]:
 
 def classify_column_type(col_name: str, col_description: str, data_type: str) -> Dict[str, bool]:
     """Classify column as metric, dimension, or date based on name and description"""
-    col_lower = col_name.lower()
+    col_lower = col_name.lower() if col_name else ""
     desc_lower = col_description.lower() if col_description else ""
+    type_lower = data_type.lower() if data_type else ""
+    type_upper = data_type.upper() if data_type else ""
 
     # Date columns
     date_indicators = ['date', 'created', 'updated', 'time', 'timestamp', 'at_', '_at', 'when']
-    is_date = any(indicator in col_lower for indicator in date_indicators) or 'date' in data_type.lower()
+    is_date = any(indicator in col_lower for indicator in date_indicators) or 'date' in type_lower
 
     # Metric columns
     metric_indicators = [
@@ -215,7 +217,7 @@ def classify_column_type(col_name: str, col_description: str, data_type: str) ->
     ]
     is_metric = (any(indicator in col_lower for indicator in metric_indicators) or
                  any(indicator in desc_lower for indicator in metric_indicators) or
-                 data_type.upper() in ['NUMBER', 'FLOAT', 'DECIMAL', 'INTEGER'])
+                 type_upper in ['NUMBER', 'FLOAT', 'DECIMAL', 'INTEGER', 'NUMERIC'])
 
     # Dimension columns
     dimension_indicators = [
@@ -224,12 +226,16 @@ def classify_column_type(col_name: str, col_description: str, data_type: str) ->
         'priority', 'tier', 'segment', 'region', 'country'
     ]
     is_dimension = (any(indicator in col_lower for indicator in dimension_indicators) or
-                    data_type.upper() in ['VARCHAR', 'STRING', 'TEXT'])
+                    type_upper in ['VARCHAR', 'STRING', 'TEXT', 'CHAR'])
 
     # If it's a date, it's not a metric or dimension
     if is_date:
         is_metric = False
         is_dimension = False
+
+    # Default fallback - if we can't determine type, assume dimension
+    if not is_date and not is_metric and not is_dimension:
+        is_dimension = True
 
     return {
         'is_metric': is_metric and not is_date,
@@ -269,7 +275,7 @@ def extract_table_schemas_from_manifest(manifest: Dict) -> Dict[str, TableSchema
 
         for col_name, col_info in columns_data.items():
             col_desc = col_info.get("description", "No description")
-            col_type = col_info.get("data_type", "Unknown type")
+            col_type = col_info.get("data_type") or col_info.get("type") or "Unknown"
 
             # Classify column type
             col_classification = classify_column_type(col_name, col_desc, col_type)
