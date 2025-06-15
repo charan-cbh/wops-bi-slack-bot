@@ -1399,7 +1399,8 @@ CRITICAL RULES:
 3. Always use the full table name: {table}
 4. For date filters, use Snowflake date functions (CURRENT_DATE(), DATEADD(), etc.)
 5. Always include appropriate LIMIT unless counting
-6. NEVER use MIN() for "what are" questions - show actual data instead"""
+6. NEVER use MIN() for "what are" questions - show actual data instead
+7. Sort the data by using the audit date column based on the user question and requirement"""
 
     # Intent-specific instructions
     if intent['type'] == 'list_or_sample':
@@ -1423,6 +1424,7 @@ SELECT
     productivity_score
 FROM {table}
 WHERE agent_name IS NOT NULL
+ORDER BY updated_at DESC
 LIMIT 5;
 """
 
