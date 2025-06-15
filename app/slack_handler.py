@@ -126,7 +126,7 @@ async def process_reaction_added(event):
         ts = item.get("ts")
 
         # Create unique key for this reaction
-        reaction_key = f"{channel}_{ts}_{user}"
+        reaction_key = f"{channel}_{ts}_{user}_{reaction}"
 
         # Check if we've already processed this reaction
         if reaction_key in processed_reactions:
@@ -141,7 +141,7 @@ async def process_reaction_added(event):
         message_data = message_to_question_map[channel_ts]
 
         # Process feedback based on emoji
-        if reaction in ["white_check_mark", "heavy_check_mark", "thumbsup", "100"]:
+        if reaction in ["white_check_mark", "heavy_check_mark", "thumbsup", "100", "fire", "rocket"]:
             # Positive feedback
             print(f"✅ Received positive feedback from {user}")
             processed_reactions.add(reaction_key)
@@ -160,7 +160,7 @@ async def process_reaction_added(event):
                 thread_ts=ts
             )
 
-        elif reaction in ["x", "heavy_multiplication_x", "thumbsdown", "disappointed"]:
+        elif reaction in ["x", "heavy_multiplication_x", "thumbsdown", "disappointed", "confused"]:
             # Negative feedback
             print(f"❌ Received negative feedback from {user}")
             processed_reactions.add(reaction_key)
@@ -175,7 +175,7 @@ async def process_reaction_added(event):
             # Send acknowledgment and ask for clarification
             await send_slack_message(
                 channel,
-                f"Thanks for the feedback. I'll avoid this approach for similar questions. ❌\n\nCould you tell me what was wrong? This helps me improve.",
+                f"Thanks for the feedback. I'll avoid this approach for similar questions. ❌\n\nCould you tell me what was wrong? This helps me improve:\n• Wrong table selected?\n• Incorrect results?\n• Missing data?\n• Other issue?",
                 thread_ts=ts
             )
 
@@ -253,8 +253,16 @@ async def process_app_mention(event):
                         slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
                     except:
                         pass
-                await send_slack_message(channel_id, f"❌ Error generating response: {response}",
-                                         include_feedback_hint=False)
+
+                # Provide helpful error message
+                error_msg = f"❌ {response}\n\n"
+                error_msg += "**Suggestions:**\n"
+                error_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
+                error_msg += f"• Try `@bot debug find {clean_question}` to find relevant tables\n"
+                error_msg += "• Rephrase your question with more specific details\n"
+                error_msg += "• Mention specific metrics (e.g., 'ticket count', 'agent performance', 'AHT')"
+
+                await send_slack_message(channel_id, error_msg, include_feedback_hint=False)
             else:
                 # Send conversational response directly
                 if thinking_msg:
@@ -557,7 +565,12 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 suggestions_msg += "**Suggestions:**\n"
                 suggestions_msg += f"1. Try `@bot debug analyze {clean_question}` to see table analysis\n"
                 suggestions_msg += f"2. Try `@bot debug find {clean_question}` to find relevant tables\n"
-                suggestions_msg += "3. Rephrase your question with more specific details\n\n"
+
+                if selected_table:
+                    suggestions_msg += f"3. Try `@bot debug sample {selected_table}` to see actual columns\n"
+                    suggestions_msg += f"4. Try `@bot debug rediscover {selected_table}` to refresh table schema\n"
+
+                suggestions_msg += "5. Rephrase your question with more specific details\n\n"
                 suggestions_msg += f"Full error: {df}"
 
                 result_message = suggestions_msg
@@ -704,4 +717,11 @@ def get_status():
         "learning_enabled": True,
         "conversational_context_enabled": True,
         "emoji_feedback_enabled": True,
+        "features": {
+            "question_classification": "Improved with better volume/KPI detection",
+            "table_discovery": "Vector search with keyword fallback",
+            "sql_generation": "Context-aware with special handling for KPI questions",
+            "error_handling": "Enhanced with helpful suggestions",
+            "feedback_system": "Emoji reactions for continuous improvement"
+        }
     }

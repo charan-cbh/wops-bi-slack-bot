@@ -1,0 +1,62 @@
+{
+  "tables": {
+    "fct_zendesk__mqr_tickets": {
+      "full_name": "ANALYTICS.dbt_production.fct_zendesk__mqr_tickets",
+      "keywords": ["ticket", "tickets", "created", "volume", "count", "zendesk", "today", "yesterday"],
+      "sample_queries": [
+        "How many tickets were created today?",
+        "What is the ticket volume?",
+        "Show ticket count by date",
+        "Ticket creation trends"
+      ],
+      "key_columns": {
+        "dates": ["created_at", "created_at_pst"],
+        "dimensions": ["ticket_id", "group_name", "assignee_name", "status", "channel"],
+        "metrics": ["first_reply_time_minutes", "resolution_time_hours"]
+      }
+    },
+    "wops_agent_performance": {
+      "full_name": "ANALYTICS.dbt_production.wops_agent_performance",
+      "keywords": ["agent", "performance", "kpi", "kpis", "metrics", "aht", "csat", "fcr", "productivity"],
+      "sample_queries": [
+        "What are the KPIs that determine agent performance?",
+        "Show agent performance metrics",
+        "Agent KPI report",
+        "Which agents have the best performance?"
+      ],
+      "key_columns": {
+        "dates": ["date"],
+        "dimensions": ["agent_id", "agent_name"],
+        "metrics": ["aht_minutes", "positive_csat_percentage", "fcr_percentage", "qa_score", "productivity_score"]
+      }
+    },
+    "rpt_csat_survey_details": {
+      "full_name": "ANALYTICS.dbt_production.rpt_csat_survey_details",
+      "keywords": ["csat", "survey", "satisfaction", "feedback", "customer", "rating"],
+      "sample_queries": [
+        "What is the CSAT score?",
+        "Show customer satisfaction trends",
+        "CSAT by agent or team"
+      ],
+      "key_columns": {
+        "dates": ["created_at", "created_at_pst"],
+        "dimensions": ["ticket_id", "agent_name", "team_name"],
+        "metrics": ["csat_score", "response_rate"]
+      }
+    },
+    "zendesk_ticket_agent__handle_time": {
+      "full_name": "ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time",
+      "keywords": ["handle", "handling", "time", "aht", "duration", "agent", "ticket"],
+      "sample_queries": [
+        "What is the average handling time?",
+        "Show AHT by agent",
+        "Handling time trends"
+      ],
+      "key_columns": {
+        "dates": ["created_at"],
+        "dimensions": ["ticket_id", "agent_id", "agent_name"],
+        "metrics": ["handle_time_minutes", "handle_time_seconds"]
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@ import asyncio
 import time
 import json
 import traceback
+import re
 from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -88,6 +89,30 @@ INTENT_PATTERNS = {
     'aggregation': ['average', 'avg', 'mean', 'sum', 'total', 'median', 'min', 'max',
                     'percentile', 'p50', 'p90', 'p95', 'p99'],
     'entities': ['agent', 'team', 'leader', 'supervisor', 'ticket', 'customer', 'contact']
+}
+
+# Simple table mapping based on keywords (fallback)
+QUESTION_TO_TABLE_MAP = {
+    "tickets": {
+        "keywords": ["ticket", "tickets", "created", "volume", "count", "zendesk"],
+        "table": "ANALYTICS.dbt_production.fct_zendesk__mqr_tickets",
+        "description": "Use for ticket counts, volume, creation dates"
+    },
+    "agent_performance": {
+        "keywords": ["agent", "performance", "kpi", "kpis", "aht", "csat", "fcr", "productivity"],
+        "table": "ANALYTICS.dbt_production.wops_agent_performance",
+        "description": "Use for agent KPIs and performance metrics"
+    },
+    "csat_survey": {
+        "keywords": ["csat", "survey", "satisfaction", "feedback"],
+        "table": "ANALYTICS.dbt_production.rpt_csat_survey_details",
+        "description": "Use for CSAT survey details"
+    },
+    "ticket_handle_time": {
+        "keywords": ["handle", "handling time", "aht", "duration"],
+        "table": "ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time",
+        "description": "Use for ticket handling time analysis"
+    }
 }
 
 
@@ -290,6 +315,215 @@ def extract_key_phrases(question: str) -> List[str]:
     return list(set(phrases))  # Remove duplicates
 
 
+def classify_question_type(question: str) -> str:
+    """Simple classification - is this a data query or conversation?"""
+    question_lower = question.lower()
+
+    # FIRST: Check for follow-up indicators about previous results
+    followup_about_results = [
+        'what is the source', 'where does this data', 'where is this from',
+        'how did you get', 'what table', 'which database',
+        'explain this', 'what does this mean', 'why is it',
+        'can you clarify', 'tell me more about this',
+        'break this down', 'what are these', 'who are these'
+    ]
+
+    if any(indicator in question_lower for indicator in followup_about_results):
+        return 'conversational'
+
+    # Check for data query indicators - EXPANDED LIST
+    data_indicators = [
+        'how many', 'count', 'show me', 'list', 'find',
+        'highest', 'lowest', 'average', 'total',
+        'tickets', 'agents', 'reviews', 'performance',
+        'reply time', 'response time', 'resolution',
+        'which ticket type', 'what ticket type', 'driving',
+        'volume', 'trend', 'compare', 'by group', 'by channel',
+        'contact driver', 'handling time', 'aht', 'kpi', 'kpis',
+        'determine', 'metrics', 'performance metrics',
+        'created', 'today', 'yesterday', 'this week', 'last week',
+        'this month', 'last month', 'zendesk', 'chat', 'email',
+        'what are the', 'give me', 'provide', 'fetch',
+        'calculate', 'sum', 'aggregate', 'breakdown'
+    ]
+
+    # Check for meta/help indicators
+    meta_indicators = [
+        'what can you', 'help', 'capabilities', 'questions can',
+        'how do you work', 'what data', 'explain how',
+        'how to use', 'what commands'
+    ]
+
+    # Check for general follow-up indicators
+    general_followup_indicators = [
+        'why', 'what does that mean', 'explain that',
+        'can you elaborate', 'tell me more',
+        'what about', 'how about'
+    ]
+
+    # Check context - short questions after data results are often follow-ups
+    word_count = len(question.split())
+
+    # Special handling for "volume" questions - these are ALWAYS data queries
+    if 'volume' in question_lower and any(
+            word in question_lower for word in ['ticket', 'tickets', 'agent', 'chat', 'email']):
+        return 'sql_required'
+
+    # Check if it's asking for specific data
+    if any(indicator in question_lower for indicator in data_indicators):
+        # Double check it's not asking about the data source
+        if 'source' in question_lower or ('where' in question_lower and 'data' in question_lower):
+            return 'conversational'
+        return 'sql_required'
+
+    if any(indicator in question_lower for indicator in meta_indicators):
+        return 'conversational'
+    elif any(indicator in question_lower for indicator in general_followup_indicators):
+        # But if it also contains data indicators, it might be a data query
+        if any(indicator in question_lower for indicator in data_indicators):
+            return 'sql_required'
+        return 'conversational'
+    else:
+        # For ambiguous cases, check if it contains entities or time references
+        entities = ['ticket', 'agent', 'customer', 'zendesk', 'chat', 'email', 'messaging']
+        time_refs = ['today', 'yesterday', 'week', 'month', 'year', 'date']
+
+        if any(entity in question_lower for entity in entities) or any(time in question_lower for time in time_refs):
+            return 'sql_required'
+
+        # Very short questions are likely follow-ups
+        if word_count <= 4:
+            return 'conversational'
+
+        return 'sql_required'  # Default to trying SQL
+
+
+def extract_intent(question: str) -> dict:
+    """Extract comprehensive intent from question"""
+    question_lower = question.lower()
+    intent = {
+        'needs_count': any(p in question_lower for p in INTENT_PATTERNS['count']),
+        'time_filter': next((t for t in INTENT_PATTERNS['time_filter'] if t in question_lower), None),
+        'group_filter': next((g for g in INTENT_PATTERNS['group_filter'] if g in question_lower), None),
+        'metric_type': next((m for m in INTENT_PATTERNS['metrics'] if m in question_lower), None),
+        'needs_ranking': any(r in question_lower for r in INTENT_PATTERNS['ranking']),
+        'needs_comparison': any(c in question_lower for c in INTENT_PATTERNS['comparison']),
+        'aggregation_type': next((a for a in INTENT_PATTERNS['aggregation'] if a in question_lower), None),
+        'possible_join': any(j in question_lower for j in ['and their', 'with their', 'between', 'across']),
+        'entities': [e for e in INTENT_PATTERNS['entities'] if e in question_lower]
+    }
+    return intent
+
+
+def fallback_table_selection(question: str) -> Optional[Tuple[str, str]]:
+    """Simple keyword-based table selection as fallback"""
+    question_lower = question.lower()
+
+    # Check each table mapping
+    best_match = None
+    best_score = 0
+
+    for key, mapping in QUESTION_TO_TABLE_MAP.items():
+        score = sum(1 for keyword in mapping["keywords"] if keyword in question_lower)
+        if score > best_score:
+            best_score = score
+            best_match = mapping
+
+    if best_match and best_score > 0:
+        return best_match["table"], best_match["description"]
+
+    return None, None
+
+
+async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 4) -> List[
+    str]:
+    """Use assistant's file_search to find relevant tables from dbt manifest"""
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        print("❌ Could not create thread for vector search")
+        return []
+
+    # More explicit instructions to ensure JSON-only response
+    instructions = """You are a data expert analyzing the dbt manifest to find relevant tables.
+
+CRITICAL: You must ONLY return a JSON array. Nothing else. No explanations.
+
+Search through table DESCRIPTIONS and COLUMN DESCRIPTIONS for:
+1. Tables whose description or columns match the concepts in the question
+2. For KPIs and performance metrics, look for tables with agent performance data
+3. For ticket counts/volume, look for fact tables about tickets
+4. Consider column names and their descriptions carefully
+
+Output format - ONLY this, nothing before or after:
+["ANALYTICS.dbt_production.table1", "ANALYTICS.dbt_production.table2"]
+
+Examples:
+- Question about tickets created today → ["ANALYTICS.dbt_production.fct_zendesk__mqr_tickets"]
+- Question about agent KPIs → ["ANALYTICS.dbt_production.wops_agent_performance"]
+"""
+
+    message = f"""Find tables for: {question}
+
+Remember: Return ONLY the JSON array, no other text."""
+
+    try:
+        response = await send_message_and_run(thread_id, message, instructions)
+
+        # Try multiple extraction methods
+        tables = []
+
+        # Method 1: Direct JSON parse
+        try:
+            tables = json.loads(response.strip())
+            if isinstance(tables, list):
+                print(f"🔍 Vector store found {len(tables)} tables (direct parse)")
+                return tables[:top_k]
+        except:
+            pass
+
+        # Method 2: Extract JSON from anywhere in response
+        json_match = re.search(r'\[[\s\S]*?\]', response)
+        if json_match:
+            try:
+                tables = json.loads(json_match.group())
+                print(f"🔍 Vector store found {len(tables)} tables (regex extract)")
+                return tables[:top_k]
+            except:
+                pass
+
+        # Method 3: If response contains table names but not in JSON format
+        # Extract anything that looks like a table name (schema.table pattern)
+        table_pattern = r'ANALYTICS\.dbt_production\.\w+'
+        found_tables = re.findall(table_pattern, response)
+        if found_tables:
+            tables = list(set(found_tables))  # Remove duplicates
+            print(f"🔍 Vector store found {len(tables)} tables (pattern matching)")
+            return tables[:top_k]
+
+        print(f"⚠️ Could not extract tables from response: {response[:200]}...")
+
+        # Fallback to keyword-based selection
+        print("📋 Using keyword-based fallback for table selection")
+        fallback_table, reason = fallback_table_selection(question)
+        if fallback_table:
+            print(f"✅ Fallback found: {fallback_table} - {reason}")
+            return [fallback_table]
+
+        return []
+
+    except Exception as e:
+        print(f"❌ Error in vector search: {e}")
+        traceback.print_exc()
+
+        # Fallback to keyword-based selection
+        fallback_table, reason = fallback_table_selection(question)
+        if fallback_table:
+            print(f"✅ Fallback found: {fallback_table} - {reason}")
+            return [fallback_table]
+
+        return []
+
+
 async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, Any]:
     """Sample random rows from a table to understand its structure and content"""
     print(f"📊 Sampling {sample_size} rows from {table_name}")
@@ -366,71 +600,6 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
         print(f"❌ Error sampling table {table_name}: {str(e)}")
         traceback.print_exc()
         return {'error': str(e)}
-
-
-async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 4) -> List[
-    str]:
-    """Use assistant's file_search to find relevant tables from dbt manifest"""
-    thread_id = await get_or_create_thread(user_id, channel_id)
-    if not thread_id:
-        print("❌ Could not create thread for vector search")
-        return []
-
-    instructions = """You are a data expert analyzing the dbt manifest to find relevant tables.
-
-CRITICAL RULES:
-1. Search through table DESCRIPTIONS and COLUMN DESCRIPTIONS in the dbt manifest
-2. Look for tables whose description or columns match the concepts in the question
-3. For KPIs and performance metrics, look for tables with agent performance data
-4. Consider column names and their descriptions carefully
-5. Return ONLY tables that actually contain the requested metrics
-
-Return ONLY a JSON array of the full table names (including schema).
-Example: ["ANALYTICS.dbt_production.fct_tickets", "ANALYTICS.dbt_production.dim_agents"]
-
-Focus on finding tables that:
-- Have columns matching the metrics in the question (e.g., "handling time" → look for AHT columns)
-- Contain the specific entities mentioned (agents, tickets, etc.)
-- Are at the right granularity for the analysis
-
-Return ONLY the JSON array, nothing else."""
-
-    message = f"""Find tables for this question: {question}
-
-Key concepts to search for:
-- Metrics: {', '.join([m for m in INTENT_PATTERNS['metrics'] if m in question.lower()])}
-- Entities: {', '.join([e for e in INTENT_PATTERNS['entities'] if e in question.lower()])}
-- Look especially at column descriptions for relevant metrics"""
-
-    try:
-        response = await send_message_and_run(thread_id, message, instructions)
-
-        # Extract JSON array from response
-        if '[' in response and ']' in response:
-            json_start = response.find('[')
-            json_end = response.rfind(']') + 1
-            json_str = response[json_start:json_end]
-            tables = json.loads(json_str)
-
-            print(f"🔍 Vector store found {len(tables)} relevant tables based on descriptions")
-            for i, table in enumerate(tables[:top_k], 1):
-                print(f"   {i}. {table}")
-
-            # Return the tables if we found any
-            if tables:
-                return tables[:top_k]
-            else:
-                print("⚠️ Vector search returned empty list")
-                return []
-        else:
-            print(f"⚠️ Could not extract JSON from vector search response")
-            print(f"⚠️ Raw response: {response[:200]}...")
-            return []
-
-    except Exception as e:
-        print(f"❌ Error in vector search: {e}")
-        traceback.print_exc()
-        return []
 
 
 async def select_best_table_using_samples(question: str, candidate_tables: List[str], user_id: str, channel_id: str) -> \
@@ -517,7 +686,7 @@ Be specific about WHY this table is best - mention the actual column names that 
             # Filter to show only relevant columns based on question
             relevant_keywords = ['kpi', 'performance', 'agent', 'aht', 'handling', 'time', 'score',
                                  'csat', 'satisfaction', 'fcr', 'resolution', 'rate', 'percentage',
-                                 'productivity', 'quality', 'metric']
+                                 'productivity', 'quality', 'metric', 'volume', 'count', 'created']
 
             # Add keywords from the question
             question_words = question.lower().split()
@@ -721,85 +890,6 @@ async def record_feedback(question: str, sql: str, table: str, feedback_type: st
     print(
         f"{'✅' if feedback_type == 'positive' else '❌'} Recorded {feedback_type} feedback for question: {question[:50]}...")
     print(f"   Stats: {feedback_data['positive_count']} positive, {feedback_data['negative_count']} negative")
-
-
-def classify_question_type(question: str) -> str:
-    """Simple classification - is this a data query or conversation?"""
-    question_lower = question.lower()
-
-    # FIRST: Check for follow-up indicators about previous results
-    followup_about_results = [
-        'what is the source', 'where does this data', 'where is this from',
-        'how did you get', 'what table', 'which database',
-        'explain this', 'what does this mean', 'why is it',
-        'can you clarify', 'tell me more about this',
-        'break this down', 'what are these', 'who are these'
-    ]
-
-    if any(indicator in question_lower for indicator in followup_about_results):
-        return 'conversational'
-
-    # Check for data query indicators
-    data_indicators = [
-        'how many', 'count', 'show me', 'list', 'find',
-        'highest', 'lowest', 'average', 'total',
-        'tickets', 'agents', 'reviews', 'performance',
-        'reply time', 'response time', 'resolution',
-        'which ticket type', 'what ticket type', 'driving',
-        'volume', 'trend', 'compare', 'by group', 'by channel',
-        'contact driver', 'handling time', 'aht', 'kpi', 'kpis',
-        'determine', 'metrics', 'performance metrics'
-    ]
-
-    # Check for meta/help indicators
-    meta_indicators = [
-        'what can you', 'help', 'capabilities', 'questions can',
-        'how do you work', 'what data', 'explain how'
-    ]
-
-    # Check for general follow-up indicators
-    general_followup_indicators = [
-        'why', 'what does that mean', 'explain that',
-        'can you elaborate', 'tell me more',
-        'what about', 'how about'
-    ]
-
-    # Check context - short questions after data results are often follow-ups
-    word_count = len(question.split())
-    if word_count <= 8 and any(word in question_lower for word in ['this', 'that', 'these', 'it']):
-        return 'conversational'
-
-    if any(indicator in question_lower for indicator in meta_indicators):
-        return 'conversational'
-    elif any(indicator in question_lower for indicator in general_followup_indicators):
-        return 'conversational'
-    elif any(indicator in question_lower for indicator in data_indicators):
-        # Double check it's not asking about the data source
-        if 'source' in question_lower or 'where' in question_lower and 'data' in question_lower:
-            return 'conversational'
-        return 'sql_required'
-    else:
-        # For ambiguous cases, check if it's a short question
-        if word_count <= 6:
-            return 'conversational'  # Likely a follow-up
-        return 'sql_required'  # Default to trying SQL
-
-
-def extract_intent(question: str) -> dict:
-    """Extract comprehensive intent from question"""
-    question_lower = question.lower()
-    intent = {
-        'needs_count': any(p in question_lower for p in INTENT_PATTERNS['count']),
-        'time_filter': next((t for t in INTENT_PATTERNS['time_filter'] if t in question_lower), None),
-        'group_filter': next((g for g in INTENT_PATTERNS['group_filter'] if g in question_lower), None),
-        'metric_type': next((m for m in INTENT_PATTERNS['metrics'] if m in question_lower), None),
-        'needs_ranking': any(r in question_lower for r in INTENT_PATTERNS['ranking']),
-        'needs_comparison': any(c in question_lower for c in INTENT_PATTERNS['comparison']),
-        'aggregation_type': next((a for a in INTENT_PATTERNS['aggregation'] if a in question_lower), None),
-        'possible_join': any(j in question_lower for j in ['and their', 'with their', 'between', 'across']),
-        'entities': [e for e in INTENT_PATTERNS['entities'] if e in question_lower]
-    }
-    return intent
 
 
 async def discover_table_schema(table_name: str) -> dict:
@@ -1182,7 +1272,6 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
 
         if schema.get('error'):
             print(f"⚠️ Schema discovery failed: {schema.get('error')}")
-            # Don't fail completely, let assistant try with limited info
             schema = {
                 'table': selected_table,
                 'columns': [],
@@ -1207,6 +1296,17 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     intent = extract_intent(user_question)
     print(f"🎯 Extracted intent: {intent}")
 
+    # Determine query type based on question
+    question_lower = user_question.lower()
+    is_asking_what_kpis = any(phrase in question_lower for phrase in [
+        "what are the kpis", "which kpis", "what kpis", "list kpis",
+        "show me kpis", "kpi columns", "performance metrics"
+    ])
+
+    is_asking_count = any(phrase in question_lower for phrase in [
+        "how many", "count", "number of", "total", "volume"
+    ])
+
     # Build comprehensive instructions
     instructions = f"""You are a SQL expert. Generate SQL for the following question using the selected table.
 
@@ -1226,8 +1326,14 @@ CRITICAL RULES:
 5. Include meaningful column aliases
 6. Sort results appropriately
 7. Limit results to 100 rows unless specifically asked for more
-8. For "KPIs that determine agent performance", include multiple relevant metrics (AHT, CSAT, FCR, etc.)
-9. Use appropriate aggregations when needed (AVG, SUM, COUNT, etc.)
+8. For "What are the KPIs" questions, SELECT a sample row to show all KPI columns
+9. For COUNT/volume questions, use COUNT(*) with appropriate filters
+10. Use appropriate aggregations when needed (AVG, SUM, COUNT, etc.)
+
+SPECIAL HANDLING:
+- If asked "What are the KPIs that determine agent performance?", show a sample of data with all performance metric columns
+- If asked for ticket volume/count, use COUNT(*) with date filters
+- If asked for specific metrics, calculate them appropriately
 
 Return ONLY the SQL query, no explanations."""
 
@@ -1240,24 +1346,31 @@ Return ONLY the SQL query, no explanations."""
     if schema.get('columns'):
         all_columns = schema['columns']
 
-        # Find columns that might be relevant
-        relevant_keywords = []
+        # Special handling for "what are the KPIs" questions
+        if is_asking_what_kpis:
+            message_parts.append("\nIMPORTANT: The user is asking WHAT KPIs exist, not for calculations.")
+            message_parts.append(
+                "Show a sample row with all KPI/metric columns to demonstrate what metrics are available.")
 
-        # Add keywords based on the question
-        if 'kpi' in user_question.lower() or 'performance' in user_question.lower():
-            relevant_keywords.extend(['kpi', 'performance', 'score', 'rate', 'percentage', 'aht',
-                                      'csat', 'fcr', 'quality', 'productivity', 'metric'])
-        if 'agent' in user_question.lower():
-            relevant_keywords.extend(['agent', 'employee', 'staff', 'rep'])
-        if 'contact' in user_question.lower() or 'driver' in user_question.lower():
-            relevant_keywords.extend(['contact', 'driver', 'reason', 'category', 'type'])
-        if 'handling' in user_question.lower() or 'aht' in user_question.lower():
-            relevant_keywords.extend(['handling', 'time', 'aht', 'duration', 'seconds', 'minutes'])
+            # Find KPI-related columns
+            kpi_keywords = ['kpi', 'performance', 'score', 'rate', 'percentage', 'aht',
+                            'csat', 'fcr', 'quality', 'productivity', 'metric', 'avg',
+                            'resolution', 'satisfaction', 'efficiency']
+            kpi_cols = [col for col in all_columns if any(kw in col.lower() for kw in kpi_keywords)]
 
-        relevant_cols = [col for col in all_columns if any(kw in col.lower() for kw in relevant_keywords)]
+            if kpi_cols:
+                message_parts.append(f"\nKPI columns found: {', '.join(kpi_cols[:20])}")
+                message_parts.append("Generate SQL to show these KPI columns with sample data (LIMIT 5)")
 
-        if relevant_cols:
-            message_parts.append(f"\nPotentially relevant columns: {', '.join(relevant_cols[:20])}")
+        # Special handling for count/volume questions
+        elif is_asking_count:
+            message_parts.append("\nIMPORTANT: Use COUNT(*) for volume/count questions")
+
+            # Find date columns for filtering
+            date_cols = [col for col in all_columns if
+                         any(d in col.lower() for d in ['date', 'created', 'updated', 'time', 'timestamp'])]
+            if date_cols and 'today' in question_lower:
+                message_parts.append(f"\nUse date column '{date_cols[0]}' with CURRENT_DATE() for today's filter")
 
         # Add intent-based hints
         if intent['time_filter']:
@@ -1271,9 +1384,6 @@ Return ONLY the SQL query, no explanations."""
 
         if intent['aggregation_type']:
             message_parts.append(f"\nUse {intent['aggregation_type'].upper()} aggregation function")
-
-        if intent['entities']:
-            message_parts.append(f"\nFocus on these entities: {', '.join(intent['entities'])}")
 
     message = "\n".join(message_parts)
 
@@ -1659,6 +1769,7 @@ def test_question_classification():
         ("Find tickets created yesterday", "sql_required"),
         ("Compare agent performance across teams", "sql_required"),
         ("What's the trend in ticket volume this month?", "sql_required"),
+        ("What is the ticket volume for today?", "sql_required"),  # This should be sql_required
 
         # Conversational follow-ups about data
         ("What is the source for this data?", "conversational"),
