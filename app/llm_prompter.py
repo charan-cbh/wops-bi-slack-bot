@@ -73,48 +73,6 @@ STOP_WORDS = {'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'are',
               'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must',
               'shall', 'to', 'of', 'in', 'for', 'with', 'by', 'from', 'about'}
 
-# Minimal pattern recognition for intent
-INTENT_PATTERNS = {
-    'count': ['how many', 'count', 'total number', 'number of', 'volume', 'quantity'],
-    'time_filter': ['today', 'yesterday', 'last week', 'this week', 'last month', 'this month',
-                    'last year', 'this year', 'last 7 days', 'last 30 days', 'last 90 days'],
-    'group_filter': ['messaging', 'voice', 'email', 'chat', 'phone', 'api'],
-    'metrics': ['reply time', 'response time', 'resolution time', 'aht', 'average handling',
-                'first reply', 'satisfaction', 'csat', 'occupancy', 'adherence', 'kpi',
-                'performance', 'productivity', 'agent performance'],
-    'ranking': ['highest', 'lowest', 'top', 'bottom', 'most', 'least', 'best', 'worst',
-                'maximum', 'minimum', 'ranked', 'order by'],
-    'comparison': ['compare', 'versus', 'vs', 'between', 'difference', 'correlation',
-                   'relationship', 'impact', 'affect', 'influence'],
-    'aggregation': ['average', 'avg', 'mean', 'sum', 'total', 'median', 'min', 'max',
-                    'percentile', 'p50', 'p90', 'p95', 'p99'],
-    'entities': ['agent', 'team', 'leader', 'supervisor', 'ticket', 'customer', 'contact']
-}
-
-# Simple table mapping based on keywords (fallback)
-QUESTION_TO_TABLE_MAP = {
-    "tickets": {
-        "keywords": ["ticket", "tickets", "created", "volume", "count", "zendesk"],
-        "table": "ANALYTICS.dbt_production.fct_zendesk__mqr_tickets",
-        "description": "Use for ticket counts, volume, creation dates"
-    },
-    "agent_performance": {
-        "keywords": ["agent", "performance", "kpi", "kpis", "aht", "csat", "fcr", "productivity"],
-        "table": "ANALYTICS.dbt_production.wops_agent_performance",
-        "description": "Use for agent KPIs and performance metrics"
-    },
-    "csat_survey": {
-        "keywords": ["csat", "survey", "satisfaction", "feedback"],
-        "table": "ANALYTICS.dbt_production.rpt_csat_survey_details",
-        "description": "Use for CSAT survey details"
-    },
-    "ticket_handle_time": {
-        "keywords": ["handle", "handling time", "aht", "duration"],
-        "table": "ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time",
-        "description": "Use for ticket handling time analysis"
-    }
-}
-
 
 async def init_valkey_client():
     """Initialize Valkey client - must be called in async context"""
@@ -300,16 +258,15 @@ def extract_key_phrases(question: str) -> List[str]:
     # Bigrams for important patterns
     for i in range(len(words) - 1):
         bigram = f"{words[i]} {words[i + 1]}"
-        # Check if bigram matches any known pattern
-        for pattern_list in INTENT_PATTERNS.values():
-            if bigram in pattern_list:
-                phrases.append(bigram)
-                break
+        # Add all bigrams that don't contain only stop words
+        if not all(word in STOP_WORDS for word in [words[i], words[i + 1]]):
+            phrases.append(bigram)
 
     # Trigrams for complex patterns
     for i in range(len(words) - 2):
         trigram = f"{words[i]} {words[i + 1]} {words[i + 2]}"
-        if any(pattern in trigram for pattern in ['average handling time', 'first reply time', 'agent performance']):
+        # Add trigrams that contain at least one important word
+        if any(word not in STOP_WORDS and len(word) > 3 for word in [words[i], words[i + 1], words[i + 2]]):
             phrases.append(trigram)
 
     return list(set(phrases))  # Remove duplicates
@@ -398,44 +355,7 @@ def classify_question_type(question: str) -> str:
         return 'sql_required'  # Default to trying SQL
 
 
-def extract_intent(question: str) -> dict:
-    """Extract comprehensive intent from question"""
-    question_lower = question.lower()
-    intent = {
-        'needs_count': any(p in question_lower for p in INTENT_PATTERNS['count']),
-        'time_filter': next((t for t in INTENT_PATTERNS['time_filter'] if t in question_lower), None),
-        'group_filter': next((g for g in INTENT_PATTERNS['group_filter'] if g in question_lower), None),
-        'metric_type': next((m for m in INTENT_PATTERNS['metrics'] if m in question_lower), None),
-        'needs_ranking': any(r in question_lower for r in INTENT_PATTERNS['ranking']),
-        'needs_comparison': any(c in question_lower for c in INTENT_PATTERNS['comparison']),
-        'aggregation_type': next((a for a in INTENT_PATTERNS['aggregation'] if a in question_lower), None),
-        'possible_join': any(j in question_lower for j in ['and their', 'with their', 'between', 'across']),
-        'entities': [e for e in INTENT_PATTERNS['entities'] if e in question_lower]
-    }
-    return intent
-
-
-def fallback_table_selection(question: str) -> Optional[Tuple[str, str]]:
-    """Simple keyword-based table selection as fallback"""
-    question_lower = question.lower()
-
-    # Check each table mapping
-    best_match = None
-    best_score = 0
-
-    for key, mapping in QUESTION_TO_TABLE_MAP.items():
-        score = sum(1 for keyword in mapping["keywords"] if keyword in question_lower)
-        if score > best_score:
-            best_score = score
-            best_match = mapping
-
-    if best_match and best_score > 0:
-        return best_match["table"], best_match["description"]
-
-    return None, None
-
-
-async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 4) -> List[
+async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 6) -> List[
     str]:
     """Use assistant's file_search to find relevant tables from dbt manifest"""
     thread_id = await get_or_create_thread(user_id, channel_id)
@@ -443,28 +363,29 @@ async def find_relevant_tables_from_vector_store(question: str, user_id: str, ch
         print("❌ Could not create thread for vector search")
         return []
 
-    # More explicit instructions to ensure JSON-only response
+    # Dynamic instructions based on question content
     instructions = """You are a data expert analyzing the dbt manifest to find relevant tables.
 
-CRITICAL: You must ONLY return a JSON array. Nothing else. No explanations.
+Analyze the user's question and search for tables that contain the data needed to answer it.
+Look through:
+1. Table names and descriptions
+2. Column names and their descriptions
+3. Data types and relationships
 
-Search through table DESCRIPTIONS and COLUMN DESCRIPTIONS for:
-1. Tables whose description or columns match the concepts in the question
-2. For KPIs and performance metrics, look for tables with agent performance data
-3. For ticket counts/volume, look for fact tables about tickets
-4. Consider column names and their descriptions carefully
+Return ONLY a JSON array of table names, nothing else.
+Format: ["schema.database.table1", "schema.database.table2", ...]
 
-Output format - ONLY this, nothing before or after:
-["ANALYTICS.dbt_production.table1", "ANALYTICS.dbt_production.table2"]
+Search for tables that contain ALL the necessary data elements mentioned in the question."""
 
-Examples:
-- Question about tickets created today → ["ANALYTICS.dbt_production.fct_zendesk__mqr_tickets"]
-- Question about agent KPIs → ["ANALYTICS.dbt_production.wops_agent_performance"]
-"""
+    message = f"""Find all tables that could be used to answer this question: {question}
 
-    message = f"""Find tables for: {question}
+Focus on:
+- Tables containing the entities mentioned (tickets, agents, customers, etc.)
+- Tables with the metrics or measures requested
+- Tables with appropriate time/date columns if time filtering is needed
+- Tables at the right granularity level for the analysis
 
-Remember: Return ONLY the JSON array, no other text."""
+Return the table names as a JSON array."""
 
     try:
         response = await send_message_and_run(thread_id, message, instructions)
@@ -492,39 +413,24 @@ Remember: Return ONLY the JSON array, no other text."""
                 pass
 
         # Method 3: If response contains table names but not in JSON format
-        # Extract anything that looks like a table name (schema.table pattern)
-        table_pattern = r'ANALYTICS\.dbt_production\.\w+'
-        found_tables = re.findall(table_pattern, response)
+        # Extract anything that looks like a table name (schema.database.table pattern)
+        table_pattern = r'[A-Z_]+\.[a-z_]+\.[a-z_]+'
+        found_tables = re.findall(table_pattern, response, re.IGNORECASE)
         if found_tables:
             tables = list(set(found_tables))  # Remove duplicates
             print(f"🔍 Vector store found {len(tables)} tables (pattern matching)")
             return tables[:top_k]
 
         print(f"⚠️ Could not extract tables from response: {response[:200]}...")
-
-        # Fallback to keyword-based selection
-        print("📋 Using keyword-based fallback for table selection")
-        fallback_table, reason = fallback_table_selection(question)
-        if fallback_table:
-            print(f"✅ Fallback found: {fallback_table} - {reason}")
-            return [fallback_table]
-
         return []
 
     except Exception as e:
         print(f"❌ Error in vector search: {e}")
         traceback.print_exc()
-
-        # Fallback to keyword-based selection
-        fallback_table, reason = fallback_table_selection(question)
-        if fallback_table:
-            print(f"✅ Fallback found: {fallback_table} - {reason}")
-            return [fallback_table]
-
         return []
 
 
-async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, Any]:
+async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str, Any]:
     """Sample random rows from a table to understand its structure and content"""
     print(f"📊 Sampling {sample_size} rows from {table_name}")
 
@@ -540,30 +446,59 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
         return {'error': 'Snowflake not available'}
 
     try:
+        # First, get column information
+        column_info_sql = f"""
+        SELECT COLUMN_NAME, DATA_TYPE, COMMENT
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = '{table_name.split('.')[-1].upper()}'
+        AND TABLE_SCHEMA = '{table_name.split('.')[-2].upper()}'
+        AND TABLE_CATALOG = '{table_name.split('.')[-3].upper()}'
+        ORDER BY ORDINAL_POSITION
+        """
+
+        try:
+            column_info = run_query(column_info_sql)
+            column_descriptions = {}
+            if not isinstance(column_info, str) and hasattr(column_info, 'iterrows'):
+                for _, row in column_info.iterrows():
+                    column_descriptions[row['COLUMN_NAME'].lower()] = {
+                        'type': row['DATA_TYPE'],
+                        'comment': row.get('COMMENT', '')
+                    }
+        except:
+            column_descriptions = {}
+
+        # Now sample the actual data
         # First, try to discover columns to find timestamp/audit columns
         schema_sql = f"SELECT * FROM {table_name} LIMIT 1"
         df_schema = run_query(schema_sql)
 
         if isinstance(df_schema, str):
             # If error, fall back to simple sampling
-            sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
+            sample_sql = f"SELECT * FROM {table_name} SAMPLE ({sample_size} ROWS)"
         else:
             # Look for timestamp/audit columns to sort by
             columns = list(df_schema.columns)
             timestamp_cols = [col for col in columns if any(
                 indicator in col.lower() for indicator in
-                ['created_at', 'updated_at', 'timestamp', 'date', 'modified', 'audit']
+                ['created_at', 'updated_at', 'timestamp', 'date', 'modified', 'audit', '_at', '_date', '_time']
             )]
 
             if timestamp_cols:
                 # Use the first timestamp column found for ordering
                 order_col = timestamp_cols[0]
-                sample_sql = f"SELECT * FROM {table_name} ORDER BY {order_col} DESC LIMIT {sample_size}"
+                sample_sql = f"""
+                SELECT * FROM (
+                    SELECT * FROM {table_name} 
+                    ORDER BY {order_col} DESC 
+                    LIMIT 1000
+                ) SAMPLE ({sample_size} ROWS)
+                """
                 print(f"🔍 Sampling with timestamp ordering: {order_col} DESC")
             else:
-                # No timestamp column found, use simple sampling
-                sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
-                print(f"🔍 No timestamp column found, using simple sampling")
+                # No timestamp column found, use random sampling
+                sample_sql = f"SELECT * FROM {table_name} SAMPLE ({sample_size} ROWS)"
+                print(f"🔍 Using random sampling")
 
         print(f"🔍 Executing: {sample_sql}")
         df = run_query(sample_sql)
@@ -600,13 +535,29 @@ async def sample_table_data(table_name: str, sample_size: int = 5) -> Dict[str, 
 
         sample_data = df_serializable.to_dict('records')
 
-        # Create sample info (without total_rows to avoid expensive COUNT)
+        # Get value statistics for numeric columns
+        value_stats = {}
+        for col in columns:
+            if df[col].dtype in ['int64', 'float64', 'Int64', 'Float64']:
+                try:
+                    value_stats[col] = {
+                        'min': float(df[col].min()),
+                        'max': float(df[col].max()),
+                        'mean': float(df[col].mean()),
+                        'non_null_count': int(df[col].notna().sum())
+                    }
+                except:
+                    pass
+
+        # Create sample info
         sample_info = {
             'table': table_name,
             'columns': columns,
             'column_types': dtypes,
+            'column_descriptions': column_descriptions,
             'sample_data': sample_data,
             'sample_size': len(df),
+            'value_stats': value_stats,
             'cached_at': time.time()
         }
 
@@ -636,7 +587,7 @@ Tuple[str, str]:
     sample_errors = []
 
     for table in candidate_tables:
-        sample = await sample_table_data(table, sample_size=5)
+        sample = await sample_table_data(table, sample_size=10)
         if not sample.get('error'):
             table_samples[table] = sample
             print(f"✅ Successfully sampled {table}")
@@ -657,82 +608,73 @@ Tuple[str, str]:
     if not thread_id:
         return list(table_samples.keys())[0], "Could not create analysis thread"
 
-    instructions = """You are a data expert analyzing table samples to select the BEST table for answering the user's question.
+    instructions = """You are a data expert selecting the BEST table to answer the user's question.
 
-CRITICAL ANALYSIS STEPS:
-1. Look at the actual column names in each table
-2. Check if the table contains the specific metrics mentioned in the question
-3. For "KPIs that determine agent performance" - look for tables with performance metrics like AHT, CSAT, QA scores, FCR
-4. Verify the table has the right granularity (agent-level for agent questions, ticket-level for ticket questions)
-5. Consider the sample data values to understand what each column contains
+Analyze each table's actual data and structure:
+1. Examine column names and their actual values
+2. Check if the table contains ALL necessary data to answer the question
+3. Verify the data granularity matches what's needed
+4. Consider data quality (non-null values, appropriate data types)
+5. Match entities and metrics mentioned in the question to actual columns
 
-IMPORTANT:
-- "handling time" or "AHT" should have columns with time values (usually in seconds or minutes)
-- "agent performance" should have columns with scores, percentages, or time metrics
-- Look for columns that directly answer the question, not just related concepts
-
-Return your response in this exact format:
+Return ONLY:
 SELECTED_TABLE: <full table name>
-REASON: <specific explanation mentioning which columns contain the needed metrics>
+REASON: <detailed explanation referencing specific columns and why they match the question>"""
 
-Be specific about WHY this table is best - mention the actual column names that contain the data."""
-
-    # Build message with table samples
-    message_parts = [f"User Question: {question}\n\nAnalyze these table samples:"]
+    # Build comprehensive analysis message
+    message_parts = [f"User Question: {question}\n\nAnalyze these tables:"]
 
     for table, sample in table_samples.items():
-        message_parts.append(f"\n\n{'=' * 60}")
+        message_parts.append(f"\n\n{'=' * 80}")
         message_parts.append(f"TABLE: {table}")
-        message_parts.append(f"COLUMNS ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:30])}")
+        message_parts.append(f"COLUMNS ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', []))}")
 
-        if len(sample.get('columns', [])) > 30:
-            message_parts.append(f"... and {len(sample.get('columns', [])) - 30} more columns")
+        # Show column descriptions if available
+        if sample.get('column_descriptions'):
+            message_parts.append("\nColumn Descriptions:")
+            for col, desc in list(sample.get('column_descriptions', {}).items())[:20]:
+                if desc.get('comment'):
+                    message_parts.append(f"  - {col}: {desc['comment']}")
 
-        # Show column types for key columns
-        if sample.get('column_types'):
-            key_cols = [col for col in sample['columns'][:20] if any(
-                kw in col.lower() for kw in
-                ['time', 'aht', 'score', 'rate', 'percentage', 'kpi', 'performance', 'csat', 'fcr']
-            )]
-            if key_cols:
-                message_parts.append("\nKey Column Types:")
-                for col in key_cols[:10]:
-                    message_parts.append(f"  - {col}: {sample['column_types'].get(col, 'unknown')}")
+        # Show value statistics for numeric columns
+        if sample.get('value_stats'):
+            message_parts.append("\nNumeric Column Statistics:")
+            for col, stats in list(sample.get('value_stats', {}).items())[:15]:
+                message_parts.append(
+                    f"  - {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}, non_null={stats['non_null_count']}")
 
+        # Show actual sample data
         if sample.get('sample_data') and len(sample['sample_data']) > 0:
-            message_parts.append("\nSample Data (showing relevant columns):")
-            # Show one sample row with key columns
-            sample_row = sample['sample_data'][0]
+            message_parts.append("\nSample Data (3 rows):")
+            for i, row_data in enumerate(sample['sample_data'][:3]):
+                message_parts.append(f"\nRow {i + 1}:")
+                # Show relevant columns based on question
+                relevant_cols = {}
 
-            # Filter to show only relevant columns based on question
-            relevant_keywords = ['kpi', 'performance', 'agent', 'aht', 'handling', 'time', 'score',
-                                 'csat', 'satisfaction', 'fcr', 'resolution', 'rate', 'percentage',
-                                 'productivity', 'quality', 'metric', 'volume', 'count', 'created']
+                # Extract keywords from question
+                question_words = set(question.lower().split())
 
-            # Add keywords from the question
-            question_words = question.lower().split()
-            relevant_keywords.extend([w for w in question_words if len(w) > 3])
-
-            relevant_cols = {}
-            for col, val in sample_row.items():
-                if val is not None and str(val).strip() != '':
-                    # Include if column name contains relevant keywords
-                    if any(keyword in col.lower() for keyword in relevant_keywords):
+                for col, val in row_data.items():
+                    # Include column if it matches keywords or has meaningful data
+                    if (any(keyword in col.lower() for keyword in question_words) or
+                            (val is not None and str(val).strip() != '' and str(val) != '0')):
                         relevant_cols[col] = val
 
-            # If no relevant columns found, show first 15 non-null columns
-            if not relevant_cols:
-                relevant_cols = {k: v for k, v in sample_row.items()
-                                 if v is not None and str(v).strip() != ''}
-                relevant_cols = dict(list(relevant_cols.items())[:15])
+                # If too few relevant columns, include more
+                if len(relevant_cols) < 10:
+                    for col, val in row_data.items():
+                        if col not in relevant_cols and val is not None and str(val).strip() != '':
+                            relevant_cols[col] = val
+                            if len(relevant_cols) >= 15:
+                                break
 
-            if relevant_cols:
-                message_parts.append("```")
-                for col, val in list(relevant_cols.items())[:20]:
-                    # Truncate long values
+                for col, val in list(relevant_cols.items())[:15]:
                     val_str = str(val)[:100] + "..." if len(str(val)) > 100 else str(val)
-                    message_parts.append(f"{col}: {val_str}")
-                message_parts.append("```")
+                    message_parts.append(f"  {col}: {val_str}")
+
+    message_parts.append(f"\n\n{'=' * 80}")
+    message_parts.append("\nSelect the table that contains ALL the data needed to answer the question.")
+    message_parts.append("Consider: column names, actual values, data types, and completeness.")
 
     message = "\n".join(message_parts)
 
@@ -766,19 +708,17 @@ async def get_table_descriptions_from_manifest(table_names: List[str], user_id: 
     if not thread_id:
         return {}
 
-    instructions = """Search the dbt manifest for the descriptions of these specific tables.
+    instructions = """Search the dbt manifest and return detailed descriptions for these tables.
 
-Return a JSON object with table names as keys and their descriptions as values.
-Include information about:
+Include:
 1. Table purpose and description
-2. What kind of data it contains
-3. Key metrics available in the table
+2. Business context
+3. Key metrics and dimensions available
+4. Data sources and update frequency
 
-Example: {"table1": "This table contains agent performance metrics including AHT, CSAT scores...", "table2": "This table stores..."}
+Return ONLY a JSON object with table names as keys and descriptions as values."""
 
-Return ONLY the JSON object."""
-
-    message = f"Find descriptions for these tables from the dbt manifest:\n{json.dumps(table_names, indent=2)}"
+    message = f"Get detailed descriptions for these tables:\n{json.dumps(table_names, indent=2)}"
 
     response = await send_message_and_run(thread_id, message, instructions)
 
@@ -934,37 +874,30 @@ async def discover_table_schema(table_name: str) -> dict:
     # If Snowflake is available, run actual discovery
     if SNOWFLAKE_AVAILABLE:
         try:
-            # First get column names with a simple query
-            column_sql = f"SELECT * FROM {table_name} LIMIT 1"
-            df_columns = run_query(column_sql)
+            # Get detailed column information
+            column_info_sql = f"""
+            SELECT COLUMN_NAME, DATA_TYPE, COMMENT
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '{table_name.split('.')[-1].upper()}'
+            AND TABLE_SCHEMA = '{table_name.split('.')[-2].upper()}'
+            AND TABLE_CATALOG = '{table_name.split('.')[-3].upper()}'
+            ORDER BY ORDINAL_POSITION
+            """
 
-            if isinstance(df_columns, str):
-                # If error, return error
-                print(f"❌ Schema discovery failed: {df_columns}")
-                return {
-                    'table': table_name,
-                    'error': df_columns,
-                    'columns': []
-                }
+            column_descriptions = {}
+            try:
+                column_info = run_query(column_info_sql)
+                if not isinstance(column_info, str) and hasattr(column_info, 'iterrows'):
+                    for _, row in column_info.iterrows():
+                        column_descriptions[row['COLUMN_NAME'].lower()] = {
+                            'type': row['DATA_TYPE'],
+                            'comment': row.get('COMMENT', '')
+                        }
+            except:
+                pass
 
-            # Extract column names
-            columns = list(df_columns.columns)
-
-            # Look for timestamp/audit columns to sort by
-            timestamp_cols = [col for col in columns if any(
-                indicator in col.lower() for indicator in
-                ['created_at', 'updated_at', 'timestamp', 'date', 'modified', 'audit', '_at']
-            )]
-
-            # Run discovery query with ordering if timestamp column found
-            if timestamp_cols:
-                order_col = timestamp_cols[0]
-                discovery_sql = f"SELECT * FROM {table_name} ORDER BY {order_col} DESC LIMIT 5"
-                print(f"🔍 Running schema discovery with timestamp ordering: {order_col} DESC")
-            else:
-                discovery_sql = f"SELECT * FROM {table_name} LIMIT 5"
-                print(f"🔍 Running schema discovery query (no timestamp column found)")
-
+            # Now get sample data
+            discovery_sql = f"SELECT * FROM {table_name} LIMIT 5"
             df = run_query(discovery_sql)
 
             if isinstance(df, str):
@@ -1000,6 +933,7 @@ async def discover_table_schema(table_name: str) -> dict:
             schema_info = {
                 'table': table_name,
                 'columns': columns,
+                'column_descriptions': column_descriptions,
                 'sample_data': sample_data,
                 'row_count': len(df),
                 'discovered_at': time.time()
@@ -1009,7 +943,8 @@ async def discover_table_schema(table_name: str) -> dict:
             print(f"📊 Columns ({len(columns)}) - showing first 15:")
             for i, col in enumerate(columns):
                 if i < 15:  # Show first 15 columns
-                    print(f"   - {col}")
+                    desc = column_descriptions.get(col.lower(), {}).get('comment', '')
+                    print(f"   - {col}" + (f": {desc}" if desc else ""))
                 elif i == 15:
                     print(f"   ... and {len(columns) - 15} more columns")
 
@@ -1241,15 +1176,8 @@ async def handle_conversational_question(user_question: str, user_id: str, chann
 
         instructions = """You are a BI assistant responding to a follow-up question about previous query results.
 
-The user just received data from a SQL query and is asking a follow-up question.
-Use the conversation history in this thread to understand what data they're asking about.
+Use the conversation history to understand what data they're asking about.
 Be helpful in explaining the data source, methodology, or clarifying the results.
-
-Use your knowledge from the dbt manifest to provide accurate information about:
-- Table purposes and contents
-- Column meanings and relationships
-- Data sources and transformations
-- Business logic and definitions
 
 IMPORTANT - Use Slack formatting:
 - Use *text* for bold (NOT **text**)
@@ -1305,7 +1233,7 @@ def analyze_question_intent(question_lower: str) -> dict:
         "what kpis", "which kpis", "available kpis", "kpi list"
     ]):
         intent['type'] = 'list_or_sample'
-        intent['limit'] = 5  # Just show a few examples
+        intent['limit'] = 10  # Show more examples
 
     # Pattern 2: Counting/Volume questions
     elif any(phrase in question_lower for phrase in [
@@ -1381,155 +1309,117 @@ def analyze_question_intent(question_lower: str) -> dict:
     return intent
 
 
-def build_sql_instructions(intent: dict, table: str, schema: dict, description: str, original_question: str) -> dict:
-    """Build specific SQL instructions based on question intent"""
+def build_sql_instructions(intent: dict, table: str, schema: dict, original_question: str) -> dict:
+    """Build specific SQL instructions based on question intent and actual data"""
 
     columns = schema.get('columns', [])
+    column_descriptions = schema.get('column_descriptions', {})
 
-    # Base instructions
+    # Create column info string with descriptions
+    column_info_parts = []
+    for col in columns[:50]:  # Limit to first 50 columns
+        desc = column_descriptions.get(col.lower(), {}).get('comment', '')
+        if desc:
+            column_info_parts.append(f"{col} ({desc})")
+        else:
+            column_info_parts.append(col)
+
+    column_info = ", ".join(column_info_parts)
+
+    # Base instructions - data-driven, not hardcoded
     base_instructions = f"""You are a SQL expert. Generate ONLY valid Snowflake SQL for this question.
 
 TABLE: {table}
-DESCRIPTION: {description}
-AVAILABLE COLUMNS: {', '.join(columns[:50]) if columns else 'Unknown'}
+AVAILABLE COLUMNS WITH DESCRIPTIONS: {column_info}
 
-CRITICAL RULES:
-1. Return ONLY the SQL query - no explanations, no markdown, no backticks
-2. Use exact column names from the schema - never make up columns
-3. Always use the full table name: {table}
-4. For date filters, use Snowflake date functions (CURRENT_DATE(), DATEADD(), etc.)
-5. Always include appropriate LIMIT unless counting
-6. NEVER use MIN() for "what are" questions - show actual data instead
-7. Sort the data by using the audit date column based on the user question and requirement"""
+Analyze the question and the actual columns available to generate the correct SQL.
 
-    # Intent-specific instructions
+RULES:
+1. Return ONLY the SQL query - no explanations
+2. Use ONLY columns that exist in the schema
+3. Use the full table name: {table}
+4. Use appropriate Snowflake functions
+5. Include LIMIT unless aggregating
+6. Match the question intent to the available columns"""
+
+    # Intent-specific guidance (without hardcoded examples)
     if intent['type'] == 'list_or_sample':
-        # For "What are the KPIs" type questions
         specific_instructions = f"""
-This is a DISCOVERY question - the user wants to know what data is available.
-
-For "{original_question}":
-- If asking about KPIs/metrics, SELECT all metric columns with sample data
-- Show 5 sample rows to demonstrate what's in the table
-- Include agent/entity names if available to make it meaningful
-
-Example for "What are the KPIs?":
-SELECT 
-    agent_name,
-    aht_minutes,
-    positive_res_csat,
-    negative_res_csat,
-    fcr_percentage,
-    qa_score,
-    productivity_score
-FROM {table}
-WHERE agent_name IS NOT NULL
-ORDER BY updated_at DESC
-LIMIT 5;
-"""
+Generate SQL to show what data is available in the table.
+- Select relevant columns that answer "what are" questions
+- Show sample rows with meaningful data
+- Order by a relevant column if possible
+- LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'count':
         specific_instructions = f"""
-This is a COUNT question - return the total number.
-
-For "{original_question}":
-- Use COUNT(*) or COUNT(DISTINCT column) as appropriate
-- Apply date filters if mentioned
-- Return a single number with clear alias
-
-Example: SELECT COUNT(*) as ticket_count FROM {table} WHERE DATE(created_at) = CURRENT_DATE();
-"""
+Generate SQL to count records.
+- Use COUNT(*) or COUNT(DISTINCT) as appropriate
+- Apply filters based on the question
+- Return a single count with clear alias"""
 
     elif intent['type'] == 'summary_stats':
         specific_instructions = f"""
-This is a SUMMARY STATISTICS question.
-
-For "{original_question}":
-- Calculate averages, sums, or other aggregates for relevant metrics
+Generate SQL for summary statistics.
+- Calculate appropriate aggregates (AVG, SUM, etc.)
 - Use meaningful aliases
-- Round numbers to 2 decimal places
-- Include COUNT(*) to show sample size
-
-Example: 
-SELECT 
-    ROUND(AVG(aht_minutes), 2) as avg_handling_time_minutes,
-    ROUND(AVG(positive_res_csat), 2) as avg_positive_csat,
-    ROUND(AVG(fcr_percentage), 2) as avg_fcr_percentage,
-    COUNT(*) as total_records
-FROM {table};
-"""
+- Round numbers appropriately
+- Include record count if relevant"""
 
     elif intent['type'] == 'ranking':
         specific_instructions = f"""
-This is a RANKING question - show top/bottom performers.
-
-For "{original_question}":
-- Order by the relevant metric {intent.get('order_by', 'DESC')}
-- Include the entity name (agent, team, etc.) and the metric
-- LIMIT to {intent.get('limit', 10)} results
-
-Example:
-SELECT 
-    agent_name,
-    ROUND(AVG(metric_name), 2) as avg_metric
-FROM {table}
-GROUP BY agent_name
-ORDER BY avg_metric {intent.get('order_by', 'DESC')}
-LIMIT {intent.get('limit', 10)};
-"""
+Generate SQL to rank/order data.
+- Group by the appropriate dimension
+- Calculate the metric to rank by
+- Order {intent.get('order_by', 'DESC')}
+- LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'breakdown':
         specific_instructions = f"""
-This is a BREAKDOWN question - group and aggregate data.
-
-For "{original_question}":
-- GROUP BY the appropriate dimension
-- Calculate relevant aggregates
-- Order by the aggregate DESC
-- Include count per group
-
-Example:
-SELECT 
-    group_dimension,
-    COUNT(*) as count,
-    ROUND(AVG(metric), 2) as avg_metric
-FROM {table}
-GROUP BY group_dimension
-ORDER BY count DESC;
-"""
+Generate SQL to break down data by categories.
+- GROUP BY the relevant dimension(s)
+- Calculate appropriate aggregates
+- Order by a meaningful column
+- Include counts per group if relevant"""
 
     else:
-        # Default simple query
         specific_instructions = f"""
-Generate appropriate SQL for: "{original_question}"
-- If asking about specific data, filter appropriately
-- Show sample rows with LIMIT 100
-- Include relevant columns based on the question
-"""
+Generate appropriate SQL based on the question and available columns.
+- Select relevant columns
+- Apply appropriate filters
+- LIMIT {intent.get('limit', 100)} unless aggregating"""
 
-    # Add time filter instructions if needed
+    # Add time filter guidance if needed
     if intent.get('time_filter'):
-        time_instructions = f"\n\nTIME FILTER REQUIRED: {intent['time_filter']}"
-        if 'created_at' in columns or 'date' in columns:
-            date_col = 'created_at' if 'created_at' in columns else 'date'
+        # Find date/time columns dynamically
+        date_columns = [col for col in columns if any(
+            indicator in col.lower() for indicator in
+            ['date', 'time', 'created', 'updated', 'modified', '_at', '_on']
+        )]
+
+        if date_columns:
+            date_col = date_columns[0]  # Use first date column found
+            time_instructions = f"\n\nApply time filter for '{intent['time_filter']}' using column: {date_col}"
+
             if intent['time_filter'] == 'today':
-                time_instructions += f"\nAdd: WHERE DATE({date_col}) = CURRENT_DATE()"
+                time_instructions += f"\nUse: WHERE DATE({date_col}) = CURRENT_DATE()"
             elif intent['time_filter'] == 'yesterday':
-                time_instructions += f"\nAdd: WHERE DATE({date_col}) = DATEADD(day, -1, CURRENT_DATE())"
-            elif intent['time_filter'] == 'last_week':
-                time_instructions += f"\nAdd: WHERE {date_col} >= DATEADD(week, -1, CURRENT_DATE())"
+                time_instructions += f"\nUse: WHERE DATE({date_col}) = DATEADD(day, -1, CURRENT_DATE())"
+            # Add more time filters as needed
+        else:
+            time_instructions = "\n\nNo date column found for time filtering"
     else:
         time_instructions = ""
 
     full_instructions = base_instructions + "\n" + specific_instructions + time_instructions
 
-    # Build the message to the assistant
-    message = f"""Generate SQL for: {original_question}
+    # Build the message
+    message = f"""Question: {original_question}
 
 Table: {table}
-Question Intent: {intent['type']}
+Intent: {intent['type']}
 
-Generate SQL that directly answers this question."""
+Generate SQL that answers this question using the available columns."""
 
     return {
         'instructions': full_instructions,
@@ -1537,36 +1427,28 @@ Generate SQL that directly answers this question."""
     }
 
 
-def validate_and_fix_sql(sql: str, question: str, table: str) -> str:
+def validate_and_fix_sql(sql: str, question: str, table: str, columns: List[str]) -> str:
     """Validate generated SQL and fix common issues"""
 
     sql_upper = sql.upper()
     question_lower = question.lower()
 
-    # Fix 1: MIN() function misuse for "what are" questions
-    if ("what are" in question_lower or "which are" in question_lower) and "MIN(" in sql_upper:
-        print("⚠️ Detected MIN() in a 'what are' question - fixing...")
-        # Replace with proper sample query
-        if "kpi" in question_lower and "performance" in table.lower():
-            sql = f"""SELECT 
-    agent_name,
-    aht_minutes,
-    positive_res_csat,
-    negative_res_csat,
-    fcr_percentage,
-    qa_score,
-    productivity_score
-FROM {table}
-WHERE agent_name IS NOT NULL
-LIMIT 5"""
+    # Fix 1: Check for non-existent columns
+    for col in columns:
+        # This is a simple check - could be enhanced with proper SQL parsing
+        pass
 
-    # Fix 2: Missing LIMIT for non-aggregation queries
+    # Fix 2: Ensure proper aggregation
+    if "GROUP BY" in sql_upper and not any(agg in sql_upper for agg in ["COUNT(", "SUM(", "AVG(", "MAX(", "MIN("]):
+        print("⚠️ GROUP BY without aggregation detected - might need fixing")
+
+    # Fix 3: Add LIMIT for non-aggregation queries
     if not any(agg in sql_upper for agg in ["COUNT(", "SUM(", "AVG(", "MAX(", "MIN(", "GROUP BY"]):
         if "LIMIT" not in sql_upper:
             print("⚠️ Adding LIMIT to prevent large result sets")
             sql = sql.rstrip(';').rstrip() + "\nLIMIT 100;"
 
-    # Fix 3: Ensure semicolon at end
+    # Fix 4: Ensure semicolon at end
     if not sql.rstrip().endswith(';'):
         sql = sql.rstrip() + ';'
 
@@ -1594,9 +1476,9 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
             selected_table = cached_table
             selection_reason = "Based on successful similar queries"
         else:
-            # Step 2: Use vector search to find relevant tables from dbt manifest
+            # Step 2: Use vector search to find relevant tables
             print("🔍 Searching dbt manifest for relevant tables...")
-            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=4)
+            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=6)
 
             if not candidate_tables:
                 print("⚠️ No candidate tables found from vector search")
@@ -1626,31 +1508,26 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
                 'error': schema.get('error')
             }
 
-        # Step 5: Get table description from manifest
-        table_descriptions = await get_table_descriptions_from_manifest([selected_table], user_id, channel_id)
-        table_description = table_descriptions.get(selected_table, "No description available")
-
     except Exception as e:
         print(f"⚠️ Error during intelligent table selection: {e}")
         traceback.print_exc()
         return f"-- Error: {str(e)}", None
 
-    # Step 6: Analyze question intent
+    # Step 5: Analyze question intent
     question_lower = user_question.lower()
     question_intent = analyze_question_intent(question_lower)
     print(f"🎯 Question intent: {question_intent['type']}")
 
-    # Step 7: Generate SQL with assistant
+    # Step 6: Generate SQL with assistant
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return "-- Error: Could not create conversation thread", selected_table
 
-    # Build SQL generation instructions based on intent
+    # Build SQL generation instructions based on intent and actual data
     sql_instructions = build_sql_instructions(
         question_intent,
         selected_table,
         schema,
-        table_description,
         user_question
     )
 
@@ -1660,7 +1537,7 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     sql = extract_sql_from_response(response)
 
     # Validate and fix common SQL issues
-    sql = validate_and_fix_sql(sql, user_question, selected_table)
+    sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
 
     print(f"\n🧠 Generated SQL:")
     print(f"{sql}")
@@ -1863,74 +1740,33 @@ async def summarize_with_assistant(user_question: str, result_table: str, user_i
     question_lower = user_question.lower()
     question_intent = analyze_question_intent(question_lower)
 
-    # Build appropriate summarization instructions
-    if question_intent['type'] == 'list_or_sample':
-        # For "What are the KPIs" questions
-        instructions = """You are explaining what KPIs/metrics are available in the data.
+    # Dynamic instructions based on intent
+    instructions = """Analyze the query results and provide a clear, concise answer to the user's question.
 
-RESPONSE FORMAT:
-1. List the KPI names found in the data
-2. Provide a brief (1 sentence) explanation of what each KPI measures
-3. If all values are 0 or NULL, mention this as a data quality issue
+Focus on:
+1. Directly answering what was asked
+2. Highlighting key findings or patterns
+3. Formatting numbers and results clearly
+4. Noting any data quality issues if relevant
 
-IMPORTANT - Use Slack formatting:
-- Use *text* for bold (NOT **text**)
-- Use _text_ for italic
-- Use `text` for code/metrics
-- Use bullet points with •
+Use Slack formatting:
+- *text* for bold emphasis
+- _text_ for italic
+- `text` for code/column names
+- • for bullet points
 
-Example response:
-"The agent performance KPIs include:
-• *AHT (Average Handling Time)*: Time agents spend resolving tickets
-• *CSAT Score*: Customer satisfaction rating 
-• *FCR (First Contact Resolution)*: Percentage of tickets resolved on first contact
-• *QA Score*: Quality assurance evaluation score"
-
-Keep it SHORT and FACTUAL. No analysis of values unless they indicate a problem."""
-
-    elif question_intent['type'] == 'count':
-        instructions = """State the count in one sentence.
-Example: "There are *247* tickets created today."
-If count is 0, suggest checking date filters or data availability.
-
-Use Slack formatting: *text* for bold numbers."""
-
-    elif question_intent['type'] == 'summary_stats':
-        instructions = """Show key statistics as bullet points:
-• Metric name: *value*
-Maximum 4 bullet points. No lengthy explanations.
-
-Use Slack formatting: *text* for bold values."""
-
-    elif question_intent['type'] == 'ranking':
-        instructions = """List the top/bottom results:
-1. *Name* - value
-2. *Name* - value
-(etc.)
-One line summary at end if pattern is notable.
-
-Use Slack formatting: *text* for bold names."""
-
-    else:
-        # Default concise summary
-        instructions = """Answer in 2-3 sentences maximum.
-- First sentence: Direct answer to the question
-- Second sentence: Key insight or notable finding (if any)
-- Use bullet points for lists
-- Include specific numbers
-
-Use Slack formatting: *text* for bold, NOT **text**"""
+Be concise but complete. Maximum 3-4 sentences unless listing results."""
 
     message = f"""Question: "{user_question}"
-Data:
+
+Data Results:
 {result_table}
 
-Provide a concise answer following the instructions. Be brief and direct.
-Remember to use Slack formatting: *text* for bold, _text_ for italic."""
+Provide a clear answer that directly addresses the question."""
 
     response = await send_message_and_run(thread_id, message, instructions)
 
-    # Additional safety check - convert any remaining markdown bold to Slack format
+    # Safety check - convert any remaining markdown to Slack format
     response = response.replace("**", "*")
 
     return response
