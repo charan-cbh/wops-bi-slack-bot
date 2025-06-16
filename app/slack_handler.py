@@ -328,7 +328,7 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 **Table Discovery:**
 • `debug find QUESTION` - Find relevant tables for a question
 • `debug describe TABLE1 TABLE2` - Get table descriptions from dbt manifest
-• `debug sample TABLE_NAME` - Sample 5 rows from a table
+• `debug sample TABLE_NAME` - Sample 10 rows from a table
 • `debug analyze QUESTION` - Full table selection analysis
 • `debug selection QUESTION` - Debug table selection process
 • `debug rediscover TABLE_NAME` - Force rediscover table schema
@@ -442,7 +442,7 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
         # Sample data from a table
         table_name = debug_query.replace("sample", "").strip()
         if table_name:
-            sample = await sample_table_data(table_name, sample_size=5)
+            sample = await sample_table_data(table_name, sample_size=10)
             if sample.get('error'):
                 debug_result = f"❌ **Error sampling {table_name}:** {sample['error']}"
             else:
@@ -456,6 +456,11 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
                     shown_cols = dict(list(sample_row.items())[:10])
                     debug_result += json.dumps(shown_cols, indent=2)
                     debug_result += "\n```"
+
+                    if sample.get('value_stats'):
+                        debug_result += "\n\n**Numeric Column Stats:**\n"
+                        for col, stats in list(sample.get('value_stats', {}).items())[:5]:
+                            debug_result += f"• {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}\n"
         else:
             debug_result = "❌ **Usage:** `debug sample TABLE_NAME`"
 
@@ -467,7 +472,7 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
 
             # Find candidate tables
             debug_result += "**1. Finding candidate tables...**\n"
-            candidates = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=4)
+            candidates = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=6)
 
             if candidates:
                 for table in candidates:
@@ -718,10 +723,11 @@ def get_status():
         "conversational_context_enabled": True,
         "emoji_feedback_enabled": True,
         "features": {
-            "question_classification": "Improved with better volume/KPI detection",
-            "table_discovery": "Vector search with keyword fallback",
-            "sql_generation": "Context-aware with special handling for KPI questions",
+            "question_classification": "Dynamic context-aware classification",
+            "table_discovery": "Vector search with data sampling",
+            "sql_generation": "Data-driven with no hardcoded examples",
             "error_handling": "Enhanced with helpful suggestions",
-            "feedback_system": "Emoji reactions for continuous improvement"
+            "feedback_system": "Emoji reactions for continuous improvement",
+            "table_selection": "Multi-stage validation with actual data analysis"
         }
     }
