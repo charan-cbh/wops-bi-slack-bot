@@ -355,7 +355,7 @@ def classify_question_type(question: str) -> str:
         return 'sql_required'  # Default to trying SQL
 
 
-async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 6) -> List[
+async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 8) -> List[
     str]:
     """Use assistant's file_search to find relevant tables from dbt manifest"""
     thread_id = await get_or_create_thread(user_id, channel_id)
@@ -363,29 +363,36 @@ async def find_relevant_tables_from_vector_store(question: str, user_id: str, ch
         print("❌ Could not create thread for vector search")
         return []
 
-    # Dynamic instructions based on question content
-    instructions = """You are a data expert analyzing the dbt manifest to find relevant tables.
+    # More thorough instructions for finding tables
+    instructions = """You are a BI expert searching the dbt manifest for tables.
 
-Analyze the user's question and search for tables that contain the data needed to answer it.
-Look through:
-1. Table names and descriptions
-2. Column names and their descriptions
-3. Data types and relationships
+CRITICAL: Find ALL tables that could potentially answer the question. Do not filter or shortlist prematurely.
 
-Return ONLY a JSON array of table names, nothing else.
-Format: ["schema.database.table1", "schema.database.table2", ...]
+Search comprehensively through:
+1. Table names and their full descriptions
+2. ALL column names and their descriptions
+3. Business logic and definitions in the manifest
+4. Table relationships and data lineage
 
-Search for tables that contain ALL the necessary data elements mentioned in the question."""
+IMPORTANT:
+- Include tables even if they might have the data in a different format
+- Include both raw and aggregated tables
+- Include tables with partial matches - better to check more tables than miss the right one
+- Look for synonyms and related terms (e.g., "tickets" could be "issues", "cases", "requests")
 
-    message = f"""Find all tables that could be used to answer this question: {question}
+Return a JSON array of ALL potentially relevant tables.
+Format: ["schema.database.table1", "schema.database.table2", ...]"""
 
-Focus on:
-- Tables containing the entities mentioned (tickets, agents, customers, etc.)
-- Tables with the metrics or measures requested
-- Tables with appropriate time/date columns if time filtering is needed
-- Tables at the right granularity level for the analysis
+    message = f"""Find ALL tables that might help answer: {question}
 
-Return the table names as a JSON array."""
+Search for tables containing:
+- Direct matches to entities mentioned (tickets, agents, customers, etc.)
+- Any metrics or measures that could be calculated or derived
+- Time/date columns if time analysis is needed
+- Any related or auxiliary data that might be required
+- Both detail and summary tables
+
+Be COMPREHENSIVE - include any table that might have relevant data."""
 
     try:
         response = await send_message_and_run(thread_id, message, instructions)
@@ -469,7 +476,7 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
             column_descriptions = {}
 
         # Now sample the actual data
-        # First, try to discover columns to find timestamp/audit columns
+        # First, try to discover columns to find PROPER audit columns
         schema_sql = f"SELECT * FROM {table_name} LIMIT 1"
         df_schema = run_query(schema_sql)
 
@@ -477,16 +484,46 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
             # If error, fall back to simple sampling
             sample_sql = f"SELECT * FROM {table_name} SAMPLE ({sample_size} ROWS)"
         else:
-            # Look for timestamp/audit columns to sort by
+            # Look for ACTUAL audit/timestamp columns with strict patterns
             columns = list(df_schema.columns)
-            timestamp_cols = [col for col in columns if any(
-                indicator in col.lower() for indicator in
-                ['created_at', 'updated_at', 'timestamp', 'date', 'modified', 'audit', '_at', '_date', '_time']
-            )]
 
-            if timestamp_cols:
-                # Use the first timestamp column found for ordering
-                order_col = timestamp_cols[0]
+            # Define strict patterns for audit columns
+            audit_patterns = [
+                '_updated_at', '_created_at', '_inserted_at', '_modified_at',
+                'updated_at', 'created_at', 'inserted_at', 'modified_at',
+                'update_date', 'create_date', 'insert_date', 'modify_date',
+                'dw_updated_at', 'dw_created_at', 'dw_insert_date',
+                'audit_timestamp', 'last_modified', 'last_updated'
+            ]
+
+            # Find audit columns - must match exactly or end with the pattern
+            audit_cols = []
+            for col in columns:
+                col_lower = col.lower()
+                # Check if column ends with or equals any audit pattern
+                for pattern in audit_patterns:
+                    if col_lower.endswith(pattern) or col_lower == pattern:
+                        # Also verify it's actually a timestamp type if we have metadata
+                        col_type = column_descriptions.get(col_lower, {}).get('type', '').lower()
+                        if not col_type or 'timestamp' in col_type or 'date' in col_type:
+                            audit_cols.append(col)
+                            break
+
+            # If no audit columns found, look for date columns with strict patterns
+            if not audit_cols:
+                date_patterns = ['_date', 'date_', 'transaction_date', 'event_date', 'process_date']
+                for col in columns:
+                    col_lower = col.lower()
+                    for pattern in date_patterns:
+                        if pattern in col_lower:
+                            col_type = column_descriptions.get(col_lower, {}).get('type', '').lower()
+                            if not col_type or 'date' in col_type or 'timestamp' in col_type:
+                                audit_cols.append(col)
+                                break
+
+            if audit_cols:
+                # Use the LAST audit column (usually the most recent update timestamp)
+                order_col = audit_cols[-1]
                 sample_sql = f"""
                 SELECT * FROM (
                     SELECT * FROM {table_name} 
@@ -494,11 +531,11 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
                     LIMIT 1000
                 ) SAMPLE ({sample_size} ROWS)
                 """
-                print(f"🔍 Sampling with timestamp ordering: {order_col} DESC")
+                print(f"🔍 Sampling with audit column: {order_col} DESC")
             else:
-                # No timestamp column found, use random sampling
+                # No audit column found, use random sampling
                 sample_sql = f"SELECT * FROM {table_name} SAMPLE ({sample_size} ROWS)"
-                print(f"🔍 Using random sampling")
+                print(f"🔍 No audit columns found, using random sampling")
 
         print(f"🔍 Executing: {sample_sql}")
         df = run_query(sample_sql)
@@ -540,14 +577,25 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
         for col in columns:
             if df[col].dtype in ['int64', 'float64', 'Int64', 'Float64']:
                 try:
-                    value_stats[col] = {
-                        'min': float(df[col].min()),
-                        'max': float(df[col].max()),
-                        'mean': float(df[col].mean()),
-                        'non_null_count': int(df[col].notna().sum())
-                    }
+                    non_null_values = df[col].dropna()
+                    if len(non_null_values) > 0:
+                        value_stats[col] = {
+                            'min': float(non_null_values.min()),
+                            'max': float(non_null_values.max()),
+                            'mean': float(non_null_values.mean()),
+                            'non_null_count': int(non_null_values.count()),
+                            'null_count': int(df[col].isna().sum()),
+                            'unique_count': int(df[col].nunique())
+                        }
                 except:
                     pass
+
+        # Identify audit columns found
+        audit_columns_found = []
+        for col in columns:
+            col_lower = col.lower()
+            if any(pattern in col_lower for pattern in ['_updated_at', '_created_at', 'audit', 'modified', 'inserted']):
+                audit_columns_found.append(col)
 
         # Create sample info
         sample_info = {
@@ -558,6 +606,7 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
             'sample_data': sample_data,
             'sample_size': len(df),
             'value_stats': value_stats,
+            'audit_columns': audit_columns_found,
             'cached_at': time.time()
         }
 
@@ -565,6 +614,8 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
         await safe_valkey_set(cache_key, sample_info, ex=3600)  # 1 hour expiry
 
         print(f"✅ Sampled {len(df)} rows from {table_name} ({len(columns)} columns)")
+        if audit_columns_found:
+            print(f"📋 Audit columns found: {', '.join(audit_columns_found)}")
 
         return sample_info
 
@@ -608,18 +659,47 @@ Tuple[str, str]:
     if not thread_id:
         return list(table_samples.keys())[0], "Could not create analysis thread"
 
-    instructions = """You are a data expert selecting the BEST table to answer the user's question.
+    instructions = """You are a BI expert representing the Business Intelligence team. Your job is to select the MOST ACCURATE table for answering the user's question.
 
-Analyze each table's actual data and structure:
-1. Examine column names and their actual values
-2. Check if the table contains ALL necessary data to answer the question
-3. Verify the data granularity matches what's needed
-4. Consider data quality (non-null values, appropriate data types)
-5. Match entities and metrics mentioned in the question to actual columns
+CRITICAL REQUIREMENTS:
+1. ACCURACY IS PARAMOUNT - Do not take shortcuts or choose convenience over correctness
+2. The selected table must contain ALL data elements needed to answer the question COMPLETELY
+3. Verify each required metric/dimension exists with the EXACT data needed
+4. Check actual data values, not just column names
+5. Ensure proper data granularity (don't use aggregated tables if raw data is needed)
+6. Validate that the table has sufficient data quality and coverage
+
+ANALYSIS PROCESS:
+1. Break down the user's question into required data elements:
+   - What metrics/measures are needed?
+   - What dimensions/attributes are needed?
+   - What time period/granularity is required?
+   - What filters/conditions must be applied?
+
+2. For each table, rigorously check:
+   - Does it have ALL required metrics with correct calculations?
+   - Does it have ALL required dimensions at the right level?
+   - Does it have proper time columns for the analysis?
+   - Is the data fresh and complete (check audit columns)?
+   - Are the values in the expected format and range?
+
+3. REJECT tables that:
+   - Are missing ANY required data element
+   - Have pre-aggregated data when raw data is needed
+   - Have incorrect granularity
+   - Show poor data quality (many nulls, suspicious values)
+
+4. Select the table that:
+   - Contains 100% of required data elements
+   - Has the most appropriate granularity
+   - Shows the best data quality
+   - Has the most recent data
+
+DO NOT select a table just because it seems easier to query. Select based on COMPLETENESS and ACCURACY.
 
 Return ONLY:
 SELECTED_TABLE: <full table name>
-REASON: <detailed explanation referencing specific columns and why they match the question>"""
+REASON: <detailed explanation listing EVERY required data element and exactly which columns provide them>"""
 
     # Build comprehensive analysis message
     message_parts = [f"User Question: {question}\n\nAnalyze these tables:"]
@@ -629,52 +709,47 @@ REASON: <detailed explanation referencing specific columns and why they match th
         message_parts.append(f"TABLE: {table}")
         message_parts.append(f"COLUMNS ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', []))}")
 
+        # Show audit columns if found
+        if sample.get('audit_columns'):
+            message_parts.append(f"AUDIT COLUMNS: {', '.join(sample['audit_columns'])}")
+
         # Show column descriptions if available
         if sample.get('column_descriptions'):
             message_parts.append("\nColumn Descriptions:")
-            for col, desc in list(sample.get('column_descriptions', {}).items())[:20]:
+            for col, desc in list(sample.get('column_descriptions', {}).items())[:30]:
                 if desc.get('comment'):
-                    message_parts.append(f"  - {col}: {desc['comment']}")
+                    message_parts.append(f"  - {col} ({desc['type']}): {desc['comment']}")
+                else:
+                    message_parts.append(f"  - {col}: {desc['type']}")
 
         # Show value statistics for numeric columns
         if sample.get('value_stats'):
             message_parts.append("\nNumeric Column Statistics:")
-            for col, stats in list(sample.get('value_stats', {}).items())[:15]:
+            for col, stats in list(sample.get('value_stats', {}).items())[:20]:
+                null_pct = (stats['null_count'] / (
+                            stats['null_count'] + stats['non_null_count']) * 100) if 'null_count' in stats else 0
                 message_parts.append(
-                    f"  - {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}, non_null={stats['non_null_count']}")
+                    f"  - {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}, non_null={stats['non_null_count']}, nulls={null_pct:.1f}%, unique={stats.get('unique_count', 'N/A')}")
 
         # Show actual sample data
         if sample.get('sample_data') and len(sample['sample_data']) > 0:
-            message_parts.append("\nSample Data (3 rows):")
-            for i, row_data in enumerate(sample['sample_data'][:3]):
+            message_parts.append("\nSample Data (5 rows):")
+            for i, row_data in enumerate(sample['sample_data'][:5]):
                 message_parts.append(f"\nRow {i + 1}:")
-                # Show relevant columns based on question
-                relevant_cols = {}
-
-                # Extract keywords from question
-                question_words = set(question.lower().split())
-
+                # Show ALL columns to give complete picture
+                shown_count = 0
                 for col, val in row_data.items():
-                    # Include column if it matches keywords or has meaningful data
-                    if (any(keyword in col.lower() for keyword in question_words) or
-                            (val is not None and str(val).strip() != '' and str(val) != '0')):
-                        relevant_cols[col] = val
-
-                # If too few relevant columns, include more
-                if len(relevant_cols) < 10:
-                    for col, val in row_data.items():
-                        if col not in relevant_cols and val is not None and str(val).strip() != '':
-                            relevant_cols[col] = val
-                            if len(relevant_cols) >= 15:
-                                break
-
-                for col, val in list(relevant_cols.items())[:15]:
-                    val_str = str(val)[:100] + "..." if len(str(val)) > 100 else str(val)
-                    message_parts.append(f"  {col}: {val_str}")
+                    if shown_count < 25:  # Limit to 25 columns per row
+                        val_str = str(val)[:100] + "..." if len(str(val)) > 100 else str(val)
+                        message_parts.append(f"  {col}: {val_str}")
+                        shown_count += 1
+                    elif shown_count == 25:
+                        message_parts.append(f"  ... and {len(row_data) - 25} more columns")
+                        break
 
     message_parts.append(f"\n\n{'=' * 80}")
-    message_parts.append("\nSelect the table that contains ALL the data needed to answer the question.")
-    message_parts.append("Consider: column names, actual values, data types, and completeness.")
+    message_parts.append("\nREMEMBER: Select based on ACCURACY and COMPLETENESS, not convenience!")
+    message_parts.append("The table must contain ALL required data elements to answer the question perfectly.")
 
     message = "\n".join(message_parts)
 
@@ -930,12 +1005,21 @@ async def discover_table_schema(table_name: str) -> dict:
 
             sample_data = df_serializable.head(3).to_dict('records') if len(df_serializable) > 0 else []
 
+            # Identify audit columns
+            audit_columns_found = []
+            for col in columns:
+                col_lower = col.lower()
+                if any(pattern in col_lower for pattern in
+                       ['_updated_at', '_created_at', 'audit', 'modified', 'inserted', 'dw_']):
+                    audit_columns_found.append(col)
+
             schema_info = {
                 'table': table_name,
                 'columns': columns,
                 'column_descriptions': column_descriptions,
                 'sample_data': sample_data,
                 'row_count': len(df),
+                'audit_columns': audit_columns_found,
                 'discovered_at': time.time()
             }
 
@@ -1314,112 +1398,153 @@ def build_sql_instructions(intent: dict, table: str, schema: dict, original_ques
 
     columns = schema.get('columns', [])
     column_descriptions = schema.get('column_descriptions', {})
+    audit_columns = schema.get('audit_columns', [])
 
     # Create column info string with descriptions
     column_info_parts = []
     for col in columns[:50]:  # Limit to first 50 columns
         desc = column_descriptions.get(col.lower(), {}).get('comment', '')
+        col_type = column_descriptions.get(col.lower(), {}).get('type', '')
         if desc:
-            column_info_parts.append(f"{col} ({desc})")
+            column_info_parts.append(f"{col} ({col_type}): {desc}")
         else:
-            column_info_parts.append(col)
+            column_info_parts.append(f"{col} ({col_type})")
 
-    column_info = ", ".join(column_info_parts)
+    column_info = "\n".join(column_info_parts)
 
-    # Base instructions - data-driven, not hardcoded
-    base_instructions = f"""You are a SQL expert. Generate ONLY valid Snowflake SQL for this question.
+    # Base instructions - emphasizing accuracy
+    base_instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL.
 
 TABLE: {table}
-AVAILABLE COLUMNS WITH DESCRIPTIONS: {column_info}
+AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
 
-Analyze the question and the actual columns available to generate the correct SQL.
+AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
+{column_info}
 
-RULES:
-1. Return ONLY the SQL query - no explanations
-2. Use ONLY columns that exist in the schema
-3. Use the full table name: {table}
-4. Use appropriate Snowflake functions
-5. Include LIMIT unless aggregating
-6. Match the question intent to the available columns"""
+CRITICAL REQUIREMENTS:
+1. Generate SQL that COMPLETELY and ACCURATELY answers the question
+2. Use ONLY columns that exist in the schema above
+3. Verify each column reference against the schema
+4. Use appropriate aggregations and calculations
+5. Apply correct filters and date ranges
+6. Handle NULLs appropriately
+7. Use the full table name: {table}
+
+ACCURACY RULES:
+- If calculating averages, ensure you're averaging the right values
+- If counting, ensure you're counting distinct values when appropriate  
+- If filtering by time, use the most appropriate date/timestamp column
+- If grouping, ensure all non-aggregated columns are in GROUP BY
+- Always consider data quality (NULL handling, data types)
+
+Return ONLY the SQL query - no explanations."""
 
     # Intent-specific guidance (without hardcoded examples)
     if intent['type'] == 'list_or_sample':
         specific_instructions = f"""
 Generate SQL to show what data is available in the table.
-- Select relevant columns that answer "what are" questions
-- Show sample rows with meaningful data
-- Order by a relevant column if possible
+- Select ALL relevant columns that answer the "what are" question
+- Show actual data rows, not aggregations
+- Use appropriate ORDER BY (prefer audit columns: {', '.join(audit_columns[-3:])})
 - LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'count':
         specific_instructions = f"""
-Generate SQL to count records.
-- Use COUNT(*) or COUNT(DISTINCT) as appropriate
-- Apply filters based on the question
-- Return a single count with clear alias"""
+Generate SQL to count records accurately.
+- Use COUNT(*) for total records or COUNT(DISTINCT column) for unique values
+- Apply all necessary filters from the question
+- Consider if you need total count or distinct count
+- Return a single number with descriptive alias"""
 
     elif intent['type'] == 'summary_stats':
         specific_instructions = f"""
-Generate SQL for summary statistics.
-- Calculate appropriate aggregates (AVG, SUM, etc.)
-- Use meaningful aliases
-- Round numbers appropriately
-- Include record count if relevant"""
+Generate SQL for accurate summary statistics.
+- Calculate the exact aggregates requested (AVG, SUM, MIN, MAX, etc.)
+- Handle NULLs appropriately in calculations
+- Use meaningful aliases that describe what's being calculated
+- Round numbers to appropriate precision
+- Include COUNT(*) to show sample size if relevant"""
 
     elif intent['type'] == 'ranking':
         specific_instructions = f"""
-Generate SQL to rank/order data.
-- Group by the appropriate dimension
-- Calculate the metric to rank by
+Generate SQL to rank/order data correctly.
+- Identify the correct grouping dimension
+- Calculate the exact metric to rank by
+- Use appropriate aggregation for the metric
 - Order {intent.get('order_by', 'DESC')}
+- Include all relevant columns in output
 - LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'breakdown':
         specific_instructions = f"""
-Generate SQL to break down data by categories.
-- GROUP BY the relevant dimension(s)
-- Calculate appropriate aggregates
-- Order by a meaningful column
-- Include counts per group if relevant"""
+Generate SQL to break down data accurately by categories.
+- GROUP BY the exact dimension(s) requested
+- Calculate all requested aggregates
+- Include count per group
+- Order by the most relevant column
+- Ensure all non-aggregated columns are in GROUP BY"""
+
+    elif intent['type'] == 'trend':
+        specific_instructions = f"""
+Generate SQL for time-based trend analysis.
+- Use appropriate date truncation (DATE_TRUNC)
+- Group by the time period requested
+- Calculate metrics for each period
+- Order by date/time ascending
+- Include all necessary date filters"""
 
     else:
         specific_instructions = f"""
-Generate appropriate SQL based on the question and available columns.
-- Select relevant columns
-- Apply appropriate filters
+Generate SQL that completely answers the question.
+- Select all necessary columns
+- Apply all required filters
+- Use appropriate joins if needed
 - LIMIT {intent.get('limit', 100)} unless aggregating"""
 
     # Add time filter guidance if needed
     if intent.get('time_filter'):
-        # Find date/time columns dynamically
-        date_columns = [col for col in columns if any(
-            indicator in col.lower() for indicator in
-            ['date', 'time', 'created', 'updated', 'modified', '_at', '_on']
-        )]
+        # Find the best date/time column
+        date_columns = []
+        for col in columns:
+            col_lower = col.lower()
+            col_type = column_descriptions.get(col_lower, {}).get('type', '').lower()
+            # Prefer audit columns for time filtering
+            if col in audit_columns and ('date' in col_type or 'timestamp' in col_type):
+                date_columns.insert(0, col)  # Add audit columns at the beginning
+            elif any(pattern in col_lower for pattern in ['date', 'time', 'created', 'updated', '_at']):
+                if 'date' in col_type or 'timestamp' in col_type:
+                    date_columns.append(col)
 
         if date_columns:
-            date_col = date_columns[0]  # Use first date column found
-            time_instructions = f"\n\nApply time filter for '{intent['time_filter']}' using column: {date_col}"
+            date_col = date_columns[0]  # Use first (best) date column found
+            time_instructions = f"\n\nTIME FILTER: Use column '{date_col}' for '{intent['time_filter']}' filter"
 
             if intent['time_filter'] == 'today':
                 time_instructions += f"\nUse: WHERE DATE({date_col}) = CURRENT_DATE()"
             elif intent['time_filter'] == 'yesterday':
                 time_instructions += f"\nUse: WHERE DATE({date_col}) = DATEADD(day, -1, CURRENT_DATE())"
-            # Add more time filters as needed
+            elif intent['time_filter'] == 'last_week':
+                time_instructions += f"\nUse: WHERE {date_col} >= DATEADD(week, -1, CURRENT_DATE())"
+            elif intent['time_filter'] == 'this_week':
+                time_instructions += f"\nUse: WHERE WEEK({date_col}) = WEEK(CURRENT_DATE()) AND YEAR({date_col}) = YEAR(CURRENT_DATE())"
+            elif intent['time_filter'] == 'last_month':
+                time_instructions += f"\nUse: WHERE {date_col} >= DATEADD(month, -1, CURRENT_DATE())"
+            elif intent['time_filter'] == 'this_month':
+                time_instructions += f"\nUse: WHERE MONTH({date_col}) = MONTH(CURRENT_DATE()) AND YEAR({date_col}) = YEAR(CURRENT_DATE())"
         else:
-            time_instructions = "\n\nNo date column found for time filtering"
+            time_instructions = "\n\nWARNING: No suitable date column found for time filtering"
     else:
         time_instructions = ""
 
-    full_instructions = base_instructions + "\n" + specific_instructions + time_instructions
+    full_instructions = base_instructions + "\n\n" + specific_instructions + time_instructions
 
     # Build the message
     message = f"""Question: {original_question}
 
 Table: {table}
-Intent: {intent['type']}
+Question Type: {intent['type']}
 
-Generate SQL that answers this question using the available columns."""
+Generate ACCURATE SQL that completely answers this question using the schema provided."""
 
     return {
         'instructions': full_instructions,
@@ -1478,7 +1603,7 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
         else:
             # Step 2: Use vector search to find relevant tables
             print("🔍 Searching dbt manifest for relevant tables...")
-            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=6)
+            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=8)
 
             if not candidate_tables:
                 print("⚠️ No candidate tables found from vector search")
