@@ -447,10 +447,13 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
                 debug_result = f"❌ **Error sampling {table_name}:** {sample['error']}"
             else:
                 debug_result = f"📊 **Sample from {table_name}:**\n"
-                debug_result += f"Columns ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:15])}\n\n"
+                debug_result += f"Columns ({len(sample.get('columns', []))}): {', '.join(sample.get('columns', [])[:15])}\n"
+
+                if sample.get('audit_columns'):
+                    debug_result += f"Audit Columns: {', '.join(sample['audit_columns'])}\n"
 
                 if sample.get('sample_data'):
-                    debug_result += "**Sample row:**\n```json\n"
+                    debug_result += "\n**Sample row:**\n```json\n"
                     sample_row = sample['sample_data'][0]
                     # Show first 10 columns
                     shown_cols = dict(list(sample_row.items())[:10])
@@ -460,7 +463,10 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
                     if sample.get('value_stats'):
                         debug_result += "\n\n**Numeric Column Stats:**\n"
                         for col, stats in list(sample.get('value_stats', {}).items())[:5]:
-                            debug_result += f"• {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}\n"
+                            null_pct = (stats.get('null_count', 0) / (
+                                        stats.get('null_count', 0) + stats['non_null_count']) * 100) if stats.get(
+                                'null_count', 0) else 0
+                            debug_result += f"• {col}: min={stats['min']:.2f}, max={stats['max']:.2f}, mean={stats['mean']:.2f}, nulls={null_pct:.1f}%\n"
         else:
             debug_result = "❌ **Usage:** `debug sample TABLE_NAME`"
 
@@ -724,10 +730,18 @@ def get_status():
         "emoji_feedback_enabled": True,
         "features": {
             "question_classification": "Dynamic context-aware classification",
-            "table_discovery": "Vector search with data sampling",
-            "sql_generation": "Data-driven with no hardcoded examples",
+            "table_discovery": "Comprehensive vector search (8 candidates)",
+            "table_selection": "Rigorous accuracy-focused analysis with audit column detection",
+            "sql_generation": "Accuracy-driven with complete column metadata",
+            "audit_columns": "Smart detection of DW audit columns for proper ordering",
+            "data_sampling": "10-row samples with statistics and null analysis",
             "error_handling": "Enhanced with helpful suggestions",
-            "feedback_system": "Emoji reactions for continuous improvement",
-            "table_selection": "Multi-stage validation with actual data analysis"
+            "feedback_system": "Emoji reactions for continuous improvement"
+        },
+        "improvements": {
+            "accuracy_focus": "Prioritizes correctness over convenience",
+            "audit_awareness": "Properly identifies and uses audit columns",
+            "comprehensive_search": "Searches more tables to avoid missing the right one",
+            "detailed_analysis": "Shows all columns and statistics for better decisions"
         }
     }
