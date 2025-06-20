@@ -1,0 +1,90 @@
+{
+  "metabase_query_patterns": [
+    {
+      "pattern_name": "Agent Handle Time Analysis",
+      "pattern_description": "Direct access to pre-calculated handle time metrics at the ticket-agent level",
+      "questions_answered": [
+        "What is the average handle time (AHT)?",
+        "Show AHT by agent/team/channel",
+        "Which agents have the longest handle times?",
+        "Handle time trends over time",
+        "Call duration vs handle time analysis",
+        "Hold time impact on total handle time",
+        "Handle time by ticket type/category",
+        "Voice channel metrics (talk time, hold time)",
+        "Escalated tickets handle time",
+        "Handle time distribution",
+        "Agent efficiency rankings",
+        "Channel comparison for handle times",
+        "Peak hours handle time analysis"
+      ],
+      "base_query": "SELECT * FROM ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME",
+      "tables_involved": [
+        "ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME"
+      ],
+      "key_columns": {
+        "identifiers": ["TICKET_ID", "USER_ID", "TICKET_USER_ID"],
+        "agent_info": ["USER_NAME", "USER_EMAIL", "SUPERVISOR"],
+        "grouping": ["GROUP_ID", "GROUP_NAME", "CONTACT_CHANNEL"],
+        "time_metrics": {
+          "handle_time": ["HANDLE_TIME_IN_SECONDS", "HANDLE_TIME_IN_MINUTES"],
+          "voice_metrics": [
+            "AMAZON_CONNECT_CALL_DURATION_IN_SECONDS",
+            "AMAZON_CONNECT_HOLD_TIME_IN_SECONDS",
+            "AMAZON_CONNECT_TALK_TIME_IN_SECONDS"
+          ],
+          "voice_metrics_minutes": [
+            "AMAZON_CONNECT_CALL_DURATION_IN_MINUTES",
+            "AMAZON_CONNECT_HOLD_TIME_IN_MINUTES",
+            "AMAZON_CONNECT_TALK_TIME_IN_MINUTES"
+          ]
+        },
+        "categorization": [
+          "WOPS_TICKET_TYPE_A",
+          "PRODUCT_HELP_CATEGORY",
+          "PRODUCT_FEATURE_A",
+          "PAYMENTS_CATEGORY_B",
+          "EA_TICKET_TYPE"
+        ],
+        "escalation": ["ESCALATION_TEAM", "ESCALATION_TYPE"],
+        "timestamps": ["CREATED_AT", "CREATED_AT_PST", "SOLVED_AT", "SOLVED_AT_PST", "LAST_AGENT_UPDATE_TIME"],
+        "other": ["AHT_TYPE"]
+      },
+      "pre_calculated_metrics": {
+        "note": "All handle time calculations are pre-done in dbt layer",
+        "handle_time": "Already calculated in both seconds and minutes",
+        "voice_metrics": "Amazon Connect data integrated for voice channel"
+      },
+      "common_queries": {
+        "avg_aht_by_agent": "SELECT USER_NAME, AVG(HANDLE_TIME_IN_MINUTES) as avg_aht_minutes, COUNT(*) as tickets_handled FROM table GROUP BY USER_NAME",
+        "channel_comparison": "SELECT CONTACT_CHANNEL, AVG(HANDLE_TIME_IN_MINUTES) as avg_aht FROM table GROUP BY CONTACT_CHANNEL",
+        "voice_efficiency": "SELECT USER_NAME, AVG(AMAZON_CONNECT_TALK_TIME_IN_MINUTES) as avg_talk, AVG(AMAZON_CONNECT_HOLD_TIME_IN_MINUTES) as avg_hold FROM table WHERE CONTACT_CHANNEL = 'Voice' GROUP BY USER_NAME",
+        "hourly_pattern": "SELECT EXTRACT(HOUR FROM CREATED_AT_PST) as hour, AVG(HANDLE_TIME_IN_MINUTES) as avg_aht FROM table GROUP BY hour ORDER BY hour",
+        "ticket_type_analysis": "SELECT WOPS_TICKET_TYPE_A, AVG(HANDLE_TIME_IN_MINUTES) as avg_aht, COUNT(*) as volume FROM table GROUP BY WOPS_TICKET_TYPE_A"
+      },
+      "adaptation_guidance": {
+        "for_date_filters": "WHERE CREATED_AT >= CURRENT_DATE - 30",
+        "for_specific_agent": "WHERE USER_EMAIL = 'agent@company.com'",
+        "for_team_analysis": "WHERE GROUP_NAME = 'Team Name'",
+        "for_channel_specific": "WHERE CONTACT_CHANNEL = 'Voice'",
+        "for_escalated_only": "WHERE ESCALATION_TEAM IS NOT NULL",
+        "for_time_ranges": "WHERE HANDLE_TIME_IN_MINUTES BETWEEN X AND Y",
+        "exclude_outliers": "WHERE HANDLE_TIME_IN_MINUTES < 120"
+      },
+      "important_notes": [
+        "This is a flattened table with one row per ticket-agent combination",
+        "Handle time includes all agent interactions with the ticket",
+        "Voice channel has additional Amazon Connect metrics",
+        "Times are available in both seconds and minutes",
+        "PST timestamps available for timezone-specific analysis",
+        "Pre-aggregated in dbt layer for performance"
+      ],
+      "metric_definitions": {
+        "handle_time": "Total time agent spent on ticket including all updates",
+        "call_duration": "Total voice call duration (for voice channel)",
+        "hold_time": "Time customer was on hold during voice call",
+        "talk_time": "Actual conversation time (call_duration - hold_time)"
+      }
+    }
+  ]
+}

@@ -10,6 +10,16 @@ from openai import OpenAI
 from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
     GlideClusterClientConfiguration
 
+# Import the pattern matcher
+try:
+    from app.pattern_matcher import PatternMatcher, PatternBasedQueryBuilder
+    pattern_matcher = PatternMatcher()
+    pattern_query_builder = PatternBasedQueryBuilder()
+    PATTERNS_AVAILABLE = True
+except ImportError:
+    PATTERNS_AVAILABLE = False
+    print("⚠️ Pattern matcher not available - using standard flow")
+
 load_dotenv()
 
 # Configuration
@@ -275,19 +285,6 @@ def extract_key_phrases(question: str) -> List[str]:
 def classify_question_type(question: str) -> str:
     """Simple classification - is this a data query or conversation?"""
     question_lower = question.lower()
-
-    # FIRST: Check for follow-up indicators about previous results
-    followup_about_results = [
-        'what is the source', 'where does this data', 'where is this from',
-        'how did you get', 'what table', 'which database',
-        'explain this', 'what does this mean', 'why is it',
-        'can you clarify', 'tell me more about this',
-        'break this down', 'what are these', 'who are these'
-    ]
-
-    if any(indicator in question_lower for indicator in followup_about_results):
-        return 'conversational'
-
     # Check for data query indicators - EXPANDED LIST
     data_indicators = [
         'how many', 'count', 'show me', 'list', 'find',
@@ -325,7 +322,6 @@ def classify_question_type(question: str) -> str:
     if 'volume' in question_lower and any(
             word in question_lower for word in ['ticket', 'tickets', 'agent', 'chat', 'email']):
         return 'sql_required'
-
     # Check if it's asking for specific data
     if any(indicator in question_lower for indicator in data_indicators):
         # Double check it's not asking about the data source
@@ -343,20 +339,21 @@ def classify_question_type(question: str) -> str:
     else:
         # For ambiguous cases, check if it contains entities or time references
         entities = ['ticket', 'agent', 'customer', 'zendesk', 'chat', 'email', 'messaging']
-        time_refs = ['today', 'yesterday', 'week', 'month', 'year', 'date']
+        time_refs = ['today']
 
-        if any(entity in question_lower for entity in entities) or any(time in question_lower for time in time_refs):
-            return 'sql_required'
+    # FIRST: Check for follow-up indicators about previous results
+    followup_about_results = [
+        'what is the source', 'where does this data', 'where is this from',
+        'how did you get', 'what table', 'which database',
+        'explain this', 'what does this mean', 'why is it',
+        'can you clarify', 'tell me more about this',
+        'break this down', 'what are these', 'who are these'
+    ]
 
-        # Very short questions are likely follow-ups
-        if word_count <= 4:
-            return 'conversational'
+    if any(indicator in question_lower for indicator in followup_about_results):
+        return 'conversational'
 
-        return 'sql_required'  # Default to trying SQL
-
-
-async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 8) -> List[
-    str]:
+async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 8) -> List[str]:
     """Use assistant's file_search to find relevant tables from dbt manifest"""
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
@@ -624,9 +621,7 @@ async def sample_table_data(table_name: str, sample_size: int = 10) -> Dict[str,
         traceback.print_exc()
         return {'error': str(e)}
 
-
-async def select_best_table_using_samples(question: str, candidate_tables: List[str], user_id: str, channel_id: str) -> \
-Tuple[str, str]:
+async def select_best_table_using_samples(question: str, candidate_tables: List[str], user_id: str, channel_id: str) -> Tuple[str, str]:
     """
     Sample data from candidate tables and use assistant to select the best one
     Returns: (selected_table, reason)
@@ -1580,11 +1575,273 @@ def validate_and_fix_sql(sql: str, question: str, table: str, columns: List[str]
     return sql
 
 
+# PATTERN-BASED ENHANCEMENTS START HERE
+
+async def generate_sql_with_patterns(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
+    """
+    Enhanced SQL generation that prioritizes pattern matching
+    Returns: (sql_query, selected_table)
+    """
+    print(f"\n🤖 Starting pattern-based SQL generation for: {user_question}")
+
+    # Step 1: Try pattern matching first
+    if PATTERNS_AVAILABLE:
+        matched_pattern = pattern_matcher.match_pattern(user_question)
+
+        if matched_pattern:
+            print(f"✅ Matched pattern: {matched_pattern['name']}")
+            selected_table = matched_pattern['table']
+
+            # Analyze question intent
+            question_intent = analyze_question_intent(user_question.lower())
+
+            # Build query using pattern
+            try:
+                sql = pattern_query_builder.build_query(user_question, matched_pattern, question_intent)
+                print(f"📝 Generated SQL from pattern:\n{sql}")
+
+                # Cache this successful pattern match
+                await cache_table_selection(user_question, selected_table, f"Pattern match: {matched_pattern['name']}")
+
+                return sql, selected_table
+            except Exception as e:
+                print(f"⚠️ Error building query from pattern: {e}")
+                # Fall back to intelligent generation
+
+    # Step 2: Fall back to intelligent table discovery if no pattern match
+    print("🔄 No pattern match, using intelligent table discovery...")
+    return await generate_sql_intelligently(user_question, user_id, channel_id)
+
+
+async def enhanced_table_selection(question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
+    """
+    Enhanced table selection that considers patterns first
+    Returns: (selected_table, reason)
+    """
+    # Check if question matches a pattern
+    if PATTERNS_AVAILABLE:
+        matched_pattern = pattern_matcher.match_pattern(question)
+
+        if matched_pattern:
+            print(f"✅ Pattern match found: {matched_pattern['name']}")
+            return matched_pattern['table'], f"Matched documented pattern: {matched_pattern['name']}"
+
+    # Check cached suggestions
+    cached_table = await get_cached_table_suggestion(question)
+    if cached_table:
+        # Verify if this table has a pattern
+        if PATTERNS_AVAILABLE:
+            pattern = pattern_matcher.get_pattern_by_table(cached_table)
+            if pattern:
+                return cached_table, f"Cached selection with pattern: {pattern['name']}"
+
+    # Fall back to vector search
+    print("🔍 Using vector search for table discovery...")
+    candidate_tables = await find_relevant_tables_from_vector_store(question, user_id, channel_id, top_k=8)
+
+    if not candidate_tables:
+        return "", "No relevant tables found"
+
+    # Prioritize tables that have documented patterns
+    if PATTERNS_AVAILABLE:
+        pattern_tables = []
+        other_tables = []
+
+        for table in candidate_tables:
+            if pattern_matcher.get_pattern_by_table(table):
+                pattern_tables.append(table)
+            else:
+                other_tables.append(table)
+
+        # Combine with pattern tables first
+        prioritized_tables = pattern_tables + other_tables
+    else:
+        prioritized_tables = candidate_tables
+
+    # Use sampling for final selection
+    return await select_best_table_using_samples(question, prioritized_tables[:5], user_id, channel_id)
+
+
+async def generate_pattern_aware_instructions(question: str, table: str, schema: dict) -> str:
+    """Generate SQL instructions that incorporate pattern knowledge"""
+
+    # Check if this table has a documented pattern
+    if PATTERNS_AVAILABLE:
+        pattern = pattern_matcher.get_pattern_by_table(table)
+
+        if pattern:
+            instructions = f"""You are a SQL expert. Generate PERFECT Snowflake SQL using the documented pattern.
+
+PATTERN: {pattern['name']}
+TABLE: {table}
+
+DOCUMENTED COLUMNS:
+{json.dumps(pattern['key_columns'], indent=2)}
+
+STANDARD FILTERS TO APPLY:
+{pattern.get('standard_filters', 'None')}
+
+AVAILABLE DERIVED FIELDS:
+{json.dumps(pattern.get('derived_fields', {}), indent=2)}
+
+PATTERN-SPECIFIC RULES:
+"""
+
+            if pattern['id'] == 'wops_tickets':
+                instructions += """
+- Always apply the standard filters for ticket queries
+- Use Contact_Channel derived field for channel analysis
+- Group by appropriate dimensions based on the question
+- Use _PST timestamp columns for time-based queries
+"""
+            elif pattern['id'] == 'klaus_qa':
+                instructions += """
+- Use the complex CTE structure for score calculations
+- Apply correct pass/fail thresholds by scorecard
+- Include component scores when relevant
+- Remember different scorecards have different thresholds
+"""
+            elif pattern['id'] == 'handle_time':
+                instructions += """
+- Use pre-calculated metrics (no need to calculate handle time)
+- For voice channel, use AMAZON_CONNECT_* columns
+- Filter outliers if needed (e.g., HANDLE_TIME_IN_MINUTES < 120)
+"""
+            elif pattern['id'] == 'fcr':
+                instructions += """
+- Use window functions with LEAD for next ticket analysis
+- Apply 24-hour window for FCR calculation
+- Include channel switching analysis when relevant
+"""
+
+            instructions += f"\n\nQuestion: {question}\n\nGenerate SQL that EXACTLY answers this question."
+
+            return instructions
+
+    # Fall back to standard instructions
+    intent = analyze_question_intent(question.lower())
+    result = build_sql_instructions(intent, table, schema, question)
+    return result['instructions']
+
+
+async def build_pattern_enhanced_message(question: str, table: str, pattern: Dict = None) -> str:
+    """Build assistant message with pattern context"""
+
+    if pattern:
+        message = f"""Question: {question}
+
+Using documented pattern: {pattern['name']}
+Table: {table}
+
+This pattern has been proven to answer questions about:
+{chr(10).join('- ' + q for q in pattern['questions'][:5])}
+
+Key columns available:
+- Identifiers: {', '.join(pattern['key_columns']['identifiers'][:3])}
+- Dimensions: {', '.join(pattern['key_columns']['dimensions'][:3])}
+- Metrics: {', '.join(pattern['key_columns']['metrics'][:3])}
+
+Generate SQL that follows the documented pattern exactly."""
+    else:
+        message = f"""Question: {question}
+Table: {table}
+
+Generate accurate SQL to answer this question."""
+
+    return message
+
+
+async def validate_pattern_sql(sql: str, pattern: Dict) -> Tuple[bool, str]:
+    """Validate that generated SQL follows pattern requirements"""
+
+    issues = []
+
+    # Check for required filters
+    if pattern.get('standard_filters'):
+        # Extract WHERE clause from SQL
+        sql_upper = sql.upper()
+        if 'WHERE' not in sql_upper:
+            issues.append("Missing required WHERE clause with standard filters")
+        else:
+            # Check for key filter components
+            required_filters = ['STATUS', 'CHANNEL', 'BRAND_ID']
+            where_clause = sql_upper.split('WHERE')[1].split('GROUP BY')[0]
+
+            for filter_col in required_filters:
+                if filter_col not in where_clause:
+                    issues.append(f"Missing required filter on {filter_col}")
+
+    # Check for pattern-specific requirements
+    if pattern['id'] == 'klaus_qa' and 'CTE' not in sql.upper() and 'WITH' not in sql.upper():
+        issues.append("Klaus queries should use CTE structure for score calculations")
+
+    if pattern['id'] == 'fcr' and 'LEAD(' not in sql.upper():
+        issues.append("FCR queries require LEAD window function")
+
+    is_valid = len(issues) == 0
+    return is_valid, "; ".join(issues) if issues else "SQL follows pattern correctly"
+
+
+async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -> str:
+    """Debug pattern matching for a question"""
+
+    result = f"🔍 Pattern Analysis for: '{question}'\n\n"
+
+    if not PATTERNS_AVAILABLE:
+        result += "❌ Pattern matcher not available"
+        return result
+
+    # Check pattern match
+    matched_pattern = pattern_matcher.match_pattern(question)
+
+    if matched_pattern:
+        result += f"✅ **Matched Pattern**: {matched_pattern['name']}\n"
+        result += f"📊 **Table**: {matched_pattern['table']}\n"
+        result += f"🎯 **Pattern ID**: {matched_pattern['id']}\n\n"
+
+        result += "**Pattern Configuration**:\n"
+        result += f"- Keywords matched: {[k for k in matched_pattern['keywords'] if k in question.lower()]}\n"
+        result += f"- Question patterns matched: {[q for q in matched_pattern['questions'] if q in question.lower()]}\n"
+
+        if matched_pattern.get('standard_filters'):
+            result += f"\n**Standard Filters**:\n```sql\n{matched_pattern['standard_filters']}\n```\n"
+
+        # Try to generate SQL
+        try:
+            intent = analyze_question_intent(question.lower())
+            sql = pattern_query_builder.build_query(question, matched_pattern, intent)
+            result += f"\n**Generated SQL**:\n```sql\n{sql}\n```"
+        except Exception as e:
+            result += f"\n❌ **SQL Generation Error**: {str(e)}"
+    else:
+        result += "❌ **No pattern match found**\n\n"
+
+        # Show pattern scores
+        result += "**Pattern Scores**:\n"
+        for pattern in pattern_matcher.patterns:
+            score = 0
+            for q in pattern["questions"]:
+                if q in question.lower():
+                    score += 10
+            for k in pattern["keywords"]:
+                if k in question.lower():
+                    score += 2
+
+            result += f"- {pattern['name']}: {score} points\n"
+
+    return result
+
+
+# Update the main SQL generation function
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
     Generate SQL using intelligent table discovery and intent analysis
     Returns: (sql_query, selected_table)
     """
+    # First try pattern matching if available
+    if PATTERNS_AVAILABLE:
+        return await generate_sql_with_patterns(user_question, user_id, channel_id)
+
     print(f"\n🤖 Starting intelligent SQL generation for: {user_question}")
 
     # Store the fact that we're generating SQL for context
@@ -1593,36 +1850,16 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     selected_table = None
 
     try:
-        # Step 1: Check cache for similar questions
-        cached_table = await get_cached_table_suggestion(user_question)
+        # Step 1: Enhanced table selection with pattern priority
+        selected_table, selection_reason = await enhanced_table_selection(user_question, user_id, channel_id)
 
-        if cached_table:
-            print(f"📋 Using cached table suggestion: {cached_table}")
-            selected_table = cached_table
-            selection_reason = "Based on successful similar queries"
-        else:
-            # Step 2: Use vector search to find relevant tables
-            print("🔍 Searching dbt manifest for relevant tables...")
-            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=8)
+        if not selected_table:
+            return "-- Error: Could not determine appropriate table", None
 
-            if not candidate_tables:
-                print("⚠️ No candidate tables found from vector search")
-                return "-- Error: Could not find relevant tables for this question. Please ensure your question mentions specific metrics or entities.", None
+        print(f"📊 Selected table: {selected_table}")
+        print(f"📝 Reason: {selection_reason}")
 
-            print(f"📊 Found {len(candidate_tables)} candidate tables")
-
-            # Step 3: Sample data from candidate tables and select best one
-            selected_table, selection_reason = await select_best_table_using_samples(
-                user_question, candidate_tables, user_id, channel_id
-            )
-
-            if not selected_table:
-                return "-- Error: Could not determine appropriate table", None
-
-            # Cache this selection for future use
-            await cache_table_selection(user_question, selected_table, selection_reason)
-
-        # Step 4: Discover schema for the selected table
+        # Step 2: Discover schema for the selected table
         schema = await discover_table_schema(selected_table)
 
         if schema.get('error'):
@@ -1638,31 +1875,39 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
         traceback.print_exc()
         return f"-- Error: {str(e)}", None
 
-    # Step 5: Analyze question intent
+    # Step 3: Analyze question intent
     question_lower = user_question.lower()
     question_intent = analyze_question_intent(question_lower)
     print(f"🎯 Question intent: {question_intent['type']}")
 
-    # Step 6: Generate SQL with assistant
+    # Step 4: Generate SQL with assistant
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return "-- Error: Could not create conversation thread", selected_table
 
-    # Build SQL generation instructions based on intent and actual data
-    sql_instructions = build_sql_instructions(
-        question_intent,
-        selected_table,
-        schema,
-        user_question
-    )
+    # Build SQL generation instructions with pattern awareness
+    instructions = await generate_pattern_aware_instructions(user_question, selected_table, schema)
 
-    response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
+    # Check if this table has a pattern
+    pattern = None
+    if PATTERNS_AVAILABLE:
+        pattern = pattern_matcher.get_pattern_by_table(selected_table)
+
+    message = await build_pattern_enhanced_message(user_question, selected_table, pattern)
+
+    response = await send_message_and_run(thread_id, message, instructions)
 
     # Extract SQL from response
     sql = extract_sql_from_response(response)
 
     # Validate and fix common SQL issues
     sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
+
+    # If we have a pattern, validate the SQL follows it
+    if pattern and PATTERNS_AVAILABLE:
+        is_valid, validation_msg = await validate_pattern_sql(sql, pattern)
+        if not is_valid:
+            print(f"⚠️ Pattern validation issues: {validation_msg}")
 
     print(f"\n🧠 Generated SQL:")
     print(f"{sql}")
@@ -1779,7 +2024,7 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
                 print(f"⚠️ Error checking cache: {cache_error}")
                 print(f"🔄 Proceeding to generate new SQL")
 
-            # Generate new SQL using intelligent table discovery
+            # Generate new SQL using intelligent table discovery with patterns
             sql_query, selected_table = await generate_sql_intelligently(user_question, user_id, channel_id)
 
             # Store the selected table in context for feedback
@@ -1896,7 +2141,6 @@ Provide a clear answer that directly addresses the question."""
 
     return response
 
-
 async def debug_table_selection(question: str, user_id: str = "debug", channel_id: str = "debug") -> str:
     """Debug the table selection process for a question"""
     result = f"🔍 Table Selection Debug for: '{question}'\n\n"
@@ -1965,6 +2209,7 @@ async def get_cache_stats():
     stats = {
         "cache_backend": "Valkey" if valkey_client else "Local Memory",
         "status": "connected" if valkey_client else "local",
+        "patterns_available": PATTERNS_AVAILABLE,
         "caches": {
             "sql": len(_local_cache.get('sql', {})),
             "schema": len(_local_cache.get('schema', {})),
@@ -1990,6 +2235,7 @@ async def get_learning_insights():
 
     insights = [f"Cache Backend: {stats['cache_backend']}"]
     insights.append(f"Status: {stats['status']}")
+    insights.append(f"Pattern Matching: {'Enabled' if stats['patterns_available'] else 'Disabled'}")
     insights.append(f"\nCached Items:")
     insights.append(f"  - SQL Queries: {stats['caches']['sql']}")
     insights.append(f"  - Table Schemas: {stats['caches']['schema']}")

@@ -2,16 +2,32 @@
   "tables": {
     "fct_zendesk__mqr_tickets": {
       "full_name": "ANALYTICS.dbt_production.fct_zendesk__mqr_tickets",
-      "keywords": ["ticket", "tickets", "created", "volume", "count", "zendesk", "today", "yesterday"],
+      "keywords": ["ticket", "tickets", "created", "volume", "count", "zendesk", "today", "yesterday", "resolved", "closed", "open", "pending"],
       "sample_queries": [
-        "How many tickets were created today?",
-        "What is the ticket volume?",
-        "Show ticket count by date",
-        "Ticket creation trends"
+        {
+          "description": "Today's ticket count",
+          "sql": "SELECT COUNT(*) as ticket_count FROM ANALYTICS.dbt_production.fct_zendesk__mqr_tickets WHERE DATE(created_at) = CURRENT_DATE()"
+        },
+        {
+          "description": "Ticket volume by group",
+          "sql": "SELECT group_name, COUNT(*) as ticket_count FROM ANALYTICS.dbt_production.fct_zendesk__mqr_tickets GROUP BY group_name ORDER BY ticket_count DESC"
+        },
+        {
+          "description": "Average first reply time by channel",
+          "sql": "SELECT channel, ROUND(AVG(first_reply_time_minutes), 2) as avg_first_reply_minutes, COUNT(*) as ticket_count FROM ANALYTICS.dbt_production.fct_zendesk__mqr_tickets WHERE first_reply_time_minutes IS NOT NULL GROUP BY channel ORDER BY avg_first_reply_minutes"
+        },
+        {
+          "description": "Last 7 days ticket trend",
+          "sql": "SELECT DATE(created_at) as ticket_date, COUNT(*) as daily_count FROM ANALYTICS.dbt_production.fct_zendesk__mqr_tickets WHERE created_at >= DATEADD(day, -7, CURRENT_DATE()) GROUP BY DATE(created_at) ORDER BY ticket_date"
+        },
+        {
+          "description": "High priority tickets by assignee",
+          "sql": "SELECT assignee_name, COUNT(*) as high_priority_count FROM ANALYTICS.dbt_production.fct_zendesk__mqr_tickets WHERE priority = 'high' AND status NOT IN ('solved', 'closed') GROUP BY assignee_name ORDER BY high_priority_count DESC"
+        }
       ],
       "key_columns": {
-        "dates": ["created_at", "created_at_pst"],
-        "dimensions": ["ticket_id", "group_name", "assignee_name", "status", "channel"],
+        "dates": ["created_at", "created_at_pst", "updated_at", "solved_at"],
+        "dimensions": ["ticket_id", "group_name", "assignee_name", "status", "channel", "priority", "type"],
         "metrics": ["first_reply_time_minutes", "resolution_time_hours"]
       }
     },
@@ -19,43 +35,93 @@
       "full_name": "ANALYTICS.dbt_production.wops_agent_performance",
       "keywords": ["agent", "performance", "kpi", "kpis", "metrics", "aht", "csat", "fcr", "productivity"],
       "sample_queries": [
-        "What are the KPIs that determine agent performance?",
-        "Show agent performance metrics",
-        "Agent KPI report",
-        "Which agents have the best performance?"
+        {
+          "description": "Agent KPIs overview",
+          "sql": "SELECT agent_name, ROUND(AVG(aht_minutes), 2) as avg_aht, ROUND(AVG(positive_csat_percentage), 2) as avg_csat, ROUND(AVG(fcr_percentage), 2) as avg_fcr, ROUND(AVG(qa_score), 2) as avg_qa_score FROM ANALYTICS.dbt_production.wops_agent_performance WHERE date >= DATEADD(day, -30, CURRENT_DATE()) GROUP BY agent_name ORDER BY avg_csat DESC LIMIT 20"
+        },
+        {
+          "description": "Top performing agents by CSAT",
+          "sql": "SELECT agent_name, ROUND(AVG(positive_csat_percentage), 2) as avg_csat, COUNT(*) as days_worked FROM ANALYTICS.dbt_production.wops_agent_performance WHERE date >= DATEADD(day, -7, CURRENT_DATE()) GROUP BY agent_name HAVING days_worked >= 5 ORDER BY avg_csat DESC LIMIT 10"
+        },
+        {
+          "description": "Agent productivity trends",
+          "sql": "SELECT DATE_TRUNC('week', date) as week_start, ROUND(AVG(productivity_score), 2) as avg_productivity, ROUND(AVG(aht_minutes), 2) as avg_aht FROM ANALYTICS.dbt_production.wops_agent_performance WHERE date >= DATEADD(month, -3, CURRENT_DATE()) GROUP BY DATE_TRUNC('week', date) ORDER BY week_start"
+        },
+        {
+          "description": "Agents with low FCR",
+          "sql": "SELECT agent_name, ROUND(AVG(fcr_percentage), 2) as avg_fcr, COUNT(*) as sample_days FROM ANALYTICS.dbt_production.wops_agent_performance WHERE date >= DATEADD(day, -14, CURRENT_DATE()) GROUP BY agent_name HAVING AVG(fcr_percentage) < 70 ORDER BY avg_fcr"
+        },
+        {
+          "description": "Daily performance snapshot",
+          "sql": "SELECT agent_name, aht_minutes, positive_csat_percentage, fcr_percentage, qa_score, productivity_score FROM ANALYTICS.dbt_production.wops_agent_performance WHERE date = DATEADD(day, -1, CURRENT_DATE()) ORDER BY positive_csat_percentage DESC"
+        }
       ],
       "key_columns": {
         "dates": ["date"],
-        "dimensions": ["agent_id", "agent_name"],
-        "metrics": ["aht_minutes", "positive_csat_percentage", "fcr_percentage", "qa_score", "productivity_score"]
+        "dimensions": ["agent_id", "agent_name", "team_name"],
+        "metrics": ["aht_minutes", "positive_csat_percentage", "fcr_percentage", "qa_score", "productivity_score", "occupancy_percentage"]
       }
     },
     "rpt_csat_survey_details": {
       "full_name": "ANALYTICS.dbt_production.rpt_csat_survey_details",
-      "keywords": ["csat", "survey", "satisfaction", "feedback", "customer", "rating"],
+      "keywords": ["csat", "survey", "satisfaction", "feedback", "customer", "rating", "score"],
       "sample_queries": [
-        "What is the CSAT score?",
-        "Show customer satisfaction trends",
-        "CSAT by agent or team"
+        {
+          "description": "Overall CSAT score last 30 days",
+          "sql": "SELECT ROUND(AVG(csat_score), 2) as avg_csat, COUNT(*) as total_surveys FROM ANALYTICS.dbt_production.rpt_csat_survey_details WHERE created_at >= DATEADD(day, -30, CURRENT_DATE())"
+        },
+        {
+          "description": "CSAT by team",
+          "sql": "SELECT team_name, ROUND(AVG(csat_score), 2) as avg_csat, COUNT(*) as survey_count FROM ANALYTICS.dbt_production.rpt_csat_survey_details WHERE created_at >= DATEADD(day, -7, CURRENT_DATE()) GROUP BY team_name ORDER BY avg_csat DESC"
+        },
+        {
+          "description": "Daily CSAT trend",
+          "sql": "SELECT DATE(created_at) as survey_date, ROUND(AVG(csat_score), 2) as daily_csat, COUNT(*) as response_count FROM ANALYTICS.dbt_production.rpt_csat_survey_details WHERE created_at >= DATEADD(day, -14, CURRENT_DATE()) GROUP BY DATE(created_at) ORDER BY survey_date"
+        },
+        {
+          "description": "Low CSAT tickets",
+          "sql": "SELECT ticket_id, agent_name, csat_score, created_at FROM ANALYTICS.dbt_production.rpt_csat_survey_details WHERE csat_score <= 3 AND created_at >= DATEADD(day, -7, CURRENT_DATE()) ORDER BY created_at DESC"
+        },
+        {
+          "description": "CSAT response rate by team",
+          "sql": "SELECT team_name, COUNT(*) as surveys_sent, SUM(CASE WHEN csat_score IS NOT NULL THEN 1 ELSE 0 END) as surveys_completed, ROUND(100.0 * SUM(CASE WHEN csat_score IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 2) as response_rate FROM ANALYTICS.dbt_production.rpt_csat_survey_details GROUP BY team_name ORDER BY response_rate DESC"
+        }
       ],
       "key_columns": {
-        "dates": ["created_at", "created_at_pst"],
-        "dimensions": ["ticket_id", "agent_name", "team_name"],
-        "metrics": ["csat_score", "response_rate"]
+        "dates": ["created_at", "created_at_pst", "submitted_at"],
+        "dimensions": ["ticket_id", "agent_name", "team_name", "channel"],
+        "metrics": ["csat_score", "response_time_hours"]
       }
     },
     "zendesk_ticket_agent__handle_time": {
       "full_name": "ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time",
       "keywords": ["handle", "handling", "time", "aht", "duration", "agent", "ticket"],
       "sample_queries": [
-        "What is the average handling time?",
-        "Show AHT by agent",
-        "Handling time trends"
+        {
+          "description": "Average handling time by agent",
+          "sql": "SELECT agent_name, ROUND(AVG(handle_time_minutes), 2) as avg_handle_time, COUNT(*) as tickets_handled FROM ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time WHERE created_at >= DATEADD(day, -7, CURRENT_DATE()) GROUP BY agent_name ORDER BY avg_handle_time"
+        },
+        {
+          "description": "Tickets with long handle time",
+          "sql": "SELECT ticket_id, agent_name, handle_time_minutes, created_at FROM ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time WHERE handle_time_minutes > 30 AND created_at >= DATEADD(day, -1, CURRENT_DATE()) ORDER BY handle_time_minutes DESC"
+        },
+        {
+          "description": "Handle time distribution",
+          "sql": "SELECT CASE WHEN handle_time_minutes < 5 THEN '0-5 min' WHEN handle_time_minutes < 10 THEN '5-10 min' WHEN handle_time_minutes < 20 THEN '10-20 min' WHEN handle_time_minutes < 30 THEN '20-30 min' ELSE '30+ min' END as time_bucket, COUNT(*) as ticket_count FROM ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time WHERE created_at >= DATEADD(day, -7, CURRENT_DATE()) GROUP BY time_bucket ORDER BY time_bucket"
+        },
+        {
+          "description": "Daily average handle time trend",
+          "sql": "SELECT DATE(created_at) as handle_date, ROUND(AVG(handle_time_minutes), 2) as avg_handle_time, COUNT(*) as tickets FROM ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time WHERE created_at >= DATEADD(day, -30, CURRENT_DATE()) GROUP BY DATE(created_at) ORDER BY handle_date"
+        },
+        {
+          "description": "Agent efficiency ranking",
+          "sql": "SELECT agent_name, COUNT(*) as tickets_handled, ROUND(AVG(handle_time_minutes), 2) as avg_handle_time, ROUND(MEDIAN(handle_time_minutes), 2) as median_handle_time FROM ANALYTICS.dbt_production.zendesk_ticket_agent__handle_time WHERE created_at >= DATEADD(day, -14, CURRENT_DATE()) GROUP BY agent_name HAVING COUNT(*) >= 10 ORDER BY avg_handle_time LIMIT 20"
+        }
       ],
       "key_columns": {
-        "dates": ["created_at"],
-        "dimensions": ["ticket_id", "agent_id", "agent_name"],
-        "metrics": ["handle_time_minutes", "handle_time_seconds"]
+        "dates": ["created_at", "updated_at"],
+        "dimensions": ["ticket_id", "agent_id", "agent_name", "group_name"],
+        "metrics": ["handle_time_minutes", "handle_time_seconds", "first_touch_time", "total_touches"]
       }
     }
   }

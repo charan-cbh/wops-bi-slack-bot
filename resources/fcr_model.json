@@ -1,0 +1,105 @@
+{
+  "metabase_query_patterns": [
+    {
+      "pattern_name": "First Contact Resolution (FCR) Analysis",
+      "pattern_description": "Analyzes whether customer issues are resolved on first contact or require follow-up tickets within 24 hours",
+      "questions_answered": [
+        "What is the FCR rate?",
+        "Which agents have the best FCR?",
+        "FCR by channel (Chat vs Voice)",
+        "Which issue types have low FCR?",
+        "Channel switching patterns (Chat to Voice, etc.)",
+        "Repeat contact analysis",
+        "FCR trends over time",
+        "Impact of issue type on FCR",
+        "Facility-specific FCR rates",
+        "Supervisor/team FCR performance",
+        "Same issue vs different issue follow-ups",
+        "Time between repeat contacts"
+      ],
+      "base_query": "WITH FCR_CTE AS (window functions) SELECT FROM FCT_ZENDESK__MQR_TICKETS",
+      "tables_involved": [
+        "ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS"
+      ],
+      "window_functions_used": {
+        "LEAD": {
+          "purpose": "Look at the next ticket from same requester",
+          "partitioned_by": "REQUESTER_ID",
+          "ordered_by": "CREATED_AT_PST",
+          "fields_tracked": [
+            "next_ticket (ticket_id)",
+            "next_channel",
+            "next_contact_channel",
+            "next_issue_type",
+            "next_shift_id",
+            "next_facility_id",
+            "next_ticket_date"
+          ]
+        }
+      },
+      "fcr_logic": {
+        "definition": "Ticket is resolved first time if no follow-up ticket within 24 hours",
+        "calculation": "CASE WHEN created_at_pst + INTERVAL '24 HOUR' >= next_ticket_date THEN 0 ELSE 1 END",
+        "values": {
+          "1": "Resolved first time (FCR success)",
+          "0": "Customer contacted again within 24 hours (FCR failure)"
+        }
+      },
+      "key_columns": {
+        "identifiers": ["TICKET_ID", "NEXT_TICKET", "REQUESTER_ID"],
+        "current_ticket": ["CHANNEL", "CONTACT_CHANNEL", "ISSUE_TYPE", "SHIFT_ID_S", "FACILITY_ID_S"],
+        "next_ticket": ["NEXT_CHANNEL", "NEXT_CONTACT_CHANNEL", "NEXT_ISSUE_TYPE", "NEXT_SHIFT_ID", "NEXT_FACILITY_ID"],
+        "agent_info": ["ASSIGNEE_NAME", "ASSIGNEE_ID", "ASSIGNEE_SUPERVISOR"],
+        "timestamps": ["CREATED_AT_PST", "SOLVED_AT_PST", "NEXT_TICKET_DATE"],
+        "fcr_flag": ["IS_RESOLVED_FIRST_TIME"]
+      },
+      "filters_applied": {
+        "time_range": "Last 6 weeks including current week",
+        "status": "solved or closed tickets only",
+        "brands": "360002340693, 29186504989207 (CBH brands)",
+        "exclusions": [
+          "email_blocked tags",
+          "bulk_email_tool tags",
+          "seattle_psst_monthly_email tags",
+          "TechOps Bot (15840273336343)"
+        ],
+        "channels": "native_messaging only",
+        "groups": "17837476387479 (Chat), 28949203098007 (Voice)"
+      },
+      "contact_channel_mapping": {
+        "17837476387479": "Chat",
+        "28949203098007": "Voice",
+        "other": "Other"
+      },
+      "common_queries": {
+        "fcr_rate": "SELECT AVG(IS_RESOLVED_FIRST_TIME) * 100 as fcr_rate FROM table",
+        "fcr_by_agent": "SELECT ASSIGNEE_NAME, AVG(IS_RESOLVED_FIRST_TIME) * 100 as fcr_rate, COUNT(*) as tickets FROM table GROUP BY ASSIGNEE_NAME",
+        "fcr_by_channel": "SELECT CONTACT_CHANNEL, AVG(IS_RESOLVED_FIRST_TIME) * 100 as fcr_rate FROM table GROUP BY CONTACT_CHANNEL",
+        "channel_switching": "SELECT CONTACT_CHANNEL, NEXT_CONTACT_CHANNEL, COUNT(*) as switches FROM table WHERE IS_RESOLVED_FIRST_TIME = 0 AND NEXT_CONTACT_CHANNEL IS NOT NULL GROUP BY 1,2",
+        "repeat_same_issue": "SELECT ISSUE_TYPE, AVG(CASE WHEN ISSUE_TYPE = NEXT_ISSUE_TYPE THEN 1 ELSE 0 END) * 100 as same_issue_rate FROM table WHERE IS_RESOLVED_FIRST_TIME = 0 GROUP BY ISSUE_TYPE",
+        "time_to_repeat": "SELECT AVG(DATEDIFF('hour', SOLVED_AT_PST, NEXT_TICKET_DATE)) as avg_hours_to_repeat FROM table WHERE IS_RESOLVED_FIRST_TIME = 0"
+      },
+      "adaptation_guidance": {
+        "change_fcr_window": "Modify the 24 HOUR interval in the CASE statement",
+        "include_all_channels": "Remove the channel and group_id filters",
+        "specific_issue_types": "Add WHERE ISSUE_TYPE = 'specific_type'",
+        "team_analysis": "GROUP BY ASSIGNEE_SUPERVISOR",
+        "exclude_channel_switches": "Add WHERE (CONTACT_CHANNEL = NEXT_CONTACT_CHANNEL OR NEXT_CONTACT_CHANNEL IS NULL)"
+      },
+      "important_notes": [
+        "FCR is measured within 24-hour window",
+        "Only looks at native_messaging channel tickets",
+        "Limited to Chat and Voice contact channels",
+        "Tracks if customer switches channels on repeat contact",
+        "Identifies if repeat contact is for same or different issue",
+        "NULL next_ticket values mean no follow-up (good for FCR)"
+      ],
+      "insights_possible": {
+        "channel_effectiveness": "Compare FCR rates between Chat and Voice",
+        "issue_complexity": "Which issue types require multiple contacts",
+        "channel_escalation": "Pattern of Chat → Voice escalations",
+        "agent_effectiveness": "Which agents resolve issues first time"
+      }
+    }
+  ]
+}

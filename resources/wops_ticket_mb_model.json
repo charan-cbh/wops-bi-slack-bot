@@ -1,0 +1,75 @@
+{
+  "metabase_query_patterns": [
+    {
+      "pattern_name": "WOPS Tickets Comprehensive Analysis",
+      "pattern_description": "Master query for all ticket-related analysis with standard filters",
+      "questions_answered": [
+        "How many tickets were created/solved/closed?",
+        "What is the ticket volume by channel/group/agent?",
+        "Show ticket distribution by type/category",
+        "What are the response/resolution times?",
+        "Which tickets have longest handle time?",
+        "Show tickets by priority/status",
+        "What are the escalation patterns?",
+        "Ticket trends over time",
+        "Agent performance on ticket handling",
+        "Contact channel breakdown",
+        "Dispute and payment-related tickets",
+        "Urgent shift requests",
+        "Waiver requests analysis"
+      ],
+      "base_query": "SELECT [ALL_COLUMNS] FROM ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS",
+      "tables_involved": [
+        "ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS"
+      ],
+      "standard_filters": {
+        "status_filter": "STATUS IN ('closed', 'solved')",
+        "exclude_automated": "ASSIGNEE_NAME <> 'Automated Update' OR ASSIGNEE_NAME IS NULL",
+        "exclude_blocked_emails": "NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL",
+        "channel_filter": "CHANNEL IN ('api', 'email', 'native_messaging', 'web')",
+        "exclude_bot": "ASSIGNEE_NAME <> 'TechOps Bot' OR ASSIGNEE_NAME IS NULL",
+        "brand_filter": "BRAND_ID IN ('29186504989207', '360002340693')",
+        "exclude_bulk_emails": "NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' OR TICKET_TAGS IS NULL",
+        "exclude_seattle_emails": "NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%' OR TICKET_TAGS IS NULL"
+      },
+      "custom_fields": {
+        "Contact_Channel": {
+          "logic": "CASE WHEN GROUP_ID = '5495272772503' THEN 'Web' WHEN GROUP_ID = '17837476387479' THEN 'Chat' WHEN GROUP_ID = '28949203098007' THEN 'Voice' ELSE 'Other' END",
+          "description": "Derives contact channel from GROUP_ID"
+        },
+        "ticket_sub_type": {
+          "logic": "Complex CASE statement based on WOPS_TICKET_TYPE_A that maps to various category fields",
+          "mapping": {
+            "wops_attendance_waiver_request": "WAIVER_REQUEST_DRIVER",
+            "mpt_ticket_type_payments": "PAYMENTS_CATEGORY_B",
+            "mpt_ticket_type_general_assistance": "PRODUCT_FEATURE_A",
+            "mpt_ticket_type_urgent_shifts": "URGENT_SHIFTS_TYPE_A",
+            "mpt_ticket_type_reactivation_request": "DEACTIVATION_REASON"
+          }
+        }
+      },
+      "key_columns": {
+        "identifiers": ["TICKET_ID", "REQUESTER_ID", "ASSIGNEE_ID", "WORKER_ID"],
+        "dimensions": ["GROUP_NAME", "CHANNEL", "STATUS", "PRIORITY", "TICKET_TYPE", "ASSIGNEE_NAME"],
+        "timestamps": ["CREATED_AT", "SOLVED_AT", "ASSIGNED_AT", "UPDATED_AT"],
+        "metrics": ["REPLY_TIME_IN_MINUTES", "FIRST_RESOLUTION_TIME_IN_MINUTES", "FULL_RESOLUTION_TIME_IN_MINUTES", "HANDLE_TIME"],
+        "categories": ["WOPS_TICKET_TYPE_A", "PAYMENTS_CATEGORY_B", "DISPUTE_DRIVER_A", "ESCALATION_TEAM"]
+      },
+      "adaptation_guidance": {
+        "for_date_filters": "Add WHERE clause like: CREATED_AT >= CURRENT_DATE - 7",
+        "for_specific_agent": "Add: AND ASSIGNEE_NAME = 'Agent Name'",
+        "for_ticket_type": "Add: AND WOPS_TICKET_TYPE_A = 'specific_type'",
+        "for_aggregations": "Remove individual columns, use COUNT(*), AVG(metrics), GROUP BY dimensions",
+        "for_trending": "Add DATE_TRUNC('day', CREATED_AT) and GROUP BY date",
+        "remove_filters": "Consider removing status/channel filters based on question needs"
+      },
+      "important_notes": [
+        "Always apply standard filters unless specifically asked for all tickets",
+        "Contact Channel is derived, not a direct column",
+        "Handle time columns are in different units (minutes vs seconds)",
+        "PST timestamp columns available for timezone-specific queries",
+        "Many category fields ending in _A, _B, _C represent hierarchical categorization"
+      ]
+    }
+  ]
+}
