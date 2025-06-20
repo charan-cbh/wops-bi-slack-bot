@@ -1,0 +1,96 @@
+{
+  "metabase_query_patterns": [
+    {
+      "pattern_name": "Klaus Quality Assurance (QA) Reviews Analysis",
+      "pattern_description": "Comprehensive QA scoring and agent performance evaluation from Klaus reviews",
+      "questions_answered": [
+        "What are agent QA scores?",
+        "Which agents passed/failed their QA reviews?",
+        "What is the average QA score by team/agent?",
+        "Show QA component breakdown (Resolution, Communication, etc.)",
+        "What are the most common QA failures?",
+        "QA score trends over time",
+        "Reviewer performance and consistency",
+        "Agent performance on specific QA components",
+        "ATA (Agent Training Assessment) scores",
+        "QA pass rates by scorecard type",
+        "Which QA components need improvement?",
+        "Compare QA scores between agents/teams",
+        "Auto-fail incidents analysis"
+      ],
+      "base_query": "WITH KlausBase AS (...) SELECT FROM FCT_KLAUS__REVIEWS",
+      "tables_involved": [
+        "ANALYTICS.DBT_PRODUCTION.FCT_KLAUS__REVIEWS"
+      ],
+      "scorecard_types": {
+        "53921": {"name": "QA v2", "pass_threshold": 85},
+        "54262": {"name": "ATA v2", "pass_threshold": 85},
+        "59144": {"name": "ATA", "pass_threshold": 90},
+        "60047": {"name": "Unknown", "always_fail": true}
+      },
+      "qa_components": {
+        "communication": {
+          "old_method": "Effective Communication category",
+          "new_method": "Average of 6 sub-components (IDs: 319808-319813)",
+          "columns": ["Clear_Communication"]
+        },
+        "resolution": {
+          "category_ids": [319803, 322509],
+          "columns": ["Resolution"]
+        },
+        "handling": {
+          "qa_method": "Weighted average: 75% Handling_1 + 25% Handling_2",
+          "ata_method": "Direct score from category 322522",
+          "columns": ["Handling", "Handling_1", "Handling_2"]
+        },
+        "behavioral": {
+          "columns": ["Tone", "Spelling_and_Grammar", "Presence", "Opening", "Closing", "Hold", "Escalations"]
+        },
+        "technical": {
+          "columns": ["Investigation", "Delivering_Outcomes", "Education", "Attendance", "Payments"]
+        },
+        "ata_specific": {
+          "columns": ["ATA_Failure_Select_Correct_SOP", "ATA_Failure_Follow_SOP", "ATA_Targeted_Education",
+                     "ATA_Critical_Thinking", "ATA_Internal_Tools"]
+        }
+      },
+      "key_columns": {
+        "identifiers": ["REVIEW_ID", "TICKET_ID", "SCORECARD_ID"],
+        "people": ["REVIEWEE_EMAIL", "REVIEWEE_NAME", "REVIEWER_EMAIL", "REVIEWER_NAME"],
+        "timestamps": ["REVIEW_CREATED_AT", "REVIEW_UPDATED_AT"],
+        "scores": ["Overall_Score", "No_Auto_Fail"],
+        "status": ["IS_PASS_FAIL"]
+      },
+      "score_calculation": {
+        "formula": "SUM(RATING_SCORE * RATING_WEIGHT) / SUM(100 * RATING_WEIGHT) * 100",
+        "conditions": [
+          "Auto-fail component must be 100 for valid score",
+          "If auto-fail < 100, overall score = 0",
+          "Different pass thresholds by scorecard type"
+        ]
+      },
+      "adaptation_guidance": {
+        "for_date_filters": "Add WHERE REVIEW_CREATED_AT >= CURRENT_DATE - 30",
+        "for_specific_agent": "Add WHERE REVIEWEE_EMAIL = 'agent@company.com'",
+        "for_team_analysis": "JOIN with agent/team mapping tables",
+        "for_trending": "GROUP BY DATE_TRUNC('week', REVIEW_CREATED_AT)",
+        "for_component_analysis": "Focus on specific component columns",
+        "for_pass_rate": "COUNT(CASE WHEN IS_PASS_FAIL = 'Pass' THEN 1 END) / COUNT(*)"
+      },
+      "important_notes": [
+        "Different scorecards have different pass thresholds",
+        "Scorecard 60047 always results in 'Fail'",
+        "Clear_Communication uses different calculation methods based on scorecard version",
+        "Handling score calculation differs between QA and ATA scorecards",
+        "All scores are on a 0-100 scale",
+        "Auto-fail component can invalidate entire review"
+      ],
+      "common_aggregations": {
+        "average_qa_score": "AVG(Overall_Score)",
+        "pass_rate": "AVG(CASE WHEN IS_PASS_FAIL = 'Pass' THEN 1.0 ELSE 0 END) * 100",
+        "component_averages": "AVG(Resolution), AVG(Clear_Communication), AVG(Handling)",
+        "auto_fail_rate": "AVG(CASE WHEN No_Auto_Fail < 100 THEN 1.0 ELSE 0 END) * 100"
+      }
+    }
+  ]
+}
