@@ -1576,41 +1576,289 @@ def validate_and_fix_sql(sql: str, question: str, table: str, columns: List[str]
 
 
 # PATTERN-BASED ENHANCEMENTS START HERE
-
 async def generate_sql_with_patterns(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
-    Enhanced SQL generation that prioritizes pattern matching
+    Enhanced SQL generation that uses patterns for context but lets OpenAI generate the SQL
     Returns: (sql_query, selected_table)
     """
-    print(f"\n🤖 Starting pattern-based SQL generation for: {user_question}")
+    print(f"\n🤖 Starting pattern-enhanced SQL generation for: {user_question}")
 
-    # Step 1: Try pattern matching first
+    selected_table = None
+    pattern_context = None
+
+    # Step 1: Try to find a matching pattern for context
     if PATTERNS_AVAILABLE:
         matched_pattern = pattern_matcher.match_pattern(user_question)
 
         if matched_pattern:
-            print(f"✅ Matched pattern: {matched_pattern['name']}")
+            print(f"✅ Found pattern context: {matched_pattern['name']}")
             selected_table = matched_pattern['table']
+            pattern_context = matched_pattern
 
-            # Analyze question intent
-            question_intent = analyze_question_intent(user_question.lower())
+            # Cache this pattern match for table selection
+            await cache_table_selection(user_question, selected_table, f"Pattern match: {matched_pattern['name']}")
+        else:
+            print("🔍 No pattern match, using standard table discovery...")
 
-            # Build query using pattern
-            try:
-                sql = pattern_query_builder.build_query(user_question, matched_pattern, question_intent)
-                print(f"📝 Generated SQL from pattern:\n{sql}")
+    # Step 2: If no pattern match, use intelligent table discovery
+    if not selected_table:
+        selected_table, selection_reason = await enhanced_table_selection(user_question, user_id, channel_id)
 
-                # Cache this successful pattern match
-                await cache_table_selection(user_question, selected_table, f"Pattern match: {matched_pattern['name']}")
+        if not selected_table:
+            return "-- Error: Could not determine appropriate table", None
 
-                return sql, selected_table
-            except Exception as e:
-                print(f"⚠️ Error building query from pattern: {e}")
-                # Fall back to intelligent generation
+        # Check if selected table has a pattern for context
+        if PATTERNS_AVAILABLE and not pattern_context:
+            pattern_context = pattern_matcher.get_pattern_by_table(selected_table)
 
-    # Step 2: Fall back to intelligent table discovery if no pattern match
-    print("🔄 No pattern match, using intelligent table discovery...")
-    return await generate_sql_intelligently(user_question, user_id, channel_id)
+    print(f"📊 Selected table: {selected_table}")
+
+    # Step 3: Discover schema
+    schema = await discover_table_schema(selected_table)
+
+    if schema.get('error'):
+        print(f"⚠️ Schema discovery failed: {schema.get('error')}")
+        schema = {
+            'table': selected_table,
+            'columns': [],
+            'error': schema.get('error')
+        }
+
+    # Step 4: Store the fact that we're generating SQL for context
+    await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation',
+                                      selected_table)
+
+    # Step 5: Analyze question intent
+    question_intent = analyze_question_intent(user_question.lower())
+    print(f"🎯 Question intent: {question_intent['type']}")
+
+    # Step 6: Generate SQL with OpenAI, providing pattern context
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return "-- Error: Could not create conversation thread", selected_table
+
+    # Build enhanced instructions with pattern context
+    instructions = build_pattern_enhanced_instructions(
+        user_question,
+        selected_table,
+        schema,
+        pattern_context,
+        question_intent
+    )
+
+    # Build message with pattern context
+    message = build_pattern_enhanced_message_for_ai(
+        user_question,
+        selected_table,
+        schema,
+        pattern_context,
+        question_intent
+    )
+
+    response = await send_message_and_run(thread_id, message, instructions)
+
+    # Extract SQL from response
+    sql = extract_sql_from_response(response)
+
+    # Validate and fix common SQL issues
+    sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
+
+    print(f"\n🧠 Generated SQL:")
+    print(f"{sql}")
+    print(f"{'=' * 60}\n")
+
+    return sql, selected_table
+
+
+def build_pattern_enhanced_instructions(question: str, table: str, schema: dict, pattern: Dict = None,
+                                        intent: dict = None) -> str:
+    """Build instructions for OpenAI that include pattern context"""
+
+    columns = schema.get('columns', [])
+    column_descriptions = schema.get('column_descriptions', {})
+    audit_columns = schema.get('audit_columns', [])
+
+    # Create column info string
+    column_info_parts = []
+    for col in columns[:50]:
+        desc = column_descriptions.get(col.lower(), {}).get('comment', '')
+        col_type = column_descriptions.get(col.lower(), {}).get('type', '')
+        if desc:
+            column_info_parts.append(f"{col} ({col_type}): {desc}")
+        else:
+            column_info_parts.append(f"{col} ({col_type})")
+
+    column_info = "\n".join(column_info_parts)
+
+    # Base instructions
+    instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL.
+
+TABLE: {table}
+AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
+
+AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
+{column_info}
+
+"""
+
+    # Add pattern-specific context if available
+    if pattern:
+        instructions += f"""
+IMPORTANT PATTERN INFORMATION:
+This table follows the "{pattern['name']}" pattern with specific requirements:
+
+STANDARD FILTERS THAT MUST BE APPLIED:
+{pattern.get('standard_filters', 'None')}
+
+KEY COLUMNS FOR THIS PATTERN:
+- Identifiers: {', '.join(pattern['key_columns']['identifiers'])}
+- Dimensions: {', '.join(pattern['key_columns']['dimensions'])}
+- Metrics: {', '.join(pattern['key_columns']['metrics'])}
+
+BUSINESS RULES:
+{chr(10).join('- ' + rule for rule in pattern.get('business_rules', []))}
+
+"""
+
+        # Add pattern-specific guidance
+        if pattern['id'] == 'wops_tickets':
+            instructions += """
+SPECIFIC REQUIREMENTS FOR WOPS TICKETS:
+1. ALWAYS apply ALL the standard filters shown above - every single one is required
+2. For contact channel analysis, use this EXACT derived field:
+   CASE 
+     WHEN GROUP_ID = '5495272772503' THEN 'Web'
+     WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+     WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+     ELSE 'Other'
+   END AS Contact_Channel
+3. Use _PST timestamp columns when available for time-based queries
+4. For ticket sub-types, consider mapping WOPS_TICKET_TYPE_A to appropriate category columns
+
+"""
+        elif pattern['id'] == 'klaus_qa':
+            instructions += """
+SPECIFIC REQUIREMENTS FOR KLAUS QA:
+1. Use complex score calculations with these exact pass thresholds:
+   - Scorecard 53921 (QA v2): Pass threshold = 85%
+   - Scorecard 54262 (ATA v2): Pass threshold = 85%
+   - Scorecard 59144 (ATA): Pass threshold = 90%
+   - Scorecard 60047: Always results in 'Fail'
+2. Overall Score calculation must consider No_Auto_Fail and rating weights
+3. Clear Communication Score: Average of 6 sub-components (IDs: 319808-319813)
+4. Handling Score: 75% weight on Handling_1 + 25% weight on Handling_2
+
+"""
+        elif pattern['id'] == 'handle_time':
+            instructions += """
+SPECIFIC REQUIREMENTS FOR HANDLE TIME:
+1. Handle time is pre-calculated - use HANDLE_TIME_IN_MINUTES or HANDLE_TIME_IN_SECONDS directly
+2. For voice channel analysis, use these AMAZON_CONNECT columns:
+   - AMAZON_CONNECT_CALL_DURATION_IN_MINUTES
+   - AMAZON_CONNECT_HOLD_TIME_IN_MINUTES
+   - AMAZON_CONNECT_TALK_TIME_IN_MINUTES
+3. Consider filtering outliers (e.g., WHERE HANDLE_TIME_IN_MINUTES < 120)
+
+"""
+        elif pattern['id'] == 'fcr':
+            instructions += """
+SPECIFIC REQUIREMENTS FOR FCR:
+1. Use window functions with LEAD to analyze next ticket:
+   CASE
+     WHEN created_at_pst + INTERVAL '24 HOUR' >= 
+          LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) 
+     THEN 0 ELSE 1
+   END AS is_resolved_first_time
+2. Apply the standard filters shown above
+3. Include channel analysis:
+   CASE
+     WHEN group_id = '17837476387479' THEN 'Chat'
+     WHEN group_id = '28949203098007' THEN 'Voice'
+     ELSE 'Other'
+   END AS contact_channel
+
+"""
+
+    # Add intent-specific guidance
+    if intent:
+        instructions += f"\nQUESTION INTENT ANALYSIS:\n"
+        instructions += f"- Question Type: {intent['type']}\n"
+        instructions += f"- Time Filter: {intent.get('time_filter', 'None')}\n"
+
+        if intent.get('time_filter'):
+            # Find best date column for filtering
+            date_columns = []
+            for col in columns:
+                col_lower = col.lower()
+                col_type = column_descriptions.get(col_lower, {}).get('type', '').lower()
+                if col in audit_columns and ('date' in col_type or 'timestamp' in col_type):
+                    date_columns.insert(0, col)
+                elif any(pattern in col_lower for pattern in ['date', 'time', 'created', 'updated', '_at']):
+                    if 'date' in col_type or 'timestamp' in col_type:
+                        date_columns.append(col)
+
+            if date_columns:
+                date_col = date_columns[0]
+                instructions += f"\nFor time filtering, use column: {date_col}\n"
+
+    instructions += """
+CRITICAL REQUIREMENTS:
+1. Generate SQL that COMPLETELY and ACCURATELY answers the question
+2. Use ONLY columns that exist in the schema above
+3. Apply ALL required filters and business logic from the pattern
+4. Handle NULLs appropriately
+5. Use the full table name
+6. Ensure proper GROUP BY for any aggregations
+7. Apply appropriate LIMIT for non-aggregated queries
+
+Return ONLY the SQL query - no explanations."""
+
+    return instructions
+
+
+def build_pattern_enhanced_message_for_ai(question: str, table: str, schema: dict, pattern: Dict = None,
+                                          intent: dict = None) -> str:
+    """Build message for OpenAI with pattern context"""
+
+    message = f"""Question: {question}
+
+Table: {table}
+"""
+
+    if pattern:
+        message += f"""
+Pattern Matched: {pattern['name']}
+
+This pattern is specifically designed to answer questions about:
+{chr(10).join('- ' + q for q in pattern['questions'][:5])}
+
+The pattern has documented requirements including standard filters and business logic that MUST be applied to ensure accurate results.
+"""
+
+    # Add intent analysis
+    if intent:
+        message += f"""
+Question Analysis:
+- Type: {intent['type']}
+- Needs Aggregation: {intent.get('needs_aggregation', False)}
+- Time Filter Required: {intent.get('time_filter', 'None')}
+- Suggested Grouping: {intent.get('group_by', 'None')}
+"""
+
+    message += """
+Generate SQL that:
+1. Completely answers the user's question
+2. Applies ALL required filters and business logic from the pattern
+3. Uses appropriate aggregations based on the question type
+4. Returns data in the most useful format for the question asked
+5. Follows all pattern-specific requirements provided in the instructions
+"""
+
+    # Add sample data note if helpful
+    if schema.get('sample_data'):
+        message += "\n\nNote: Table schema includes sample data to help understand data formats and values."
+
+    return message
 
 
 async def enhanced_table_selection(question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
@@ -1634,6 +1882,10 @@ async def enhanced_table_selection(question: str, user_id: str, channel_id: str)
             pattern = pattern_matcher.get_pattern_by_table(cached_table)
             if pattern:
                 return cached_table, f"Cached selection with pattern: {pattern['name']}"
+            else:
+                return cached_table, "Cached table selection"
+        else:
+            return cached_table, "Cached table selection"
 
     # Fall back to vector search
     print("🔍 Using vector search for table discovery...")
@@ -1806,13 +2058,17 @@ async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -
         if matched_pattern.get('standard_filters'):
             result += f"\n**Standard Filters**:\n```sql\n{matched_pattern['standard_filters']}\n```\n"
 
-        # Try to generate SQL
-        try:
-            intent = analyze_question_intent(question.lower())
-            sql = pattern_query_builder.build_query(question, matched_pattern, intent)
-            result += f"\n**Generated SQL**:\n```sql\n{sql}\n```"
-        except Exception as e:
-            result += f"\n❌ **SQL Generation Error**: {str(e)}"
+        if matched_pattern.get('business_rules'):
+            result += f"\n**Business Rules**:\n"
+            for rule in matched_pattern['business_rules']:
+                result += f"- {rule}\n"
+
+        result += f"\n**How this pattern will be used**:\n"
+        result += f"1. Table '{matched_pattern['table']}' will be selected\n"
+        result += f"2. Pattern context will be provided to OpenAI\n"
+        result += f"3. OpenAI will generate SQL following the pattern requirements\n"
+        result += f"4. All standard filters and business rules will be applied\n"
+
     else:
         result += "❌ **No pattern match found**\n\n"
 
@@ -1829,91 +2085,22 @@ async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -
 
             result += f"- {pattern['name']}: {score} points\n"
 
+        result += f"\n**What happens next**:\n"
+        result += f"1. Standard table discovery will be used\n"
+        result += f"2. Vector search will find relevant tables\n"
+        result += f"3. Table sampling will select the best option\n"
+        result += f"4. SQL will be generated without pattern context\n"
+
     return result
 
 
-# Update the main SQL generation function
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
     Generate SQL using intelligent table discovery and intent analysis
     Returns: (sql_query, selected_table)
     """
-    # First try pattern matching if available
-    if PATTERNS_AVAILABLE:
-        return await generate_sql_with_patterns(user_question, user_id, channel_id)
-
-    print(f"\n🤖 Starting intelligent SQL generation for: {user_question}")
-
-    # Store the fact that we're generating SQL for context
-    await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
-
-    selected_table = None
-
-    try:
-        # Step 1: Enhanced table selection with pattern priority
-        selected_table, selection_reason = await enhanced_table_selection(user_question, user_id, channel_id)
-
-        if not selected_table:
-            return "-- Error: Could not determine appropriate table", None
-
-        print(f"📊 Selected table: {selected_table}")
-        print(f"📝 Reason: {selection_reason}")
-
-        # Step 2: Discover schema for the selected table
-        schema = await discover_table_schema(selected_table)
-
-        if schema.get('error'):
-            print(f"⚠️ Schema discovery failed: {schema.get('error')}")
-            schema = {
-                'table': selected_table,
-                'columns': [],
-                'error': schema.get('error')
-            }
-
-    except Exception as e:
-        print(f"⚠️ Error during intelligent table selection: {e}")
-        traceback.print_exc()
-        return f"-- Error: {str(e)}", None
-
-    # Step 3: Analyze question intent
-    question_lower = user_question.lower()
-    question_intent = analyze_question_intent(question_lower)
-    print(f"🎯 Question intent: {question_intent['type']}")
-
-    # Step 4: Generate SQL with assistant
-    thread_id = await get_or_create_thread(user_id, channel_id)
-    if not thread_id:
-        return "-- Error: Could not create conversation thread", selected_table
-
-    # Build SQL generation instructions with pattern awareness
-    instructions = await generate_pattern_aware_instructions(user_question, selected_table, schema)
-
-    # Check if this table has a pattern
-    pattern = None
-    if PATTERNS_AVAILABLE:
-        pattern = pattern_matcher.get_pattern_by_table(selected_table)
-
-    message = await build_pattern_enhanced_message(user_question, selected_table, pattern)
-
-    response = await send_message_and_run(thread_id, message, instructions)
-
-    # Extract SQL from response
-    sql = extract_sql_from_response(response)
-
-    # Validate and fix common SQL issues
-    sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
-
-    # If we have a pattern, validate the SQL follows it
-    if pattern and PATTERNS_AVAILABLE:
-        is_valid, validation_msg = await validate_pattern_sql(sql, pattern)
-        if not is_valid:
-            print(f"⚠️ Pattern validation issues: {validation_msg}")
-
-    print(f"\n🧠 Generated SQL:")
-    print(f"{sql}")
-    print(f"{'=' * 60}\n")
-
-    return sql, selected_table
+    # Use the pattern-enhanced generation
+    return await generate_sql_with_patterns(user_question, user_id, channel_id)
 
 
 def extract_sql_from_response(response: str) -> str:
