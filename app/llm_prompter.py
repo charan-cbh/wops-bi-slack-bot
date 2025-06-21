@@ -10,12 +10,12 @@ from openai import OpenAI
 import pandas as pd
 from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
     GlideClusterClientConfiguration
+from app.pattern_matcher import PatternMatcher, PatternBasedQueryHelper
 
 # Import the pattern matcher
 try:
-    from app.pattern_matcher import PatternMatcher, PatternBasedQueryBuilder
     pattern_matcher = PatternMatcher()
-    pattern_query_builder = PatternBasedQueryBuilder()
+    pattern_query_builder = PatternBasedQueryHelper()
     PATTERNS_AVAILABLE = True
 except ImportError:
     PATTERNS_AVAILABLE = False
@@ -2129,7 +2129,7 @@ async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -
 
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
-    Generate SQL using intelligent table discovery and pattern matching
+    Generate SQL using helper SQL patterns as foundation for OpenAI
     Returns: (sql_query, selected_table)
     """
     print(f"\n🤖 Starting pattern-enhanced SQL generation for: {user_question}")
@@ -2138,6 +2138,8 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
 
     selected_table = None
+    helper_sql = None
+    pattern_context = None
 
     try:
         # Step 1: Try pattern matching first
@@ -2148,54 +2150,51 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
             print(f"✅ Pattern matched: {matched_pattern['name']}")
             print(f"📊 Using table: {matched_pattern['table']}")
 
-            # Use pattern-based query building
-            query_builder = PatternBasedQueryBuilder()
-
-            # Analyze question intent for pattern-based building
+            # Generate helper SQL using the pattern
+            query_helper = PatternBasedQueryHelper()
             question_intent = analyze_question_intent(user_question.lower())
 
-            # Build SQL using the matched pattern
-            sql = query_builder.build_query(user_question, matched_pattern, question_intent)
+            helper_sql = query_helper.build_helper_sql(user_question, matched_pattern, question_intent)
             selected_table = matched_pattern['table']
+            pattern_context = matched_pattern
 
             # Cache this successful pattern match
             await cache_table_selection(user_question, selected_table, f"Pattern matched: {matched_pattern['name']}")
 
-            print(f"🔧 Pattern-generated SQL:\n{sql}")
-            return sql, selected_table
+            print(f"🔧 Generated helper SQL for OpenAI guidance")
+            print(f"Helper SQL:\n{helper_sql}")
 
         else:
             print(f"🔍 No pattern match, using standard table discovery...")
 
-        # Step 2: Fall back to existing intelligent table discovery
-        # Check cache for similar questions
-        cached_table = await get_cached_table_suggestion(user_question)
+            # Step 2: Fall back to existing intelligent table discovery
+            cached_table = await get_cached_table_suggestion(user_question)
 
-        if cached_table:
-            print(f"📋 Using cached table suggestion: {cached_table}")
-            selected_table = cached_table
-            selection_reason = "Based on successful similar queries"
-        else:
-            # Step 3: Use vector search to find relevant tables
-            print("🔍 Searching dbt manifest for relevant tables...")
-            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=8)
+            if cached_table:
+                print(f"📋 Using cached table suggestion: {cached_table}")
+                selected_table = cached_table
+            else:
+                # Step 3: Use vector search to find relevant tables
+                print("🔍 Searching dbt manifest for relevant tables...")
+                candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id,
+                                                                                top_k=8)
 
-            if not candidate_tables:
-                print("⚠️ No candidate tables found from vector search")
-                return "-- Error: Could not find relevant tables for this question. Please ensure your question mentions specific metrics or entities.", None
+                if not candidate_tables:
+                    print("⚠️ No candidate tables found from vector search")
+                    return "-- Error: Could not find relevant tables for this question. Please ensure your question mentions specific metrics or entities.", None
 
-            print(f"📊 Found {len(candidate_tables)} candidate tables")
+                print(f"📊 Found {len(candidate_tables)} candidate tables")
 
-            # Step 4: Sample data from candidate tables and select best one
-            selected_table, selection_reason = await select_best_table_using_samples(
-                user_question, candidate_tables, user_id, channel_id
-            )
+                # Step 4: Sample data from candidate tables and select best one
+                selected_table, selection_reason = await select_best_table_using_samples(
+                    user_question, candidate_tables, user_id, channel_id
+                )
 
-            if not selected_table:
-                return "-- Error: Could not determine appropriate table", None
+                if not selected_table:
+                    return "-- Error: Could not determine appropriate table", None
 
-            # Cache this selection for future use
-            await cache_table_selection(user_question, selected_table, selection_reason)
+                # Cache this selection for future use
+                await cache_table_selection(user_question, selected_table, selection_reason)
 
         # Step 5: Discover schema for the selected table
         schema = await discover_table_schema(selected_table)
@@ -2213,23 +2212,31 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
         traceback.print_exc()
         return f"-- Error: {str(e)}", None
 
-    # Step 6: Analyze question intent for LLM-based generation
-    question_lower = user_question.lower()
-    question_intent = analyze_question_intent(question_lower)
-    print(f"🎯 Question intent: {question_intent['type']}")
-
-    # Step 7: Generate SQL with assistant (enhanced with business logic)
+    # Step 6: Generate final SQL with OpenAI using helper SQL as foundation
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return "-- Error: Could not create conversation thread", selected_table
 
-    # Build enhanced SQL generation instructions with business logic
-    sql_instructions = build_sql_instructions_with_business_logic(
-        question_intent,
-        selected_table,
-        schema,
-        user_question
-    )
+    if helper_sql and pattern_context:
+        # Use helper SQL + pattern context for guidance
+        sql_instructions = build_helper_sql_guided_instructions(
+            helper_sql,
+            pattern_context,
+            selected_table,
+            schema,
+            user_question
+        )
+        print(f"🎯 Using helper SQL guided generation")
+    else:
+        # Use standard instructions with business logic
+        question_intent = analyze_question_intent(user_question.lower())
+        sql_instructions = build_sql_instructions_with_business_logic(
+            question_intent,
+            selected_table,
+            schema,
+            user_question
+        )
+        print(f"🎯 Using standard SQL generation with business logic")
 
     response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
 
@@ -2239,11 +2246,163 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     # Validate and fix common SQL issues
     sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
 
-    print(f"\n🧠 Generated SQL:")
+    print(f"\n🧠 Final SQL generated by OpenAI:")
     print(f"{sql}")
     print(f"{'=' * 60}\n")
 
     return sql, selected_table
+
+def build_sql_instructions_with_business_logic(intent: Dict, table: str, schema: Dict, original_question: str) -> Dict:
+    """Enhanced SQL instructions that include business logic for non-pattern queries"""
+
+    # Get the base instructions first
+    base_result = build_sql_instructions(intent, table, schema, original_question)
+
+    # Enhance with business logic for performance queries
+    if any(term in original_question.lower() for term in ['performance', 'best', 'top', 'ranking', 'agent']):
+        base_result['instructions'] += """
+
+🎯 ENHANCED BUSINESS LOGIC FOR PERFORMANCE QUERIES:
+
+CRITICAL FILTERING (ALWAYS APPLY):
+- ALWAYS filter out NULL/empty agent names: WHERE ASSIGNEE_NAME IS NOT NULL AND ASSIGNEE_NAME != ''
+- Filter out system accounts: WHERE ASSIGNEE_NAME NOT IN ('None', 'null', 'Automated Update', 'TechOps Bot')
+- Filter out empty/null strings: WHERE TRIM(ASSIGNEE_NAME) != '' AND LOWER(ASSIGNEE_NAME) NOT IN ('null', 'none')
+
+SMART ORDERING FOR PERFORMANCE QUERIES:
+- For "best" or "top" queries, order by data completeness first, then performance metrics
+- Prioritize agents with complete performance data over those with partial data
+- Use CASE statements to handle NULL values appropriately
+
+EXAMPLE FILTERS TO ALWAYS INCLUDE:
+```sql
+WHERE ASSIGNEE_NAME IS NOT NULL 
+  AND ASSIGNEE_NAME != '' 
+  AND ASSIGNEE_NAME != 'None'
+  AND LOWER(ASSIGNEE_NAME) NOT IN ('null', 'none', 'nan')
+  AND TRIM(ASSIGNEE_NAME) != ''
+```
+
+SMART ORDERING EXAMPLE:
+```sql
+ORDER BY 
+  CASE WHEN QA_SCORE IS NOT NULL AND FCR_PERCENTAGE IS NOT NULL THEN 0 ELSE 1 END,
+  QA_SCORE DESC,
+  FCR_PERCENTAGE DESC
+```
+
+PERFORMANCE BENCHMARKS FOR CONTEXT:
+- Excellent QA: 90+ score
+- Good FCR: 80%+ resolution rate  
+- Efficient AHT: <10 minutes for most ticket types
+- Active Volume: 20+ tickets per week"""
+
+    # Add specific logic for ticket queries
+    elif any(term in original_question.lower() for term in ['ticket', 'volume', 'created']):
+        base_result['instructions'] += """
+
+🎯 ENHANCED BUSINESS LOGIC FOR TICKET QUERIES:
+
+STANDARD TICKET FILTERS (ALWAYS APPLY):
+- STATUS IN ('closed', 'solved')
+- Valid channels: CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+- Valid brands: BRAND_ID IN ('29186504989207', '360002340693')
+- Exclude system accounts: ASSIGNEE_NAME NOT IN ('Automated Update', 'TechOps Bot') OR ASSIGNEE_NAME IS NULL
+- Exclude test data: NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL
+
+CONTACT CHANNEL MAPPING:
+```sql
+CASE 
+  WHEN GROUP_ID = '5495272772503' THEN 'Web'
+  WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+  WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+  ELSE 'Other'
+END AS Contact_Channel
+```"""
+
+    # Add logic for time-sensitive queries
+    if any(term in original_question.lower() for term in ['today', 'yesterday', 'this week', 'last week', 'current']):
+        base_result['instructions'] += """
+
+⏰ TIME-BASED QUERY ENHANCEMENTS:
+- Use appropriate date functions for filtering
+- Consider timezone conversions (_PST columns when available)
+- For "current" periods, use dynamic date calculations
+- Order by most recent data first for time-based queries"""
+
+    return base_result
+
+def build_helper_sql_guided_instructions(helper_sql: str, pattern_context: Dict, table: str, schema: Dict,
+                                         original_question: str) -> Dict:
+    """Build SQL generation instructions using helper SQL as foundation"""
+
+    columns = schema.get('columns', [])
+    column_descriptions = schema.get('column_descriptions', {})
+    audit_columns = schema.get('audit_columns', [])
+
+    # Create column info string with descriptions
+    column_info_parts = []
+    for col in columns[:50]:  # Limit to first 50 columns
+        desc = column_descriptions.get(col.lower(), {}).get('comment', '')
+        col_type = column_descriptions.get(col.lower(), {}).get('type', '')
+        if desc:
+            column_info_parts.append(f"{col} ({col_type}): {desc}")
+        else:
+            column_info_parts.append(f"{col} ({col_type})")
+
+    column_info = "\n".join(column_info_parts)
+
+    instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL using the helper SQL as your foundation.
+
+🎯 PATTERN CONTEXT: {pattern_context['name']}
+📊 TABLE: {table}
+📋 BUSINESS CONTEXT: {pattern_context.get('business_context', 'Standard business logic applies')}
+
+🔧 HELPER SQL PROVIDED (Use as Foundation):
+```sql
+{helper_sql}
+```
+
+🏗️ YOUR TASK:
+1. Use the helper SQL above as your FOUNDATION/STARTING POINT
+2. REFINE and ENHANCE it to perfectly answer the user's question
+3. IMPROVE the query logic, add missing elements, fix any issues
+4. ENSURE it follows all business rules from the pattern context
+5. MAKE it more sophisticated and accurate than the helper
+
+📊 ACTUAL TABLE SCHEMA:
+Audit Columns Found: {', '.join(audit_columns) if audit_columns else 'None'}
+
+AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
+{column_info}
+
+🎯 CRITICAL REQUIREMENTS:
+1. START with the helper SQL structure but IMPROVE upon it
+2. Use ONLY columns that exist in the actual schema above
+3. Apply ALL business rules from the pattern context
+4. Handle edge cases and data quality issues
+5. Make the query more robust and comprehensive
+6. Ensure proper aggregations, filtering, and ordering
+7. Return ONLY the final refined SQL query - no explanations
+
+🔍 QUALITY ASSURANCE:
+- Ensure results represent meaningful business data (not NULL/system accounts)
+- Use appropriate LIMIT and ORDER BY for best results
+- Apply proper filtering for data quality
+- Handle NULL values appropriately
+
+REMEMBER: The helper SQL is just the starting point - make it BETTER and more accurate for the specific question."""
+
+    message = f"""Question: {original_question}
+
+I've provided a helper SQL as your foundation. Please refine and enhance it to perfectly answer this question. 
+
+Use the helper SQL structure but improve upon it - add missing logic, fix any issues, make it more sophisticated and accurate for the specific question asked."""
+
+    return {
+        'instructions': instructions,
+        'message': message
+    }
 
 
 def extract_sql_from_response(response: str) -> str:
