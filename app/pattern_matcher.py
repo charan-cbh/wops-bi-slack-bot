@@ -466,21 +466,37 @@ SELECT
 FROM fcr_data"""
 
     def _build_wops_performance_query(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
-        """Build WOPS agent performance query"""
+        """Build WOPS agent performance query with smart filtering"""
+
+        # Add standard business filters for performance queries
+        standard_filters = [
+            "ASSIGNEE_NAME IS NOT NULL",  # Filter out unassigned tickets
+            "ASSIGNEE_NAME != ''",  # Filter out empty names
+            "NUM_TICKETS > 0"  # Only agents who actually handled tickets
+        ]
+        sql_parts["where"].extend(standard_filters)
 
         # Current week top performers
-        if any(phrase in question for phrase in ["top performers", "best agents", "top agents"]):
+        if any(phrase in question for phrase in ["top performers", "best agents", "top agents", "best performing"]):
             sql_parts["select"] = [
                 "ASSIGNEE_NAME",
                 "NUM_TICKETS",
                 "AHT_MINUTES",
                 "FCR_PERCENTAGE",
                 "QA_SCORE",
-                "POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 as csat_rate"
+                "CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) > 0 THEN POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 ELSE NULL END as csat_rate"
             ]
             sql_parts["where"].append(
                 "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)")
-            sql_parts["order_by"] = ["QA_SCORE DESC", "FCR_PERCENTAGE DESC"]
+
+            # Smart ordering: prioritize agents with complete data
+            sql_parts["order_by"] = [
+                "CASE WHEN QA_SCORE IS NOT NULL AND FCR_PERCENTAGE IS NOT NULL THEN 0 ELSE 1 END",
+                # Complete data first
+                "QA_SCORE DESC",
+                "FCR_PERCENTAGE DESC",
+                "NUM_TICKETS DESC"
+            ]
             sql_parts["limit"] = "LIMIT 10"
 
         # Performance trends for specific agent
@@ -508,7 +524,10 @@ FROM fcr_data"""
                 "COUNT(*) as weeks_active",
                 "ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as overall_rank"
             ]
-            sql_parts["where"].append("SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'")
+            sql_parts["where"].extend([
+                "SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'",
+                "QA_SCORE IS NOT NULL"  # Only rank agents with QA data
+            ])
             sql_parts["group_by"] = ["ASSIGNEE_NAME"]
             sql_parts["order_by"] = ["overall_rank"]
 
@@ -525,7 +544,7 @@ FROM fcr_data"""
                 "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)")
             sql_parts["order_by"] = ["QA_SCORE DESC"]
 
-        # Default: recent performance data
+        # Default: recent performance data with quality filtering
         else:
             sql_parts["select"] = [
                 "ASSIGNEE_NAME",
@@ -535,6 +554,8 @@ FROM fcr_data"""
                 "FCR_PERCENTAGE",
                 "QA_SCORE"
             ]
+            # Add data quality filter for default queries
+            sql_parts["where"].append("(QA_SCORE IS NOT NULL OR FCR_PERCENTAGE IS NOT NULL)")
             sql_parts["order_by"] = ["SOLVED_WEEK DESC", "QA_SCORE DESC"]
             sql_parts["limit"] = "LIMIT 50"
 

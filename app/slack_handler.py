@@ -573,8 +573,8 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
 
 async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str,
                                   original_ts: str = None):
-    """Execute SQL query and send results"""
-    print("⚡ Executing query...")
+    """Execute SQL query and send results with intelligent quality analysis"""
+    print("⚡ Executing query with quality analysis...")
     await send_slack_message(channel_id, "⚡ Executing query...", include_feedback_hint=False)
 
     print(f"\n{'=' * 60}")
@@ -591,9 +591,13 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         await send_slack_message(channel_id, f"❌ {sql}", include_feedback_hint=False)
         return
 
-    # Execute the SQL query
-    df = run_query(sql)
-    result_count = 0  # Initialize result_count
+    # Import the quality analysis functions
+    from app.llm_prompter import execute_with_quality_analysis, suggest_query_improvements
+
+    # Execute with quality analysis
+    df, result_count, quality_analysis = await execute_with_quality_analysis(
+        clean_question, sql, selected_table, user_id, channel_id
+    )
 
     if isinstance(df, str):
         # Error message from query execution
@@ -629,9 +633,15 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         # Update cache with poor results
         await update_sql_cache_with_results(clean_question, sql, 0, selected_table)
     else:
-        # Success - process results
-        result_count = len(df) if hasattr(df, '__len__') else 0
+        # Success - process results with quality analysis
         print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
+
+        # Check quality analysis
+        quality_score = quality_analysis.get("quality_score", 100) if quality_analysis else 100
+
+        if quality_score < 70:
+            print(f"⚠️ Low quality results detected (score: {quality_score}/100)")
+            print(f"Issues: {quality_analysis.get('issues', [])}")
 
         # Extract table from SQL if we don't have it
         if not selected_table and 'FROM' in sql.upper():
@@ -645,6 +655,10 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
 
         # Update cache with actual results
         await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
+
+        # Generate quality improvement suggestions
+        quality_feedback = await suggest_query_improvements(clean_question, sql, df,
+                                                            selected_table) if quality_analysis else None
 
         # Summarize results
         if USE_ASSISTANT_API and ASSISTANT_ID:
@@ -660,6 +674,14 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 clean_question,
                 format_result_for_slack(df)
             )
+
+        # Add quality feedback if results need improvement
+        if quality_feedback and quality_score < 80:
+            result_message += f"\n\n---\n📊 **Query Analysis:**\n{quality_feedback}"
+
+            # If we auto-retried and got better results, mention it
+            if quality_analysis and quality_analysis.get("should_retry"):
+                result_message += f"\n\n*✅ I automatically improved the query to filter out invalid data.*"
 
         # Update conversation context to indicate SQL results were returned
         await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
@@ -678,9 +700,11 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 'question': clean_question,
                 'sql': sql,
                 'table': selected_table,
-                'timestamp': time.time()
+                'timestamp': time.time(),
+                'quality_score': quality_analysis.get("quality_score", 100) if quality_analysis else 100
             }
-            print(f"📝 Stored message {channel_ts} for feedback tracking")
+            print(
+                f"📝 Stored message {channel_ts} for feedback tracking (quality: {quality_analysis.get('quality_score', 100) if quality_analysis else 100}/100)")
 
             # Clean up old entries (older than 24 hours)
             current_time = time.time()

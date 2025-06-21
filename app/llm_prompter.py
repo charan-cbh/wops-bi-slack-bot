@@ -7,6 +7,7 @@ import re
 from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 from openai import OpenAI
+import pandas as pd
 from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
     GlideClusterClientConfiguration
 
@@ -1430,30 +1431,41 @@ def build_sql_instructions(intent: dict, table: str, schema: dict, original_ques
     # Base instructions - emphasizing accuracy
     base_instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL.
 
-TABLE: {table}
-AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
+    TABLE: {table}
+    AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
 
-AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
-{column_info}
+    AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
+    {column_info}
 
-CRITICAL REQUIREMENTS:
-This is a sonwflake query so the syntax and query should be return in snowflake query language only.
-1. Generate SQL that COMPLETELY and ACCURATELY answers the question
-2. Use ONLY columns that exist in the schema above
-3. Verify each column reference against the schema
-4. Use appropriate aggregations and calculations
-5. Apply correct filters and date ranges
-6. Handle NULLs appropriately
-7. Use the full table name: {table}
+    CRITICAL REQUIREMENTS:
+    1. Generate SQL that COMPLETELY and ACCURATELY answers the question
+    2. Use ONLY columns that exist in the schema above
+    3. Verify each column reference against the schema
+    4. Use appropriate aggregations and calculations
+    5. Apply correct filters and date ranges
+    6. Handle NULLs appropriately
+    7. Use the full table name: {table}
 
-ACCURACY RULES:
-- If calculating averages, ensure you're averaging the right values
-- If counting, ensure you're counting distinct values when appropriate  
-- If filtering by time, use the most appropriate date/timestamp column
-- If grouping, ensure all non-aggregated columns are in GROUP BY
-- Always consider data quality (NULL handling, data types)
+    BUSINESS LOGIC FILTERS (ALWAYS APPLY FOR PERFORMANCE QUERIES):
+    - Filter out NULL/empty agent names: WHERE ASSIGNEE_NAME IS NOT NULL AND ASSIGNEE_NAME != ''
+    - For performance rankings, exclude unassigned tickets and system accounts
+    - For "best" or "top" queries, ensure results represent actual human agents
+    - When showing performance metrics, prioritize agents with complete data
 
-Return ONLY the SQL query - no explanations."""
+    ACCURACY RULES:
+    - If calculating averages, ensure you're averaging the right values
+    - If counting, ensure you're counting distinct values when appropriate  
+    - If filtering by time, use the most appropriate date/timestamp column
+    - If grouping, ensure all non-aggregated columns are in GROUP BY
+    - Always consider data quality (NULL handling, data types)
+    - For performance queries, order by data completeness first, then performance metrics
+
+    RESULT QUALITY ASSURANCE:
+    - Ensure first result represents meaningful business data (not NULL/system accounts)
+    - Use appropriate LIMIT to show relevant results
+    - Order results to prioritize complete, meaningful data
+
+    Return ONLY the SQL query - no explanations."""
 
     # Intent-specific guidance (without hardcoded examples)
     if intent['type'] == 'list_or_sample':
@@ -2686,6 +2698,227 @@ IMPORTANT - Use Slack formatting:
         return result
     except Exception as e:
         return f"⚠️ Error: {e}"
+
+
+async def analyze_result_quality(question: str, sql: str, df, selected_table: str) -> Dict[str, Any]:
+    """
+    Analyze the quality of SQL results and detect if they make business sense
+    Returns suggestions for improvement if results are poor quality
+    """
+    analysis = {
+        "quality_score": 100,  # Start with perfect score
+        "issues": [],
+        "suggestions": [],
+        "should_retry": False,
+        "retry_sql": None
+    }
+
+    # Check if we have any results
+    if isinstance(df, str) or not hasattr(df, '__len__') or len(df) == 0:
+        analysis["quality_score"] = 0
+        analysis["issues"].append("No results returned")
+        analysis["suggestions"].append(
+            "Try broadening the search criteria or check if data exists for the specified time period")
+        return analysis
+
+    question_lower = question.lower()
+
+    # Performance-related question analysis
+    if any(term in question_lower for term in ["best", "top", "performing", "agent performance", "rankings"]):
+        analysis.update(await _analyze_performance_results(question, sql, df, selected_table))
+
+    # Volume/count question analysis
+    elif any(term in question_lower for term in ["how many", "count", "volume"]):
+        analysis.update(await _analyze_volume_results(question, sql, df, selected_table))
+
+    # Time-based analysis
+    elif any(term in question_lower for term in ["today", "yesterday", "this week", "last week"]):
+        analysis.update(await _analyze_time_based_results(question, sql, df, selected_table))
+
+    return analysis
+
+
+async def _analyze_performance_results(question: str, sql: str, df, selected_table: str) -> Dict[str, Any]:
+    """Analyze performance-related query results"""
+    analysis = {"quality_score": 100, "issues": [], "suggestions": [], "should_retry": False, "retry_sql": None}
+
+    # Check for null/empty agent names in performance queries
+    if hasattr(df, 'columns') and any(
+            col.lower() in ['assignee_name', 'user_name', 'agent_name'] for col in df.columns):
+        name_column = None
+        for col in df.columns:
+            if col.lower() in ['assignee_name', 'user_name', 'agent_name']:
+                name_column = col
+                break
+
+        if name_column and len(df) > 0:
+            # Check if first result is null/empty
+            first_result = df.iloc[0][name_column]
+            if pd.isna(first_result) or first_result in ['', 'None', None]:
+                analysis["quality_score"] -= 50
+                analysis["issues"].append(f"Top result has null/empty agent name: '{first_result}'")
+
+                # Check if there are valid agents below
+                valid_agents = df[df[name_column].notna() & (df[name_column] != '') & (df[name_column] != 'None')]
+                if len(valid_agents) > 0:
+                    analysis["should_retry"] = True
+                    analysis["suggestions"].append("Filtering out unassigned/null records and re-running query")
+
+                    # Generate improved SQL
+                    if "WHERE" in sql.upper():
+                        improved_sql = sql.replace("WHERE",
+                                                   f"WHERE {name_column} IS NOT NULL AND {name_column} != '' AND")
+                    else:
+                        improved_sql = sql.replace("FROM",
+                                                   f"FROM") + f"\nWHERE {name_column} IS NOT NULL AND {name_column} != ''"
+
+                    analysis["retry_sql"] = improved_sql
+                else:
+                    analysis["suggestions"].append(
+                        "No valid agent data found - check if there's performance data for the specified time period")
+
+    # Check for missing key performance metrics
+    performance_columns = ['qa_score', 'fcr_percentage', 'aht_minutes', 'handle_time']
+    if hasattr(df, 'columns'):
+        available_perf_cols = [col for col in df.columns if any(perf in col.lower() for perf in performance_columns)]
+
+        if len(available_perf_cols) == 0:
+            analysis["quality_score"] -= 30
+            analysis["issues"].append("No performance metrics found in results")
+            analysis["suggestions"].append(
+                "Try using the WOPS_AGENT_PERFORMANCE table for comprehensive performance metrics")
+        else:
+            # Check if performance metrics are mostly null
+            for col in available_perf_cols:
+                if len(df) > 0:
+                    non_null_count = df[col].count()
+                    null_percentage = (len(df) - non_null_count) / len(df) * 100
+                    if null_percentage > 80:
+                        analysis["quality_score"] -= 20
+                        analysis["issues"].append(f"Most values in {col} are null ({null_percentage:.0f}%)")
+
+    return analysis
+
+
+async def _analyze_volume_results(question: str, sql: str, df, selected_table: str) -> Dict[str, Any]:
+    """Analyze volume/count query results"""
+    analysis = {"quality_score": 100, "issues": [], "suggestions": [], "should_retry": False, "retry_sql": None}
+
+    if hasattr(df, 'iloc') and len(df) > 0:
+        # For count queries, check if result seems reasonable
+        first_row = df.iloc[0]
+
+        # Look for count columns
+        count_columns = [col for col in df.columns if 'count' in col.lower() or 'total' in col.lower()]
+        if count_columns:
+            for col in count_columns:
+                count_value = first_row[col]
+                if pd.isna(count_value) or count_value == 0:
+                    analysis["quality_score"] -= 40
+                    analysis["issues"].append(
+                        f"Count result is {count_value} - may indicate no data for specified criteria")
+                    analysis["suggestions"].append("Try expanding the time range or checking different filters")
+
+    return analysis
+
+
+async def _analyze_time_based_results(question: str, sql: str, df, selected_table: str) -> Dict[str, Any]:
+    """Analyze time-based query results"""
+    analysis = {"quality_score": 100, "issues": [], "suggestions": [], "should_retry": False, "retry_sql": None}
+
+    question_lower = question.lower()
+
+    # Check if asking for recent data but getting old data
+    if any(term in question_lower for term in ["today", "this week"]) and hasattr(df, 'columns'):
+        date_columns = [col for col in df.columns if
+                        any(date_term in col.lower() for date_term in ['date', 'created', 'solved', 'week'])]
+
+        if date_columns and len(df) > 0:
+            for col in date_columns:
+                try:
+                    if df[col].dtype == 'datetime64[ns]' or 'date' in str(df[col].dtype).lower():
+                        latest_date = df[col].max()
+                        if pd.notna(latest_date):
+                            days_old = (pd.Timestamp.now() - latest_date).days
+                            if days_old > 7:  # Data is more than a week old
+                                analysis["quality_score"] -= 30
+                                analysis["issues"].append(f"Most recent data is {days_old} days old")
+                                analysis["suggestions"].append(
+                                    "Data may not be up to date - check if recent data is available")
+                except:
+                    pass  # Skip if date parsing fails
+
+    return analysis
+
+
+async def suggest_query_improvements(question: str, sql: str, df, selected_table: str) -> str:
+    """
+    Generate suggestions for improving queries based on result analysis
+    """
+    analysis = await analyze_result_quality(question, sql, df, selected_table)
+
+    if analysis["quality_score"] >= 80:
+        return None  # Results are good quality
+
+    suggestions = []
+    suggestions.append(f"**Result Quality Score: {analysis['quality_score']}/100**")
+
+    if analysis["issues"]:
+        suggestions.append("\n**Issues Detected:**")
+        for issue in analysis["issues"]:
+            suggestions.append(f"• {issue}")
+
+    if analysis["suggestions"]:
+        suggestions.append("\n**Suggestions:**")
+        for suggestion in analysis["suggestions"]:
+            suggestions.append(f"• {suggestion}")
+
+    if analysis["should_retry"] and analysis["retry_sql"]:
+        suggestions.append(f"\n**🔄 Let me try an improved query...**")
+
+    return "\n".join(suggestions)
+
+
+async def execute_with_quality_analysis(question: str, sql: str, selected_table: str, user_id: str, channel_id: str):
+    """
+    Execute SQL with quality analysis and auto-retry if needed
+    """
+    from app.snowflake_runner import run_query
+
+    print(f"🔍 Executing query with quality analysis...")
+
+    # Execute original query
+    df = run_query(sql)
+
+    if isinstance(df, str):
+        # Query failed
+        return df, 0, None
+
+    # Analyze result quality
+    analysis = await analyze_result_quality(question, sql, df, selected_table)
+
+    print(f"📊 Result quality score: {analysis['quality_score']}/100")
+
+    # If quality is poor and we have a retry suggestion, try it
+    if analysis["should_retry"] and analysis["retry_sql"] and analysis["quality_score"] < 70:
+        print(f"🔄 Auto-retrying with improved query...")
+        print(f"Issues found: {', '.join(analysis['issues'])}")
+
+        # Execute improved query
+        improved_df = run_query(analysis["retry_sql"])
+
+        if not isinstance(improved_df, str) and len(improved_df) > 0:
+            print(f"✅ Improved query returned {len(improved_df)} results")
+
+            # Re-analyze improved results
+            improved_analysis = await analyze_result_quality(question, analysis["retry_sql"], improved_df,
+                                                             selected_table)
+
+            if improved_analysis["quality_score"] > analysis["quality_score"]:
+                print(f"📈 Quality improved: {improved_analysis['quality_score']}/100")
+                return improved_df, len(improved_df), improved_analysis
+
+    return df, len(df) if hasattr(df, '__len__') else 0, analysis
 
 
 # Cache clearing functions
