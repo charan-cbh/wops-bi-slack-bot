@@ -1437,6 +1437,7 @@ AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
 {column_info}
 
 CRITICAL REQUIREMENTS:
+This is a sonwflake query so the syntax and query should be return in snowflake query language only.
 1. Generate SQL that COMPLETELY and ACCURATELY answers the question
 2. Use ONLY columns that exist in the schema above
 3. Verify each column reference against the schema
