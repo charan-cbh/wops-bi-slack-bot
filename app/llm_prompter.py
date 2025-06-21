@@ -285,6 +285,26 @@ def extract_key_phrases(question: str) -> List[str]:
 def classify_question_type(question: str) -> str:
     """Simple classification - is this a data query or conversation?"""
     question_lower = question.lower()
+
+    # FIRST: Check if this is asking for SQL execution
+    if any(phrase in question_lower for phrase in [
+        'share the results', 'run this', 'execute this', 'run the query',
+        'show the results', 'give me the results'
+    ]):
+        return 'sql_execution_request'
+
+    # SECOND: Check for follow-up indicators about previous results
+    followup_about_results = [
+        'what is the source', 'where does this data', 'where is this from',
+        'how did you get', 'what table', 'which database',
+        'explain this', 'what does this mean', 'why is it',
+        'can you clarify', 'tell me more about this',
+        'break this down', 'what are these', 'who are these'
+    ]
+
+    if any(indicator in question_lower for indicator in followup_about_results):
+        return 'conversational'
+
     # Check for data query indicators - EXPANDED LIST
     data_indicators = [
         'how many', 'count', 'show me', 'list', 'find',
@@ -298,8 +318,17 @@ def classify_question_type(question: str) -> str:
         'created', 'today', 'yesterday', 'this week', 'last week',
         'this month', 'last month', 'zendesk', 'chat', 'email',
         'what are the', 'give me', 'provide', 'fetch',
-        'calculate', 'sum', 'aggregate', 'breakdown'
+        'calculate', 'sum', 'aggregate', 'breakdown',
+        # Add PST/timezone indicators
+        'pst', 'pdt', 'pacific time', 'timezone', 'time zone'
     ]
+
+    # IMPORTANT: Data indicators take priority
+    if any(indicator in question_lower for indicator in data_indicators):
+        # Only treat as conversational if explicitly asking about the source/method
+        if 'source' in question_lower or ('where' in question_lower and 'data' in question_lower):
+            return 'conversational'
+        return 'sql_required'
 
     # Check for meta/help indicators
     meta_indicators = [
@@ -322,12 +351,6 @@ def classify_question_type(question: str) -> str:
     if 'volume' in question_lower and any(
             word in question_lower for word in ['ticket', 'tickets', 'agent', 'chat', 'email']):
         return 'sql_required'
-    # Check if it's asking for specific data
-    if any(indicator in question_lower for indicator in data_indicators):
-        # Double check it's not asking about the data source
-        if 'source' in question_lower or ('where' in question_lower and 'data' in question_lower):
-            return 'conversational'
-        return 'sql_required'
 
     if any(indicator in question_lower for indicator in meta_indicators):
         return 'conversational'
@@ -339,19 +362,16 @@ def classify_question_type(question: str) -> str:
     else:
         # For ambiguous cases, check if it contains entities or time references
         entities = ['ticket', 'agent', 'customer', 'zendesk', 'chat', 'email', 'messaging']
-        time_refs = ['today']
+        time_refs = ['today', 'yesterday', 'week', 'month', 'year', 'date']
 
-    # FIRST: Check for follow-up indicators about previous results
-    followup_about_results = [
-        'what is the source', 'where does this data', 'where is this from',
-        'how did you get', 'what table', 'which database',
-        'explain this', 'what does this mean', 'why is it',
-        'can you clarify', 'tell me more about this',
-        'break this down', 'what are these', 'who are these'
-    ]
+        if any(entity in question_lower for entity in entities) or any(time in question_lower for time in time_refs):
+            return 'sql_required'
 
-    if any(indicator in question_lower for indicator in followup_about_results):
-        return 'conversational'
+        # Very short questions are likely follow-ups
+        if word_count <= 4:
+            return 'conversational'
+
+        return 'sql_required'  # Default to trying SQL
 
 async def find_relevant_tables_from_vector_store(question: str, user_id: str, channel_id: str, top_k: int = 8) -> List[str]:
     """Use assistant's file_search to find relevant tables from dbt manifest"""
@@ -2146,8 +2166,7 @@ def extract_sql_from_response(response: str) -> str:
     return "-- Error: Could not extract SQL from response"
 
 
-async def handle_question(user_question: str, user_id: str, channel_id: str, assistant_id: str = None) -> Tuple[
-    str, str]:
+async def handle_question(user_question: str, user_id: str, channel_id: str, assistant_id: str = None) -> Tuple[str, str]:
     """Main question handler - routes to appropriate handler"""
     global ASSISTANT_ID
     if assistant_id:
@@ -2160,23 +2179,30 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         # Initial classification
         question_type = classify_question_type(user_question)
 
-        # Override classification based on context
-        if context and context.get('last_response_type') == 'sql_results':
-            # If the last response was SQL results, be more inclined to treat follow-ups as conversational
+        # Special handling for SQL execution requests
+        if question_type == 'sql_execution_request' and context:
+            # Check if we have a SQL query in context
+            if context.get('last_response_type') == 'sql_shown' and context.get('last_sql'):
+                # Return the SQL that was shown for execution
+                sql_query = context['last_sql']
+                selected_table = context.get('last_table_used')
+                return sql_query, 'sql'
+
+        # IMPORTANT: Don't override sql_required classification
+        if question_type == 'sql_required':
+            # This is definitely a data query - keep it!
+            print(f"🎯 Keeping sql_required classification")
+        elif context and context.get('last_response_type') == 'sql_results':
+            # Only override for TRUE conversational follow-ups
             question_lower = user_question.lower()
 
-            # These patterns after SQL results are almost always conversational
+            # These patterns after SQL results are conversational
             if any(pattern in question_lower for pattern in [
-                'source', 'where', 'why', 'what is', 'explain',
-                'how', 'this data', 'that data', 'these',
+                'source', 'where does', 'why', 'what is', 'explain',
+                'how did you', 'this data', 'that data', 'these',
                 'break down', 'tell me more', 'clarify'
             ]):
                 print(f"🔄 Reclassifying as conversational (follow-up after SQL results)")
-                question_type = 'conversational'
-
-            # Short questions after SQL results are usually follow-ups
-            elif len(user_question.split()) <= 8:
-                print(f"🔄 Reclassifying as conversational (short follow-up after SQL results)")
                 question_type = 'conversational'
 
         print(f"\n{'=' * 60}")
@@ -2229,10 +2255,24 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         print(f"❌ Error in handle_question: {e}")
         print(f"❌ Error type: {type(e).__name__}")
         traceback.print_exc()
-
-        # Return error as SQL comment to be handled by the caller
         return f"-- Error: {str(e)}", 'error'
 
+async def update_conversation_context_with_sql(user_id: str, channel_id: str, question: str, response: str,
+                                               response_type: str = None, table_used: str = None, sql: str = None):
+    """Update conversation context for follow-up questions with SQL"""
+    cache_key = f"{user_id}_{channel_id}"
+    redis_key = f"{CONVERSATION_CACHE_PREFIX}:{cache_key}"
+
+    context = {
+        'last_question': question,
+        'last_response': response,
+        'last_response_type': response_type,
+        'last_table_used': table_used,
+        'last_sql': sql,  # Store SQL for potential execution
+        'timestamp': time.time()
+    }
+
+    await safe_valkey_set(redis_key, context, ex=CONVERSATION_CACHE_TTL)
 
 async def update_sql_cache_with_results(user_question: str, sql_query: str, result_count: int,
                                         selected_table: str = None):
