@@ -168,48 +168,77 @@ WHERE status IN ('solved', 'closed')
         question_lower = question.lower()
         scores = []
 
+        print(f"🔍 Pattern matching for: '{question}'")
+
         for pattern in self.patterns:
             score = 0
+            matched_items = []
 
-            # Check exact question matches
+            # Check exact question matches (high value)
             for q in pattern["questions"]:
                 if q in question_lower:
                     score += 10
+                    matched_items.append(f"question:'{q}'")
 
-            # Check keyword matches
+            # Check keyword matches (medium value)
             for keyword in pattern["keywords"]:
                 if keyword in question_lower:
-                    score += 2
+                    score += 3
+                    matched_items.append(f"keyword:'{keyword}'")
 
-            # Bonus for specific indicators
-            if pattern["id"] == "wops_tickets" and any(
-                    term in question_lower for term in ["ticket", "volume", "created"]
-            ):
-                score += 5
+            # Enhanced bonuses for specific patterns
+            if pattern["id"] == "wops_agent_performance":
+                # More aggressive matching for performance questions
+                performance_indicators = [
+                    ("best", 8), ("top", 8), ("performing", 8), ("performance", 8),
+                    ("agent", 5), ("weekly", 6), ("last week", 8), ("this week", 6),
+                    ("rankings", 8), ("ranking", 8), ("dashboard", 6),
+                    ("trends", 6), ("scorecard", 6), ("kpi", 6)
+                ]
 
-            if pattern["id"] == "klaus_qa" and any(
-                    term in question_lower for term in ["qa", "quality", "score", "pass", "fail"]
-            ):
-                score += 5
+                for indicator, points in performance_indicators:
+                    if indicator in question_lower:
+                        score += points
+                        matched_items.append(f"performance:'{indicator}'({points})")
 
-            if pattern["id"] == "handle_time" and any(
-                    term in question_lower for term in ["handle time", "aht", "duration"]
-            ):
-                score += 5
+            elif pattern["id"] == "wops_tickets":
+                if any(term in question_lower for term in ["ticket", "volume", "created", "how many"]):
+                    score += 5
+                    matched_items.append("tickets_bonus")
 
-            if pattern["id"] == "fcr" and any(
-                    term in question_lower for term in ["fcr", "first contact", "resolution rate"]
-            ):
-                score += 5
+            elif pattern["id"] == "klaus_qa":
+                if any(term in question_lower for term in ["qa", "quality", "score", "pass", "fail"]):
+                    score += 5
+                    matched_items.append("qa_bonus")
+
+            elif pattern["id"] == "handle_time":
+                if any(term in question_lower for term in ["handle time", "aht", "duration"]):
+                    score += 5
+                    matched_items.append("aht_bonus")
+
+            elif pattern["id"] == "fcr":
+                if any(term in question_lower for term in ["fcr", "first contact", "resolution rate"]):
+                    score += 5
+                    matched_items.append("fcr_bonus")
+
+            # Log scoring details
+            if score > 0:
+                print(f"   {pattern['id']}: {score} points - {', '.join(matched_items)}")
 
             scores.append((pattern, score))
 
         # Return best match if score is high enough
         best_match = max(scores, key=lambda x: x[1])
-        if best_match[1] >= 5:  # Threshold for pattern match
-            return best_match[0]
 
-        return None
+        print(f"🎯 Best match: {best_match[0]['id']} with {best_match[1]} points")
+
+        # Lower threshold for better matching
+        if best_match[1] >= 3:  # Reduced from 5 to make it more sensitive
+            print(f"✅ Pattern matched: {best_match[0]['name']}")
+            return best_match[0]
+        else:
+            print(f"❌ No pattern match (highest score: {best_match[1]}, need ≥3)")
+            return None
 
     def get_pattern_by_table(self, table_name: str) -> Optional[Dict]:
         """Get pattern configuration by table name"""
