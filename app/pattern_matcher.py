@@ -37,6 +37,7 @@ class PatternMatcher:
 Key Business Rules:
 - Always filter out null/empty agent names: ASSIGNEE_NAME IS NOT NULL AND ASSIGNEE_NAME != ''
 - Exclude system accounts: ASSIGNEE_NAME NOT IN ('None', 'null', 'Automated Update')
+- None of the fields should be null
 - For rankings, prioritize agents with complete data (non-null QA_SCORE and FCR_PERCENTAGE)
 - Current week: SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM table)
 - Order by data completeness first, then performance metrics""",
