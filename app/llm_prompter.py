@@ -1965,7 +1965,7 @@ PATTERN-SPECIFIC RULES:
 - Always apply the standard filters for ticket queries
 - Use Contact_Channel derived field for channel analysis
 - Group by appropriate dimensions based on the question
-- Use _PST timestamp columns for time-based queries
+- Use _PST timestamp columns for time-based queries if not available convert the column to PST and provide results
 """
             elif pattern['id'] == 'klaus_qa':
                 instructions += """
