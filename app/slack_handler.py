@@ -38,6 +38,7 @@ from app.llm_prompter import (
     cache_table_selection,
     get_table_descriptions_from_manifest,
     record_feedback,
+    update_conversation_context_with_sql
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -264,15 +265,50 @@ async def process_app_mention(event):
 
                 await send_slack_message(channel_id, error_msg, include_feedback_hint=False)
             else:
-                # Send conversational response directly
+                # Handle conversational response
                 if thinking_msg:
                     try:
                         slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
                     except:
                         pass
-                await send_slack_message(channel_id, response, include_feedback_hint=False)
-                # Update context for conversational responses
-                await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
+
+                # CRITICAL FIX: Check if response contains SQL
+                sql_detected = False
+                sql_query = None
+
+                # Check for SQL in code block
+                if "```sql" in response:
+                    try:
+                        sql_query = response.split("```sql")[1].split("```")[0].strip()
+                        sql_detected = True
+                    except:
+                        pass
+
+                # Check for raw SQL
+                if not sql_query and response.strip().upper().startswith("SELECT"):
+                    lines = response.split('\n')
+                    sql_lines = []
+                    for line in lines:
+                        sql_lines.append(line)
+                        if line.strip().endswith(';'):
+                            break
+                    if sql_lines:
+                        sql_query = '\n'.join(sql_lines).strip()
+                        sql_detected = True
+
+                if sql_detected and sql_query:
+                    # Execute SQL instead of showing it
+                    print(f"📊 Detected SQL in conversational response - executing it")
+                    await execute_sql_and_respond(clean_question, sql_query, channel_id, user_id, ts)
+
+                    # Store SQL in context for potential "share results" request
+                    await update_conversation_context_with_sql(
+                        user_id, channel_id, clean_question, response, 'sql_shown', None, sql_query
+                    )
+                else:
+                    # Normal conversational response
+                    await send_slack_message(channel_id, response, include_feedback_hint=False)
+                    await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
 
         else:
             # Fallback to embedding search
