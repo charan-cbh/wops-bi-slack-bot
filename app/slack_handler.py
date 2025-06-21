@@ -573,8 +573,8 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
 
 async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str,
                                   original_ts: str = None):
-    """Execute SQL query and send results with intelligent quality analysis"""
-    print("⚡ Executing query with quality analysis...")
+    """Execute SQL query and send results - HIDE quality analysis from users"""
+    print("⚡ Executing query with intelligent auto-retry...")
     await send_slack_message(channel_id, "⚡ Executing query...", include_feedback_hint=False)
 
     print(f"\n{'=' * 60}")
@@ -592,9 +592,9 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         return
 
     # Import the quality analysis functions
-    from app.llm_prompter import execute_with_quality_analysis, suggest_query_improvements
+    from app.llm_prompter import execute_with_quality_analysis
 
-    # Execute with quality analysis
+    # Execute with intelligent auto-retry (happens BEFORE user sees anything)
     df, result_count, quality_analysis = await execute_with_quality_analysis(
         clean_question, sql, selected_table, user_id, channel_id
     )
@@ -603,64 +603,54 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         # Error message from query execution
         print(f"❌ Query execution error: {df}")
 
-        # Check if it's a column name error
+        # Check if it's a column name error and provide helpful suggestions
         if "invalid identifier" in df.lower():
-            # Extract the problematic column name
             match = re.search(r"invalid identifier '([^']+)'", df, re.IGNORECASE)
             if match:
                 bad_column = match.group(1)
                 print(f"❌ Column '{bad_column}' does not exist in the table")
 
-                # Provide helpful suggestions
                 suggestions_msg = f"❌ Query error: Column '{bad_column}' does not exist in the table.\n\n"
                 suggestions_msg += "**Suggestions:**\n"
-                suggestions_msg += f"1. Try `@bot debug analyze {clean_question}` to see table analysis\n"
-                suggestions_msg += f"2. Try `@bot debug find {clean_question}` to find relevant tables\n"
+                suggestions_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
+                suggestions_msg += f"• Try `@bot debug find {clean_question}` to find relevant tables\n"
 
                 if selected_table:
-                    suggestions_msg += f"3. Try `@bot debug sample {selected_table}` to see actual columns\n"
-                    suggestions_msg += f"4. Try `@bot debug rediscover {selected_table}` to refresh table schema\n"
+                    suggestions_msg += f"• Try `@bot debug sample {selected_table}` to see actual columns\n"
 
-                suggestions_msg += "5. Rephrase your question with more specific details\n\n"
-                suggestions_msg += f"Full error: {df}"
-
+                suggestions_msg += "• Rephrase your question with more specific details"
                 result_message = suggestions_msg
             else:
                 result_message = f"❌ Query error: {df}"
         else:
             result_message = f"❌ Query error: {df}"
 
-        # Update cache with poor results
         await update_sql_cache_with_results(clean_question, sql, 0, selected_table)
     else:
-        # Success - process results with quality analysis
+        # Success - process results
         print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
 
-        # Check quality analysis
+        # Check if auto-retry was successful
+        auto_retry_success = quality_analysis.get("auto_retry_success", False) if quality_analysis else False
         quality_score = quality_analysis.get("quality_score", 100) if quality_analysis else 100
 
-        if quality_score < 70:
-            print(f"⚠️ Low quality results detected (score: {quality_score}/100)")
-            print(f"Issues: {quality_analysis.get('issues', [])}")
+        if auto_retry_success:
+            print(f"🎉 Auto-retry was successful! Quality improved to {quality_score}/100")
+            # Update SQL to the improved version for caching
+            sql = quality_analysis.get("improved_sql", sql)
 
         # Extract table from SQL if we don't have it
         if not selected_table and 'FROM' in sql.upper():
             sql_upper = sql.upper()
             from_idx = sql_upper.find('FROM')
             if from_idx != -1:
-                # Extract table name (handle multi-line SQL)
                 after_from = sql[from_idx + 4:].strip()
-                # Get first word (table name) - handle newlines and multiple spaces
                 selected_table = re.split(r'[\s\n]+', after_from)[0]
 
         # Update cache with actual results
         await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
 
-        # Generate quality improvement suggestions
-        quality_feedback = await suggest_query_improvements(clean_question, sql, df,
-                                                            selected_table) if quality_analysis else None
-
-        # Summarize results
+        # Summarize results (this is what the user sees)
         if USE_ASSISTANT_API and ASSISTANT_ID:
             result_message = await summarize_with_assistant(
                 clean_question,
@@ -675,19 +665,19 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 format_result_for_slack(df)
             )
 
-        # Add quality feedback if results need improvement
-        if quality_feedback and quality_score < 80:
-            result_message += f"\n\n---\n📊 **Query Analysis:**\n{quality_feedback}"
+        # ONLY add quality feedback if it's truly exceptional or there was an auto-retry success
+        if auto_retry_success:
+            # Subtle success message - user knows we improved the query
+            result_message += f"\n\n_✨ Query automatically optimized for better results_"
 
-            # If we auto-retried and got better results, mention it
-            if quality_analysis and quality_analysis.get("should_retry"):
-                result_message += f"\n\n*✅ I automatically improved the query to filter out invalid data.*"
+        # DON'T show quality analysis details to users - only in debug mode
+        # Users just get the clean answer
 
-        # Update conversation context to indicate SQL results were returned
+        # Update conversation context
         await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
                                           selected_table)
 
-    # Send the result message
+    # Send the result message to user
     is_success = result_count > 0
     response = await send_slack_message(channel_id, result_message, include_feedback_hint=is_success)
 
@@ -701,10 +691,10 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 'sql': sql,
                 'table': selected_table,
                 'timestamp': time.time(),
-                'quality_score': quality_analysis.get("quality_score", 100) if quality_analysis else 100
+                'quality_score': quality_analysis.get("quality_score", 100) if quality_analysis else 100,
+                'auto_retry_success': auto_retry_success
             }
-            print(
-                f"📝 Stored message {channel_ts} for feedback tracking (quality: {quality_analysis.get('quality_score', 100) if quality_analysis else 100}/100)")
+            print(f"📝 Stored message {channel_ts} for feedback tracking")
 
             # Clean up old entries (older than 24 hours)
             current_time = time.time()

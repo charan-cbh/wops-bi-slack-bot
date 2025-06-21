@@ -2129,11 +2129,121 @@ async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -
 
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
-    Generate SQL using intelligent table discovery and intent analysis
+    Generate SQL using intelligent table discovery and pattern matching
     Returns: (sql_query, selected_table)
     """
-    # Use the pattern-enhanced generation
-    return await generate_sql_with_patterns(user_question, user_id, channel_id)
+    print(f"\n🤖 Starting pattern-enhanced SQL generation for: {user_question}")
+
+    # Store the fact that we're generating SQL for context
+    await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
+
+    selected_table = None
+
+    try:
+        # Step 1: Try pattern matching first
+        pattern_matcher = PatternMatcher()
+        matched_pattern = pattern_matcher.match_pattern(user_question)
+
+        if matched_pattern:
+            print(f"✅ Pattern matched: {matched_pattern['name']}")
+            print(f"📊 Using table: {matched_pattern['table']}")
+
+            # Use pattern-based query building
+            query_builder = PatternBasedQueryBuilder()
+
+            # Analyze question intent for pattern-based building
+            question_intent = analyze_question_intent(user_question.lower())
+
+            # Build SQL using the matched pattern
+            sql = query_builder.build_query(user_question, matched_pattern, question_intent)
+            selected_table = matched_pattern['table']
+
+            # Cache this successful pattern match
+            await cache_table_selection(user_question, selected_table, f"Pattern matched: {matched_pattern['name']}")
+
+            print(f"🔧 Pattern-generated SQL:\n{sql}")
+            return sql, selected_table
+
+        else:
+            print(f"🔍 No pattern match, using standard table discovery...")
+
+        # Step 2: Fall back to existing intelligent table discovery
+        # Check cache for similar questions
+        cached_table = await get_cached_table_suggestion(user_question)
+
+        if cached_table:
+            print(f"📋 Using cached table suggestion: {cached_table}")
+            selected_table = cached_table
+            selection_reason = "Based on successful similar queries"
+        else:
+            # Step 3: Use vector search to find relevant tables
+            print("🔍 Searching dbt manifest for relevant tables...")
+            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=8)
+
+            if not candidate_tables:
+                print("⚠️ No candidate tables found from vector search")
+                return "-- Error: Could not find relevant tables for this question. Please ensure your question mentions specific metrics or entities.", None
+
+            print(f"📊 Found {len(candidate_tables)} candidate tables")
+
+            # Step 4: Sample data from candidate tables and select best one
+            selected_table, selection_reason = await select_best_table_using_samples(
+                user_question, candidate_tables, user_id, channel_id
+            )
+
+            if not selected_table:
+                return "-- Error: Could not determine appropriate table", None
+
+            # Cache this selection for future use
+            await cache_table_selection(user_question, selected_table, selection_reason)
+
+        # Step 5: Discover schema for the selected table
+        schema = await discover_table_schema(selected_table)
+
+        if schema.get('error'):
+            print(f"⚠️ Schema discovery failed: {schema.get('error')}")
+            schema = {
+                'table': selected_table,
+                'columns': [],
+                'error': schema.get('error')
+            }
+
+    except Exception as e:
+        print(f"⚠️ Error during intelligent table selection: {e}")
+        traceback.print_exc()
+        return f"-- Error: {str(e)}", None
+
+    # Step 6: Analyze question intent for LLM-based generation
+    question_lower = user_question.lower()
+    question_intent = analyze_question_intent(question_lower)
+    print(f"🎯 Question intent: {question_intent['type']}")
+
+    # Step 7: Generate SQL with assistant (enhanced with business logic)
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return "-- Error: Could not create conversation thread", selected_table
+
+    # Build enhanced SQL generation instructions with business logic
+    sql_instructions = build_sql_instructions_with_business_logic(
+        question_intent,
+        selected_table,
+        schema,
+        user_question
+    )
+
+    response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
+
+    # Extract SQL from response
+    sql = extract_sql_from_response(response)
+
+    # Validate and fix common SQL issues
+    sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
+
+    print(f"\n🧠 Generated SQL:")
+    print(f"{sql}")
+    print(f"{'=' * 60}\n")
+
+    return sql, selected_table
 
 
 def extract_sql_from_response(response: str) -> str:
@@ -2739,7 +2849,7 @@ async def analyze_result_quality(question: str, sql: str, df, selected_table: st
 
 
 async def _analyze_performance_results(question: str, sql: str, df, selected_table: str) -> Dict[str, Any]:
-    """Analyze performance-related query results"""
+    """Analyze performance-related query results - FIXED VERSION"""
     analysis = {"quality_score": 100, "issues": [], "suggestions": [], "should_retry": False, "retry_sql": None}
 
     # Check for null/empty agent names in performance queries
@@ -2754,39 +2864,40 @@ async def _analyze_performance_results(question: str, sql: str, df, selected_tab
         if name_column and len(df) > 0:
             # Check if first result is null/empty
             first_result = df.iloc[0][name_column]
-            if pd.isna(first_result) or first_result in ['', 'None', None]:
+            if pd.isna(first_result) or first_result in ['', 'None', None, 'null'] or str(first_result).lower() in [
+                'none', 'null', 'nan']:
                 analysis["quality_score"] -= 50
                 analysis["issues"].append(f"Top result has null/empty agent name: '{first_result}'")
 
-                # Check if there are valid agents below
-                valid_agents = df[df[name_column].notna() & (df[name_column] != '') & (df[name_column] != 'None')]
+                # Check if there are valid agents in the data
+                valid_agents = df[
+                    df[name_column].notna() &
+                    (df[name_column] != '') &
+                    (df[name_column] != 'None') &
+                    (df[name_column] != 'null') &
+                    (df[name_column].str.lower() != 'none') &
+                    (df[name_column].str.lower() != 'null')
+                    ]
+
                 if len(valid_agents) > 0:
                     analysis["should_retry"] = True
                     analysis["suggestions"].append("Filtering out unassigned/null records and re-running query")
 
-                    # Generate improved SQL
-                    if "WHERE" in sql.upper():
-                        improved_sql = sql.replace("WHERE",
-                                                   f"WHERE {name_column} IS NOT NULL AND {name_column} != '' AND")
-                    else:
-                        improved_sql = sql.replace("FROM",
-                                                   f"FROM") + f"\nWHERE {name_column} IS NOT NULL AND {name_column} != ''"
-
-                    analysis["retry_sql"] = improved_sql
+                    # Generate improved SQL with comprehensive filtering
+                    analysis["retry_sql"] = _improve_sql_with_comprehensive_filters(sql, name_column)
                 else:
                     analysis["suggestions"].append(
                         "No valid agent data found - check if there's performance data for the specified time period")
 
     # Check for missing key performance metrics
-    performance_columns = ['qa_score', 'fcr_percentage', 'aht_minutes', 'handle_time']
+    performance_columns = ['qa_score', 'fcr_percentage', 'aht_minutes', 'handle_time', 'avg_qa_score',
+                           'avg_fcr_percentage', 'avg_aht_minutes']
     if hasattr(df, 'columns'):
         available_perf_cols = [col for col in df.columns if any(perf in col.lower() for perf in performance_columns)]
 
         if len(available_perf_cols) == 0:
             analysis["quality_score"] -= 30
             analysis["issues"].append("No performance metrics found in results")
-            analysis["suggestions"].append(
-                "Try using the WOPS_AGENT_PERFORMANCE table for comprehensive performance metrics")
         else:
             # Check if performance metrics are mostly null
             for col in available_perf_cols:
@@ -2794,10 +2905,69 @@ async def _analyze_performance_results(question: str, sql: str, df, selected_tab
                     non_null_count = df[col].count()
                     null_percentage = (len(df) - non_null_count) / len(df) * 100
                     if null_percentage > 80:
-                        analysis["quality_score"] -= 20
+                        analysis["quality_score"] -= 25
                         analysis["issues"].append(f"Most values in {col} are null ({null_percentage:.0f}%)")
 
+                        # If ALL metrics are null AND we have agent issues, definitely retry
+                        if null_percentage == 100 and analysis["should_retry"]:
+                            analysis["quality_score"] -= 30  # Extra penalty
+
     return analysis
+
+
+def _improve_sql_with_comprehensive_filters(original_sql: str, name_column: str) -> str:
+    """
+    Comprehensively improve SQL by adding filters for valid agents and better ordering
+    """
+    sql = original_sql.strip()
+
+    # Comprehensive filters to add
+    filters_to_add = [
+        f"{name_column} IS NOT NULL",
+        f"{name_column} != ''",
+        f"{name_column} != 'None'",
+        f"LOWER({name_column}) NOT IN ('null', 'none', 'nan')",
+        f"TRIM({name_column}) != ''"
+    ]
+
+    # Check if there's already a WHERE clause
+    if "WHERE" in sql.upper():
+        # Find the WHERE clause and add our filters at the beginning
+        where_pos = sql.upper().find("WHERE")
+        before_where = sql[:where_pos + 5]  # Include "WHERE"
+        after_where = sql[where_pos + 5:].strip()
+
+        # Add our filters at the beginning of WHERE clause
+        filter_clause = " AND ".join(filters_to_add)
+        improved_sql = f"{before_where} {filter_clause} AND ({after_where})"
+    else:
+        # No WHERE clause exists, add one before GROUP BY, ORDER BY, or LIMIT
+        insertion_keywords = ["GROUP BY", "ORDER BY", "LIMIT", "HAVING"]
+        insertion_pos = len(sql)
+
+        for keyword in insertion_keywords:
+            pos = sql.upper().find(keyword)
+            if pos != -1 and pos < insertion_pos:
+                insertion_pos = pos
+
+        filter_clause = " AND ".join(filters_to_add)
+        before_insertion = sql[:insertion_pos].rstrip()
+        after_insertion = sql[insertion_pos:]
+
+        improved_sql = f"{before_insertion}\nWHERE {filter_clause}\n{after_insertion}"
+
+    # Also improve ordering for performance queries - prioritize complete data
+    if "ORDER BY" in improved_sql.upper() and any(
+            perf in improved_sql.lower() for perf in ['qa_score', 'performance', 'fcr']):
+        # Add data completeness ordering
+        order_pos = improved_sql.upper().find("ORDER BY")
+        before_order = improved_sql[:order_pos]
+        after_order = improved_sql[order_pos + 8:].strip()  # Skip "ORDER BY"
+
+        # Add data completeness check first
+        improved_sql = f"{before_order}ORDER BY CASE WHEN QA_SCORE IS NOT NULL AND FCR_PERCENTAGE IS NOT NULL THEN 0 ELSE 1 END, {after_order}"
+
+    return improved_sql.strip()
 
 
 async def _analyze_volume_results(question: str, sql: str, df, selected_table: str) -> Dict[str, Any]:
@@ -2881,7 +3051,7 @@ async def suggest_query_improvements(question: str, sql: str, df, selected_table
 
 async def execute_with_quality_analysis(question: str, sql: str, selected_table: str, user_id: str, channel_id: str):
     """
-    Execute SQL with quality analysis and auto-retry if needed
+    Execute SQL with quality analysis and auto-retry if needed - BEFORE showing user results
     """
     from app.snowflake_runner import run_query
 
@@ -2891,18 +3061,19 @@ async def execute_with_quality_analysis(question: str, sql: str, selected_table:
     df = run_query(sql)
 
     if isinstance(df, str):
-        # Query failed
+        # Query failed - return error immediately
         return df, 0, None
 
     # Analyze result quality
     analysis = await analyze_result_quality(question, sql, df, selected_table)
 
-    print(f"📊 Result quality score: {analysis['quality_score']}/100")
+    print(f"📊 Initial result quality score: {analysis['quality_score']}/100")
 
-    # If quality is poor and we have a retry suggestion, try it
-    if analysis["should_retry"] and analysis["retry_sql"] and analysis["quality_score"] < 70:
-        print(f"🔄 Auto-retrying with improved query...")
+    # AUTO-RETRY LOGIC - This happens BEFORE user sees anything
+    if analysis["should_retry"] and analysis["retry_sql"] and analysis["quality_score"] < 60:
+        print(f"🔄 AUTO-RETRYING: Quality too low ({analysis['quality_score']}/100)")
         print(f"Issues found: {', '.join(analysis['issues'])}")
+        print(f"🔧 Improved SQL:\n{analysis['retry_sql']}")
 
         # Execute improved query
         improved_df = run_query(analysis["retry_sql"])
@@ -2913,11 +3084,26 @@ async def execute_with_quality_analysis(question: str, sql: str, selected_table:
             # Re-analyze improved results
             improved_analysis = await analyze_result_quality(question, analysis["retry_sql"], improved_df,
                                                              selected_table)
+            print(f"📈 Improved quality score: {improved_analysis['quality_score']}/100")
 
-            if improved_analysis["quality_score"] > analysis["quality_score"]:
-                print(f"📈 Quality improved: {improved_analysis['quality_score']}/100")
+            # If significantly better, use improved results
+            if improved_analysis["quality_score"] > analysis["quality_score"] + 20:  # Must be 20+ points better
+                print(f"🎉 Auto-retry successful! Using improved results.")
+
+                # Mark this as auto-retry success
+                improved_analysis["auto_retry_success"] = True
+                improved_analysis["original_issues"] = analysis["issues"]
+                improved_analysis["improvement"] = improved_analysis["quality_score"] - analysis["quality_score"]
+                improved_analysis["original_sql"] = sql
+                improved_analysis["improved_sql"] = analysis["retry_sql"]
+
                 return improved_df, len(improved_df), improved_analysis
+            else:
+                print(f"⚠️ Auto-retry didn't improve quality significantly")
+        else:
+            print(f"❌ Improved query failed: {improved_df}")
 
+    # If no retry or retry failed, return original results
     return df, len(df) if hasattr(df, '__len__') else 0, analysis
 
 
