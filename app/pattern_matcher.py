@@ -119,6 +119,47 @@ WHERE status IN ('solved', 'closed')
   AND channel = 'native_messaging'
   AND group_id IN ('17837476387479', '28949203098007')""",
                 "requires_window_functions": True
+            },
+            {
+                "id": "wops_agent_performance",
+                "name": "WOPS Agent Performance (Weekly Aggregated)",
+                "table": "ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE",
+                "keywords": [
+                    "agent performance", "weekly performance", "performance dashboard",
+                    "top performers", "agent rankings", "performance trends",
+                    "agent stats", "performance summary", "weekly stats",
+                    "performance metrics", "agent scorecard", "team performance",
+                    "performance comparison", "agent kpi", "weekly kpi",
+                    "csat", "customer satisfaction", "performance correlation"
+                ],
+                "questions": [
+                    "agent performance", "top performing agents", "weekly performance",
+                    "performance trends", "agent rankings", "performance dashboard",
+                    "who are the best agents", "agent stats", "weekly stats",
+                    "performance comparison", "week over week", "agent scorecard",
+                    "team performance", "performance metrics", "agent kpi"
+                ],
+                "standard_filters": "",
+                "key_columns": {
+                    "identifiers": ["SOLVED_WEEK_ASSIGNEE_ID"],
+                    "dimensions": ["ASSIGNEE_NAME", "SOLVED_WEEK"],
+                    "metrics": ["NUM_TICKETS", "AHT_MINUTES", "FCR_PERCENTAGE",
+                                "QA_SCORE", "POSITIVE_RES_CSAT", "NEGATIVE_RES_CSAT"],
+                    "timestamps": ["SOLVED_WEEK"]
+                },
+                "derived_fields": {
+                    "CSAT_Rate": """CASE 
+                  WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
+                  ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
+                END""",
+                    "Performance_Score": """(
+                  (FCR_PERCENTAGE * 0.3) + 
+                  (QA_SCORE * 0.3) + 
+                  (CASE WHEN AHT_MINUTES <= 10 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 10) * 5) END * 0.2) +
+                  (CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN 50 
+                        ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 END * 0.2)
+                )"""
+                }
             }
         ]
 
@@ -212,6 +253,8 @@ class PatternBasedQueryBuilder:
             sql = self._build_handle_time_query(question_lower, pattern, intent, sql_parts)
         elif pattern["id"] == "fcr":
             sql = self._build_fcr_query(question_lower, pattern, intent, sql_parts)
+        elif pattern["id"] == "wops_agent_performance":
+            sql = self._build_wops_performance_query(question_lower, pattern, intent, sql_parts)
         else:
             sql = self._build_generic_query(question_lower, pattern, intent, sql_parts)
 
@@ -421,6 +464,81 @@ SELECT
   AVG(IS_RESOLVED_FIRST_TIME) * 100 as fcr_rate,
   COUNT(*) as total_tickets
 FROM fcr_data"""
+
+    def _build_wops_performance_query(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
+        """Build WOPS agent performance query"""
+
+        # Current week top performers
+        if any(phrase in question for phrase in ["top performers", "best agents", "top agents"]):
+            sql_parts["select"] = [
+                "ASSIGNEE_NAME",
+                "NUM_TICKETS",
+                "AHT_MINUTES",
+                "FCR_PERCENTAGE",
+                "QA_SCORE",
+                "POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 as csat_rate"
+            ]
+            sql_parts["where"].append(
+                "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)")
+            sql_parts["order_by"] = ["QA_SCORE DESC", "FCR_PERCENTAGE DESC"]
+            sql_parts["limit"] = "LIMIT 10"
+
+        # Performance trends for specific agent
+        elif "trends" in question or "week over week" in question:
+            sql_parts["select"] = [
+                "SOLVED_WEEK",
+                "ASSIGNEE_NAME",
+                "NUM_TICKETS",
+                "AHT_MINUTES",
+                "FCR_PERCENTAGE",
+                "QA_SCORE"
+            ]
+            # If specific agent mentioned, we'd need to parse it
+            sql_parts["order_by"] = ["SOLVED_WEEK DESC"]
+            sql_parts["limit"] = "LIMIT 12"
+
+        # Performance rankings
+        elif "ranking" in question or "rankings" in question:
+            sql_parts["select"] = [
+                "ASSIGNEE_NAME",
+                "AVG(NUM_TICKETS) as avg_weekly_tickets",
+                "AVG(AHT_MINUTES) as avg_aht",
+                "AVG(FCR_PERCENTAGE) as avg_fcr",
+                "AVG(QA_SCORE) as avg_qa_score",
+                "COUNT(*) as weeks_active",
+                "ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as overall_rank"
+            ]
+            sql_parts["where"].append("SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'")
+            sql_parts["group_by"] = ["ASSIGNEE_NAME"]
+            sql_parts["order_by"] = ["overall_rank"]
+
+        # Weekly performance summary
+        elif "weekly" in question or "this week" in question:
+            sql_parts["select"] = [
+                "ASSIGNEE_NAME",
+                "NUM_TICKETS",
+                "AHT_MINUTES",
+                "FCR_PERCENTAGE",
+                "QA_SCORE"
+            ]
+            sql_parts["where"].append(
+                "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)")
+            sql_parts["order_by"] = ["QA_SCORE DESC"]
+
+        # Default: recent performance data
+        else:
+            sql_parts["select"] = [
+                "ASSIGNEE_NAME",
+                "SOLVED_WEEK",
+                "NUM_TICKETS",
+                "AHT_MINUTES",
+                "FCR_PERCENTAGE",
+                "QA_SCORE"
+            ]
+            sql_parts["order_by"] = ["SOLVED_WEEK DESC", "QA_SCORE DESC"]
+            sql_parts["limit"] = "LIMIT 50"
+
+        return self._assemble_sql(sql_parts)
 
     def _get_time_filter(self, question: str, date_column: str) -> Optional[str]:
         """Extract time filter from question"""

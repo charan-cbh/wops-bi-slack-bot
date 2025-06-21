@@ -380,39 +380,263 @@ GROUP BY ISSUE_TYPE
 
 ---
 
+## Pattern 5: WOPS Agent Performance (Weekly Aggregated)
+
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE`
+
+### Questions This Pattern Answers
+- What is overall agent performance this week/last week?
+- Which agents are top performers across all metrics?
+- Show weekly performance trends for specific agents
+- Compare agent performance week-over-week
+- What is the correlation between volume and quality metrics?
+- Which agents have the best customer satisfaction scores?
+- Show team performance rankings
+- What are the performance benchmarks by metric?
+- Which agents need performance coaching?
+- Weekly performance dashboard metrics
+- Agent performance distribution analysis
+- Top/bottom performers identification
+- Performance consistency analysis over time
+- Customer satisfaction vs quality score correlation
+- Handle time vs volume relationship analysis
+- FCR leaders and improvement opportunities
+
+### Pre-Aggregated Metrics (No Calculations Needed)
+This table contains **pre-calculated weekly metrics** - no complex aggregations required.
+
+- **Volume**: `NUM_TICKETS` (total tickets solved per week)
+- **Efficiency**: `AHT_MINUTES` (average handle time in minutes)
+- **Quality**: `QA_SCORE` (average QA score 0-100)
+- **Effectiveness**: `FCR_PERCENTAGE` (first contact resolution rate 0-100)
+- **Customer Satisfaction**: `POSITIVE_RES_CSAT`, `NEGATIVE_RES_CSAT` (satisfaction counts)
+
+### Important Columns
+- **Identifiers**: SOLVED_WEEK_ASSIGNEE_ID (unique weekly performance record)
+- **Dimensions**: ASSIGNEE_NAME, SOLVED_WEEK (week ending date)
+- **Volume Metrics**: NUM_TICKETS
+- **Efficiency Metrics**: AHT_MINUTES
+- **Quality Metrics**: QA_SCORE (0-100 scale)
+- **Effectiveness Metrics**: FCR_PERCENTAGE (0-100 scale)
+- **Satisfaction Metrics**: POSITIVE_RES_CSAT, NEGATIVE_RES_CSAT
+
+### Key Derived Fields for Analysis
+
+**CSAT Rate**:
+```sql
+CASE 
+  WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
+  ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
+END AS csat_percentage
+```
+
+**Overall Performance Score** (composite metric):
+```sql
+(
+  (FCR_PERCENTAGE * 0.3) + 
+  (QA_SCORE * 0.3) + 
+  (CASE WHEN AHT_MINUTES <= 10 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 10) * 5) END * 0.2) +
+  (CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN 50 
+        ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 END * 0.2)
+) AS performance_score
+```
+
+### Sample Queries
+
+**Current week top performers**:
+```sql
+SELECT 
+  ASSIGNEE_NAME,
+  NUM_TICKETS,
+  AHT_MINUTES,
+  FCR_PERCENTAGE,
+  QA_SCORE,
+  POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 as csat_rate
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)
+ORDER BY QA_SCORE DESC, FCR_PERCENTAGE DESC
+LIMIT 10
+```
+
+**Weekly performance trends for specific agent**:
+```sql
+SELECT 
+  SOLVED_WEEK,
+  NUM_TICKETS,
+  AHT_MINUTES,
+  FCR_PERCENTAGE,
+  QA_SCORE
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+WHERE ASSIGNEE_NAME = 'John Smith'
+ORDER BY SOLVED_WEEK DESC
+LIMIT 12  -- Last 12 weeks
+```
+
+**Week-over-week performance comparison**:
+```sql
+WITH current_week AS (
+  SELECT * FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+  WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)
+),
+previous_week AS (
+  SELECT * FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+  WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE) - INTERVAL '7 days'
+)
+SELECT 
+  c.ASSIGNEE_NAME,
+  c.NUM_TICKETS as current_tickets,
+  p.NUM_TICKETS as previous_tickets,
+  c.NUM_TICKETS - p.NUM_TICKETS as ticket_change,
+  c.QA_SCORE as current_qa,
+  p.QA_SCORE as previous_qa,
+  c.QA_SCORE - p.QA_SCORE as qa_change,
+  c.FCR_PERCENTAGE - p.FCR_PERCENTAGE as fcr_change
+FROM current_week c
+LEFT JOIN previous_week p ON c.ASSIGNEE_NAME = p.ASSIGNEE_NAME
+ORDER BY qa_change DESC
+```
+
+**Performance distribution analysis**:
+```sql
+SELECT 
+  CASE 
+    WHEN QA_SCORE >= 90 THEN 'Excellent (90+)'
+    WHEN QA_SCORE >= 80 THEN 'Good (80-89)'
+    WHEN QA_SCORE >= 70 THEN 'Needs Improvement (70-79)'
+    ELSE 'Critical (<70)'
+  END as qa_tier,
+  CASE
+    WHEN FCR_PERCENTAGE >= 80 THEN 'High FCR (80+)'
+    WHEN FCR_PERCENTAGE >= 70 THEN 'Medium FCR (70-79)'
+    ELSE 'Low FCR (<70)'
+  END as fcr_tier,
+  COUNT(*) as agent_count,
+  AVG(NUM_TICKETS) as avg_volume
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '4 weeks'
+GROUP BY qa_tier, fcr_tier
+ORDER BY qa_tier, fcr_tier
+```
+
+**Agent performance rankings**:
+```sql
+SELECT 
+  ASSIGNEE_NAME,
+  AVG(NUM_TICKETS) as avg_weekly_tickets,
+  AVG(AHT_MINUTES) as avg_aht,
+  AVG(FCR_PERCENTAGE) as avg_fcr,
+  AVG(QA_SCORE) as avg_qa_score,
+  AVG(POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100) as avg_csat_rate,
+  COUNT(*) as weeks_active,
+  ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as overall_rank
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+GROUP BY ASSIGNEE_NAME
+HAVING COUNT(*) >= 8  -- At least 8 weeks of data
+ORDER BY overall_rank
+```
+
+**Performance correlation analysis**:
+```sql
+SELECT 
+  CORR(NUM_TICKETS, QA_SCORE) as volume_qa_correlation,
+  CORR(AHT_MINUTES, FCR_PERCENTAGE) as aht_fcr_correlation,
+  CORR(QA_SCORE, FCR_PERCENTAGE) as qa_fcr_correlation,
+  CORR(NUM_TICKETS, AHT_MINUTES) as volume_aht_correlation
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+```
+
+### Query Adaptations
+- **For current week only**: `WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)`
+- **For last N weeks**: `WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL 'N weeks'`
+- **For specific agent**: `WHERE ASSIGNEE_NAME = 'Agent Name'`
+- **For performance trends**: `ORDER BY SOLVED_WEEK ASC/DESC`
+- **For rankings**: Use `ROW_NUMBER() OVER (ORDER BY metric DESC)`
+- **For team analysis**: Join with agent hierarchy tables if available
+- **For outlier exclusion**: `WHERE NUM_TICKETS >= 5` (minimum volume threshold)
+
+### Business Intelligence Use Cases
+
+**Executive Dashboard Metrics**:
+- Weekly performance summary across all agents
+- Top/bottom performers identification
+- Performance trend analysis
+- Correlation insights between metrics
+
+**Agent Coaching & Development**:
+- Individual agent performance profiles
+- Week-over-week improvement tracking
+- Strength/weakness identification
+- Performance goal tracking
+
+**Team Management**:
+- Team performance comparisons
+- Capacity planning based on volume trends
+- Quality vs efficiency balance analysis
+- Customer satisfaction drivers
+
+### Integration with Other Patterns
+
+**Detailed Analysis Cross-Reference**:
+- **For ticket-level details**: Use Pattern 1 (WOPS Tickets) with `WHERE ASSIGNEE_NAME = 'agent'`
+- **For handle time breakdown**: Use Pattern 3 (Handle Time) with specific week filters
+- **For QA review details**: Use Pattern 2 (Klaus QA) for component-level scores
+- **For FCR incident analysis**: Use Pattern 4 (FCR) for repeat contact patterns
+
+**Join Opportunities**:
+```sql
+-- Combine weekly summary with detailed tickets
+SELECT 
+  wp.ASSIGNEE_NAME,
+  wp.SOLVED_WEEK,
+  wp.NUM_TICKETS,
+  wp.QA_SCORE,
+  COUNT(wt.TICKET_ID) as detailed_ticket_count
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE wp
+LEFT JOIN ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS wt 
+  ON wp.ASSIGNEE_NAME = wt.ASSIGNEE_NAME 
+  AND DATE_TRUNC('week', wt.SOLVED_AT_PST) = wp.SOLVED_WEEK
+GROUP BY wp.ASSIGNEE_NAME, wp.SOLVED_WEEK, wp.NUM_TICKETS, wp.QA_SCORE
+```
+
+### Performance Benchmarks (Suggested Thresholds)
+- **Excellent QA**: 90+ score
+- **Good FCR**: 80%+ resolution rate
+- **Efficient AHT**: <10 minutes for most ticket types
+- **Active Volume**: 20+ tickets per week
+- **Strong CSAT**: 85%+ positive rate
+
+---
+
 ## Cross-Pattern Analysis Guidelines
 
 ### For Complete Agent Performance Analysis
-Combine all four patterns:
+Choose between detailed analysis (Patterns 1-4) or executive summary (Pattern 5):
+
+**Option A: Executive/Weekly View (Recommended for most questions)**
+Use Pattern 5 (WOPS Agent Performance) for:
+- Weekly performance summaries
+- Agent rankings and comparisons
+- Performance trends over time
+- Executive dashboards
+
+**Option B: Detailed Analysis (When granular data needed)**
+Combine Patterns 1-4:
 1. **Volume**: Use WOPS Tickets pattern (tickets handled)
 2. **Efficiency**: Use Handle Time pattern (AHT metrics)
 3. **Quality**: Use Klaus QA pattern (quality scores)
 4. **Effectiveness**: Use FCR pattern (first contact resolution)
 
-Example combined query structure:
+**Hybrid Approach: Start with Pattern 5, drill down with Patterns 1-4**
 ```sql
-WITH ticket_volume AS (
-  -- From WOPS Tickets pattern
-),
-handle_time AS (
-  -- From Handle Time pattern
-),
-qa_scores AS (
-  -- From Klaus pattern
-),
-fcr_metrics AS (
-  -- From FCR pattern
-)
-SELECT 
-  agent_name,
-  volume_metrics.*,
-  efficiency_metrics.*,
-  quality_metrics.*,
-  effectiveness_metrics.*
-FROM ticket_volume
-JOIN handle_time ON ...
-JOIN qa_scores ON ...
-JOIN fcr_metrics ON ...
+-- Executive view from Pattern 5
+SELECT * FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE 
+WHERE ASSIGNEE_NAME = 'John Smith' AND SOLVED_WEEK >= CURRENT_DATE - INTERVAL '8 weeks'
+
+-- Then drill down with Pattern 1 for specific tickets
+SELECT * FROM ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE ASSIGNEE_NAME = 'John Smith' AND CREATED_AT >= CURRENT_DATE - INTERVAL '7 days'
 ```
 
 ### For Channel Comparison
@@ -424,6 +648,42 @@ JOIN fcr_metrics ON ...
 - Use DATE_TRUNC for hourly/daily/weekly aggregations
 - Consider business hours filtering when relevant
 
+## Pattern Selection Decision Tree
+
+When users ask performance-related questions, use this decision tree:
+
+```
+Is the question about...
+
+├── Real-time/daily metrics? 
+│   └── Use Patterns 1-4 (detailed data)
+│
+├── Weekly performance/trends/rankings?
+│   └── Use Pattern 5 (WOPS Agent Performance) ✅
+│
+├── Specific ticket investigation?
+│   └── Use Pattern 1 (WOPS Tickets)
+│
+├── QA review details/components?
+│   └── Use Pattern 2 (Klaus QA)
+│
+├── Handle time breakdown/voice metrics?
+│   └── Use Pattern 3 (Handle Time)
+│
+└── FCR failure analysis?
+    └── Use Pattern 4 (FCR)
+```
+
+**Key Principle**: Pattern 5 should be the **default choice** for most agent performance questions unless specific granular details are needed.
+
+## Priority Guidelines for AI Assistant
+
+1. **First Choice**: Pattern 5 for any agent performance, rankings, or weekly metrics questions
+2. **Second Choice**: Specific patterns (1-4) only when Pattern 5 doesn't have the required detail
+3. **Combination**: Use Pattern 5 for overview, then drill down with specific patterns if needed
+
+This approach provides faster, more accurate responses for the majority of business questions while still allowing detailed analysis when necessary.
+
 ## Important Notes
 1. Always verify which filters are pre-applied in each pattern
 2. Some patterns (like FCR) already have significant filtering
@@ -433,13 +693,20 @@ JOIN fcr_metrics ON ...
 
 ## Common Business Questions and Pattern Usage
 
-| Question | Primary Pattern | Additional Patterns |
-|----------|----------------|-------------------|
-| "How many tickets today?" | WOPS Tickets | - |
-| "What's our AHT?" | Handle Time | - |
-| "Agent performance dashboard" | All 4 patterns | Combined analysis |
-| "Channel efficiency" | Handle Time | WOPS Tickets for volume |
-| "Quality scores by team" | Klaus QA | - |
-| "Why are customers calling back?" | FCR | WOPS Tickets for issue types |
-| "Peak hour analysis" | Handle Time | WOPS Tickets for volume |
-| "Escalation patterns" | WOPS Tickets | Handle Time for duration |
+| Question | Primary Pattern | Additional Patterns | Notes |
+|----------|----------------|-------------------|-------|
+| "How many tickets today?" | WOPS Tickets (1) | - | Use for real-time daily metrics |
+| "What's our AHT?" | Handle Time (3) | WOPS Performance (5) | Pattern 5 for weekly averages |
+| "Agent performance dashboard" | **WOPS Performance (5)** | Patterns 1-4 for details | **Start with Pattern 5** |
+| "Top performing agents this week" | **WOPS Performance (5)** | - | **Perfect for this question** |
+| "Weekly performance trends" | **WOPS Performance (5)** | - | **Ideal use case** |
+| "Agent rankings" | **WOPS Performance (5)** | - | **Pre-calculated rankings** |
+| "Channel efficiency" | Handle Time (3) | WOPS Tickets (1) for volume | - |
+| "Quality scores by team" | Klaus QA (2) | WOPS Performance (5) | Pattern 5 for weekly averages |
+| "Why are customers calling back?" | FCR (4) | WOPS Tickets (1) for issue types | - |
+| "Peak hour analysis" | Handle Time (3) | WOPS Tickets (1) for volume | - |
+| "Escalation patterns" | WOPS Tickets (1) | Handle Time (3) for duration | - |
+| "Performance coaching insights" | **WOPS Performance (5)** | All patterns for details | **Start with Pattern 5** |
+| "Week-over-week comparison" | **WOPS Performance (5)** | - | **Built for this analysis** |
+| "Customer satisfaction trends" | **WOPS Performance (5)** | - | **New capability** |
+| "Performance correlation analysis" | **WOPS Performance (5)** | - | **Volume vs Quality insights** |
