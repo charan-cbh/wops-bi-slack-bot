@@ -1025,7 +1025,7 @@ async def discover_table_schema(table_name: str) -> dict:
             for col in columns:
                 col_lower = col.lower()
                 if any(pattern in col_lower for pattern in
-                       ['_updated_at', '_created_at', 'audit', 'modified', 'inserted', 'dw_']):
+                       ['updated_at', 'created_at', 'audit', 'modified', 'inserted', 'dw_']):
                     audit_columns_found.append(col)
 
             schema_info = {
