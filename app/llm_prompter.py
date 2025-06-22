@@ -1438,7 +1438,7 @@ def build_sql_instructions(intent: dict, table: str, schema: dict, original_ques
     {column_info}
 
     CRITICAL REQUIREMENTS:
-    1. Generate SQL that COMPLETELY and ACCURATELY answers the question
+    1. Generate SQL that COMPLETELY and ACCURATELY answers the question and is executable - no syntax or compilation errors in snowflake
     2. Use ONLY columns that exist in the schema above
     3. Verify each column reference against the schema
     4. Use appropriate aggregations and calculations
@@ -2627,6 +2627,7 @@ Focus on:
 2. Highlighting key findings or patterns
 3. Formatting numbers and results clearly
 4. Noting any data quality issues if relevant
+5. If the query execution failed just say the user some Generic Error message dont say anything about why and how it failed
 
 Use Slack formatting:
 - *text* for bold emphasis
@@ -3210,60 +3211,420 @@ async def suggest_query_improvements(question: str, sql: str, df, selected_table
 
 async def execute_with_quality_analysis(question: str, sql: str, selected_table: str, user_id: str, channel_id: str):
     """
-    Execute SQL with quality analysis and auto-retry if needed - BEFORE showing user results
+    Execute SQL with error handling, auto-fixing, and quality analysis
+    Returns: (result_df, result_count, analysis_info)
     """
     from app.snowflake_runner import run_query
 
-    print(f"🔍 Executing query with quality analysis...")
+    print(f"🔍 Executing query with error handling and quality analysis...")
 
-    # Execute original query
-    df = run_query(sql)
+    original_sql = sql
+    attempts = 0
+    max_attempts = 3
 
-    if isinstance(df, str):
-        # Query failed - return error immediately
-        return df, 0, None
+    while attempts < max_attempts:
+        attempts += 1
+        print(f"🔄 Attempt {attempts}/{max_attempts}")
 
-    # Analyze result quality
-    analysis = await analyze_result_quality(question, sql, df, selected_table)
+        # Execute SQL query
+        df = run_query(sql)
 
-    print(f"📊 Initial result quality score: {analysis['quality_score']}/100")
+        # Check if query failed due to SQL errors
+        if isinstance(df, str):
+            error_message = df.lower()
 
-    # AUTO-RETRY LOGIC - This happens BEFORE user sees anything
-    if analysis["should_retry"] and analysis["retry_sql"] and analysis["quality_score"] < 60:
-        print(f"🔄 AUTO-RETRYING: Quality too low ({analysis['quality_score']}/100)")
-        print(f"Issues found: {', '.join(analysis['issues'])}")
-        print(f"🔧 Improved SQL:\n{analysis['retry_sql']}")
+            # Detect different types of SQL errors
+            sql_error_type = detect_sql_error_type(df)
 
-        # Execute improved query
-        improved_df = run_query(analysis["retry_sql"])
+            if sql_error_type and attempts < max_attempts:
+                print(f"🔧 SQL Error detected: {sql_error_type}")
+                print(f"❌ Error: {df}")
 
-        if not isinstance(improved_df, str) and len(improved_df) > 0:
-            print(f"✅ Improved query returned {len(improved_df)} results")
+                # Try to fix the SQL based on error type
+                fixed_sql = await fix_sql_error(sql, df, sql_error_type, selected_table, question, user_id, channel_id)
 
-            # Re-analyze improved results
-            improved_analysis = await analyze_result_quality(question, analysis["retry_sql"], improved_df,
-                                                             selected_table)
-            print(f"📈 Improved quality score: {improved_analysis['quality_score']}/100")
-
-            # If significantly better, use improved results
-            if improved_analysis["quality_score"] > analysis["quality_score"] + 20:  # Must be 20+ points better
-                print(f"🎉 Auto-retry successful! Using improved results.")
-
-                # Mark this as auto-retry success
-                improved_analysis["auto_retry_success"] = True
-                improved_analysis["original_issues"] = analysis["issues"]
-                improved_analysis["improvement"] = improved_analysis["quality_score"] - analysis["quality_score"]
-                improved_analysis["original_sql"] = sql
-                improved_analysis["improved_sql"] = analysis["retry_sql"]
-
-                return improved_df, len(improved_df), improved_analysis
+                if fixed_sql and fixed_sql != sql:
+                    print(f"🛠️ Attempting SQL fix for {sql_error_type}")
+                    print(f"🔧 Fixed SQL:\n{fixed_sql}")
+                    sql = fixed_sql
+                    continue  # Try again with fixed SQL
+                else:
+                    print(f"⚠️ Could not generate fix for {sql_error_type}")
+                    break
             else:
-                print(f"⚠️ Auto-retry didn't improve quality significantly")
+                # Non-SQL error or max attempts reached
+                print(f"❌ Query execution failed: {df}")
+                return df, 0, {"error_type": "execution_error", "original_sql": original_sql, "attempts": attempts}
         else:
-            print(f"❌ Improved query failed: {improved_df}")
+            # Query succeeded, now do quality analysis
+            print(f"✅ SQL execution successful on attempt {attempts}")
 
-    # If no retry or retry failed, return original results
-    return df, len(df) if hasattr(df, '__len__') else 0, analysis
+            # If we fixed the SQL, note it in the analysis
+            sql_was_fixed = sql != original_sql
+            if sql_was_fixed:
+                print(f"🎉 SQL was auto-fixed and executed successfully!")
+
+            # Analyze result quality
+            analysis = await analyze_result_quality(question, sql, df, selected_table)
+
+            print(f"📊 Result quality score: {analysis['quality_score']}/100")
+
+            # AUTO-RETRY LOGIC for data quality (separate from SQL error fixing)
+            if analysis["should_retry"] and analysis["retry_sql"] and analysis["quality_score"] < 60:
+                print(f"🔄 AUTO-RETRYING: Quality too low ({analysis['quality_score']}/100)")
+                print(f"Issues found: {', '.join(analysis['issues'])}")
+
+                # Execute improved query for data quality
+                improved_df = run_query(analysis["retry_sql"])
+
+                if not isinstance(improved_df, str) and len(improved_df) > 0:
+                    print(f"✅ Quality retry returned {len(improved_df)} results")
+
+                    # Re-analyze improved results
+                    improved_analysis = await analyze_result_quality(question, analysis["retry_sql"], improved_df,
+                                                                     selected_table)
+                    print(f"📈 Improved quality score: {improved_analysis['quality_score']}/100")
+
+                    # If significantly better, use improved results
+                    if improved_analysis["quality_score"] > analysis["quality_score"] + 20:
+                        print(f"🎉 Quality retry successful! Using improved results.")
+
+                        # Mark this as auto-retry success
+                        improved_analysis["auto_retry_success"] = True
+                        improved_analysis["original_issues"] = analysis["issues"]
+                        improved_analysis["improvement"] = improved_analysis["quality_score"] - analysis[
+                            "quality_score"]
+                        improved_analysis["sql_was_fixed"] = sql_was_fixed
+                        improved_analysis["original_sql"] = original_sql
+                        improved_analysis["fixed_sql"] = sql if sql_was_fixed else None
+                        improved_analysis["final_sql"] = analysis["retry_sql"]
+
+                        return improved_df, len(improved_df), improved_analysis
+
+            # Add SQL fix information to analysis
+            if sql_was_fixed:
+                analysis["sql_was_fixed"] = True
+                analysis["original_sql"] = original_sql
+                analysis["fixed_sql"] = sql
+                analysis["fix_attempts"] = attempts
+
+            return df, len(df) if hasattr(df, '__len__') else 0, analysis
+
+    # If we get here, all attempts failed
+    return f"❌ Failed to execute query after {max_attempts} attempts. Last error: {df}", 0, {
+        "error_type": "max_attempts_exceeded",
+        "original_sql": original_sql,
+        "attempts": attempts
+    }
+
+
+def detect_sql_error_type(error_message: str) -> Optional[str]:
+    """Detect the type of SQL error from the error message"""
+    error_lower = error_message.lower()
+
+    # Column/identifier errors
+    if any(phrase in error_lower for phrase in [
+        "invalid identifier", "column", "does not exist", "unknown column",
+        "column not found", "ambiguous column"
+    ]):
+        return "invalid_column"
+
+    # Table/schema errors
+    if any(phrase in error_lower for phrase in [
+        "table", "does not exist", "unknown table", "schema not found",
+        "object does not exist", "relation does not exist"
+    ]):
+        return "invalid_table"
+
+    # Syntax errors
+    if any(phrase in error_lower for phrase in [
+        "syntax error", "parsing error", "unexpected token", "invalid syntax",
+        "sql parsing error", "compilation error"
+    ]):
+        return "syntax_error"
+
+    # Aggregation/GROUP BY errors
+    if any(phrase in error_lower for phrase in [
+        "group by", "aggregate", "not in group by", "must appear in group by"
+    ]):
+        return "groupby_error"
+
+    # Data type errors
+    if any(phrase in error_lower for phrase in [
+        "data type", "type conversion", "invalid data type", "cannot convert"
+    ]):
+        return "datatype_error"
+
+    # Permission/access errors
+    if any(phrase in error_lower for phrase in [
+        "permission", "access denied", "unauthorized", "insufficient privileges"
+    ]):
+        return "permission_error"
+
+    return None
+
+
+async def fix_sql_error(sql: str, error_message: str, error_type: str, selected_table: str, question: str, user_id: str,
+                        channel_id: str) -> Optional[str]:
+    """Try to fix SQL based on the error type and message"""
+
+    if error_type == "invalid_column":
+        return await fix_invalid_column_error(sql, error_message, selected_table, question, user_id, channel_id)
+
+    elif error_type == "invalid_table":
+        return await fix_invalid_table_error(sql, error_message, selected_table)
+
+    elif error_type == "syntax_error":
+        return await fix_syntax_error(sql, error_message, question, user_id, channel_id)
+
+    elif error_type == "groupby_error":
+        return await fix_groupby_error(sql, error_message)
+
+    elif error_type == "datatype_error":
+        return await fix_datatype_error(sql, error_message)
+
+    return None
+
+
+async def fix_invalid_column_error(sql: str, error_message: str, selected_table: str, question: str, user_id: str,
+                                   channel_id: str) -> Optional[str]:
+    """Fix invalid column errors by finding correct column names"""
+
+    # Extract the problematic column name from error message
+    import re
+
+    # Try different patterns for column name extraction
+    patterns = [
+        r"invalid identifier '([^']+)'",
+        r'column "([^"]+)" does not exist',
+        r"unknown column '([^']+)'",
+        r'column ([^\s]+) does not exist'
+    ]
+
+    bad_column = None
+    for pattern in patterns:
+        match = re.search(pattern, error_message, re.IGNORECASE)
+        if match:
+            bad_column = match.group(1)
+            break
+
+    if not bad_column:
+        print(f"⚠️ Could not extract column name from error: {error_message}")
+        return None
+
+    print(f"🔍 Bad column detected: '{bad_column}'")
+
+    # Get current schema for the table
+    schema = await discover_table_schema(selected_table)
+    available_columns = schema.get('columns', [])
+
+    if not available_columns:
+        print(f"⚠️ No schema available for table {selected_table}")
+        return None
+
+    # Try to find similar column names
+    similar_columns = find_similar_column_names(bad_column, available_columns)
+
+    if similar_columns:
+        # Use the most similar column
+        best_match = similar_columns[0]
+        print(f"🔄 Replacing '{bad_column}' with '{best_match}'")
+
+        # Replace the bad column in SQL
+        fixed_sql = sql.replace(bad_column, best_match)
+        return fixed_sql
+
+    # If no similar columns found, try using OpenAI to suggest fix
+    return await get_ai_column_fix(sql, bad_column, available_columns, question, user_id, channel_id)
+
+
+def find_similar_column_names(bad_column: str, available_columns: List[str]) -> List[str]:
+    """Find similar column names using fuzzy matching"""
+    from difflib import SequenceMatcher
+
+    bad_lower = bad_column.lower()
+    similarities = []
+
+    for col in available_columns:
+        col_lower = col.lower()
+
+        # Direct substring match
+        if bad_lower in col_lower or col_lower in bad_lower:
+            similarities.append((col, 0.9))
+
+        # Fuzzy string matching
+        else:
+            ratio = SequenceMatcher(None, bad_lower, col_lower).ratio()
+            if ratio > 0.6:  # 60% similarity threshold
+                similarities.append((col, ratio))
+
+    # Sort by similarity score
+    similarities.sort(key=lambda x: x[1], reverse=True)
+
+    return [col for col, score in similarities[:3]]  # Return top 3 matches
+
+
+async def get_ai_column_fix(sql: str, bad_column: str, available_columns: List[str], question: str, user_id: str,
+                            channel_id: str) -> Optional[str]:
+    """Use OpenAI to suggest column name fix"""
+
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return None
+
+    instructions = f"""You are a SQL expert fixing a column name error.
+
+PROBLEM: The column '{bad_column}' does not exist in the table.
+
+AVAILABLE COLUMNS:
+{', '.join(available_columns[:30])}
+
+YOUR TASK:
+1. Find the correct column name from the available columns that matches the intent
+2. Replace '{bad_column}' with the correct column name in the SQL
+3. Return ONLY the corrected SQL query
+
+Original Question: {question}
+
+The goal is to find the column that best represents what '{bad_column}' was trying to reference."""
+
+    message = f"""Fix this SQL by replacing the invalid column '{bad_column}' with the correct column name:
+
+```sql
+{sql}
+```
+
+Available columns: {', '.join(available_columns[:20])}"""
+
+    try:
+        response = await send_message_and_run(thread_id, message, instructions)
+
+        # Extract SQL from response
+        fixed_sql = extract_sql_from_response(response)
+
+        if fixed_sql and fixed_sql != sql:
+            return fixed_sql
+
+    except Exception as e:
+        print(f"⚠️ AI column fix failed: {e}")
+
+    return None
+
+
+async def fix_invalid_table_error(sql: str, error_message: str, selected_table: str) -> Optional[str]:
+    """Fix invalid table name errors"""
+
+    # If the error is about table name, ensure we're using the correct selected table
+    if selected_table and selected_table not in sql:
+        print(f"🔄 Replacing table reference with: {selected_table}")
+
+        # Try to find and replace table names in FROM clause
+        import re
+
+        # Pattern to match FROM clause
+        from_pattern = r'FROM\s+([^\s\n]+)'
+        match = re.search(from_pattern, sql, re.IGNORECASE)
+
+        if match:
+            old_table = match.group(1)
+            fixed_sql = sql.replace(old_table, selected_table)
+            return fixed_sql
+
+    return None
+
+
+async def fix_syntax_error(sql: str, error_message: str, question: str, user_id: str, channel_id: str) -> Optional[str]:
+    """Fix general syntax errors using OpenAI"""
+
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return None
+
+    instructions = f"""You are a SQL expert fixing syntax errors.
+
+PROBLEM: The SQL has a syntax error: {error_message}
+
+YOUR TASK:
+1. Identify and fix the syntax error
+2. Ensure the SQL is valid Snowflake syntax
+3. Return ONLY the corrected SQL query
+4. Do not change the logic or intent of the query, only fix syntax issues
+
+Original Question: {question}"""
+
+    message = f"""Fix the syntax error in this SQL:
+
+```sql
+{sql}
+```
+
+Error: {error_message}"""
+
+    try:
+        response = await send_message_and_run(thread_id, message, instructions)
+        fixed_sql = extract_sql_from_response(response)
+
+        if fixed_sql and fixed_sql != sql:
+            return fixed_sql
+
+    except Exception as e:
+        print(f"⚠️ AI syntax fix failed: {e}")
+
+    return None
+
+
+async def fix_groupby_error(sql: str, error_message: str) -> Optional[str]:
+    """Fix GROUP BY related errors"""
+
+    # Common GROUP BY fixes
+    import re
+
+    # If error mentions specific columns not in GROUP BY
+    if "must appear in group by" in error_message.lower():
+        # Extract column names that need to be added to GROUP BY
+        column_pattern = r"column '([^']+)' must appear in group by"
+        matches = re.findall(column_pattern, error_message, re.IGNORECASE)
+
+        if matches:
+            # Find existing GROUP BY clause
+            groupby_pattern = r'GROUP BY\s+([^\n\r]+)'
+            groupby_match = re.search(groupby_pattern, sql, re.IGNORECASE)
+
+            if groupby_match:
+                existing_groupby = groupby_match.group(1).strip()
+                new_columns = ", ".join(matches)
+                new_groupby = f"{existing_groupby}, {new_columns}"
+
+                fixed_sql = re.sub(groupby_pattern, f"GROUP BY {new_groupby}", sql, flags=re.IGNORECASE)
+                return fixed_sql
+
+    return None
+
+
+async def fix_datatype_error(sql: str, error_message: str) -> Optional[str]:
+    """Fix data type conversion errors"""
+
+    # Add explicit type casting for common issues
+    import re
+
+    if "cannot convert" in error_message.lower():
+        # Add CAST statements for problematic fields
+        # This is a basic implementation - could be enhanced
+
+        # Look for common patterns that need casting
+        patterns = [
+            (r'(\w+)\s*=\s*(\d+)', r'CAST(\1 AS VARCHAR) = CAST(\2 AS VARCHAR)'),  # Number comparisons
+            (r'(\w+)\s*=\s*\'([^\']+)\'', r'CAST(\1 AS VARCHAR) = \'\2\''),  # String comparisons
+        ]
+
+        fixed_sql = sql
+        for pattern, replacement in patterns:
+            fixed_sql = re.sub(pattern, replacement, fixed_sql)
+
+        if fixed_sql != sql:
+            return fixed_sql
+
+    return None
 
 
 # Cache clearing functions
