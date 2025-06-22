@@ -571,10 +571,12 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
     await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}", include_feedback_hint=False)
 
 
+# Update the execute_sql_and_respond function in app/slack_handler.py
+
 async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str,
                                   original_ts: str = None):
-    """Execute SQL query and send results - HIDE quality analysis from users"""
-    print("⚡ Executing query with intelligent auto-retry...")
+    """Execute SQL query and send results - with SQL error auto-fixing"""
+    print("⚡ Executing query with error handling and quality analysis...")
     await send_slack_message(channel_id, "⚡ Executing query...", include_feedback_hint=False)
 
     print(f"\n{'=' * 60}")
@@ -591,38 +593,30 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         await send_slack_message(channel_id, f"❌ {sql}", include_feedback_hint=False)
         return
 
-    # Import the quality analysis functions
+    # Import the enhanced quality analysis functions
     from app.llm_prompter import execute_with_quality_analysis
 
-    # Execute with intelligent auto-retry (happens BEFORE user sees anything)
-    df, result_count, quality_analysis = await execute_with_quality_analysis(
+    # Execute with intelligent error handling and auto-retry
+    df, result_count, analysis = await execute_with_quality_analysis(
         clean_question, sql, selected_table, user_id, channel_id
     )
 
     if isinstance(df, str):
-        # Error message from query execution
-        print(f"❌ Query execution error: {df}")
+        # Final error after all retry attempts
+        print(f"❌ Final query execution error: {df}")
 
-        # Check if it's a column name error and provide helpful suggestions
-        if "invalid identifier" in df.lower():
-            match = re.search(r"invalid identifier '([^']+)'", df, re.IGNORECASE)
-            if match:
-                bad_column = match.group(1)
-                print(f"❌ Column '{bad_column}' does not exist in the table")
-
-                suggestions_msg = f"❌ Query error: Column '{bad_column}' does not exist in the table.\n\n"
-                suggestions_msg += "**Suggestions:**\n"
-                suggestions_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
-                suggestions_msg += f"• Try `@bot debug find {clean_question}` to find relevant tables\n"
-
-                if selected_table:
-                    suggestions_msg += f"• Try `@bot debug sample {selected_table}` to see actual columns\n"
-
-                suggestions_msg += "• Rephrase your question with more specific details"
-                result_message = suggestions_msg
-            else:
-                result_message = f"❌ Query error: {df}"
+        # Check if it was a max attempts error
+        if analysis and analysis.get("error_type") == "max_attempts_exceeded":
+            error_msg = f"❌ **Query execution failed after {analysis.get('attempts', 3)} attempts**\n\n"
+            error_msg += f"I tried to automatically fix the SQL but couldn't resolve the issue.\n\n"
+            error_msg += "**Suggestions:**\n"
+            error_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
+            error_msg += f"• Try rephrasing your question with different terms\n"
+            error_msg += f"• Check if the data exists for your specified criteria\n\n"
+            error_msg += f"**Last Error:** {df}"
+            result_message = error_msg
         else:
+            # Standard error handling
             result_message = f"❌ Query error: {df}"
 
         await update_sql_cache_with_results(clean_question, sql, 0, selected_table)
@@ -630,14 +624,16 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         # Success - process results
         print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
 
-        # Check if auto-retry was successful
-        auto_retry_success = quality_analysis.get("auto_retry_success", False) if quality_analysis else False
-        quality_score = quality_analysis.get("quality_score", 100) if quality_analysis else 100
+        # Check what happened during execution
+        sql_was_fixed = analysis.get("sql_was_fixed", False) if analysis else False
+        auto_retry_success = analysis.get("auto_retry_success", False) if analysis else False
+        quality_score = analysis.get("quality_score", 100) if analysis else 100
+
+        if sql_was_fixed:
+            print(f"🔧 SQL was auto-fixed during execution (attempts: {analysis.get('fix_attempts', 1)})")
 
         if auto_retry_success:
-            print(f"🎉 Auto-retry was successful! Quality improved to {quality_score}/100")
-            # Update SQL to the improved version for caching
-            sql = quality_analysis.get("improved_sql", sql)
+            print(f"🎉 Quality auto-retry was successful! Quality improved to {quality_score}/100")
 
         # Extract table from SQL if we don't have it
         if not selected_table and 'FROM' in sql.upper():
@@ -647,8 +643,9 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 after_from = sql[from_idx + 4:].strip()
                 selected_table = re.split(r'[\s\n]+', after_from)[0]
 
-        # Update cache with actual results
-        await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
+        # Update cache with actual results (use the final working SQL)
+        final_sql = analysis.get("final_sql") or analysis.get("fixed_sql") or sql
+        await update_sql_cache_with_results(clean_question, final_sql, result_count, selected_table)
 
         # Summarize results (this is what the user sees)
         if USE_ASSISTANT_API and ASSISTANT_ID:
@@ -665,13 +662,17 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 format_result_for_slack(df)
             )
 
-        # ONLY add quality feedback if it's truly exceptional or there was an auto-retry success
-        if auto_retry_success:
-            # Subtle success message - user knows we improved the query
-            result_message += f"\n\n_✨ Query automatically optimized for better results_"
+        # Add intelligent success messages based on what happened
+        success_messages = []
 
-        # DON'T show quality analysis details to users - only in debug mode
-        # Users just get the clean answer
+        if sql_was_fixed:
+            success_messages.append("🔧 Query automatically fixed and executed")
+
+        if auto_retry_success:
+            success_messages.append("📊 Results automatically optimized for quality")
+
+        if success_messages:
+            result_message += f"\n\n_✨ {' • '.join(success_messages)}_"
 
         # Update conversation context
         await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
@@ -688,10 +689,11 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
             channel_ts = f"{channel_id}_{msg_ts}"
             message_to_question_map[channel_ts] = {
                 'question': clean_question,
-                'sql': sql,
+                'sql': analysis.get("final_sql") or analysis.get("fixed_sql") or sql,
                 'table': selected_table,
                 'timestamp': time.time(),
-                'quality_score': quality_analysis.get("quality_score", 100) if quality_analysis else 100,
+                'quality_score': quality_score,
+                'sql_was_fixed': sql_was_fixed,
                 'auto_retry_success': auto_retry_success
             }
             print(f"📝 Stored message {channel_ts} for feedback tracking")
