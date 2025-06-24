@@ -103,92 +103,7 @@ ORDER BY ticket_count DESC
 
 ---
 
-## Pattern 2: Klaus Quality Assurance (QA) Reviews Analysis
-
-**Primary Table**: `ANALYTICS.DBT_PRODUCTION.FCT_KLAUS__REVIEWS`
-
-### Questions This Pattern Answers
-- What are agent QA scores?
-- Which agents passed/failed their QA reviews?
-- What is the average QA score by team/agent?
-- Show QA component breakdown (Resolution, Communication, etc.)
-- What are the most common QA failures?
-- QA score trends over time
-- Reviewer performance and consistency
-- Agent performance on specific QA components
-- ATA (Agent Training Assessment) scores
-- QA pass rates by scorecard type
-- Which QA components need improvement?
-- Compare QA scores between agents/teams
-- Auto-fail incidents analysis
-
-### Scorecard Configuration
-- **Scorecard 53921 (QA v2)**: Pass threshold = 85%
-- **Scorecard 54262 (ATA v2)**: Pass threshold = 85%
-- **Scorecard 59144 (ATA)**: Pass threshold = 90%
-- **Scorecard 60047**: Always results in 'Fail'
-
-### Complex Calculations
-
-**Overall Score**:
-```sql
-CASE
-  WHEN No_Auto_Fail < 100 THEN 0
-  WHEN SUM(RATING_WEIGHT) = 0 THEN NULL
-  ELSE SUM(RATING_SCORE * RATING_WEIGHT) / SUM(100 * RATING_WEIGHT) * 100
-END
-```
-
-**Clear Communication Score** (uses different methods):
-- Old method: Direct "Effective Communication" category score
-- New method: Average of 6 sub-components (IDs: 319808-319813)
-
-**Handling Score**:
-- QA method: 75% weight on Handling_1 (ID: 319826) + 25% weight on Handling_2 (ID: 319827)
-- ATA method: Direct score from category 322522
-
-### Key Components to Track
-- **Behavioral**: Tone, Spelling_and_Grammar, Presence, Opening, Closing, Hold, Escalations
-- **Technical**: Investigation, Delivering_Outcomes, Education, Attendance, Payments
-- **Resolution**: Resolution score (category IDs: 319803, 322509)
-- **ATA Specific**: ATA_Failure_Select_Correct_SOP, ATA_Failure_Follow_SOP, ATA_Critical_Thinking
-
-### Sample Queries
-
-**Agent QA pass rate**:
-```sql
-SELECT 
-  REVIEWEE_NAME,
-  AVG(CASE WHEN IS_PASS_FAIL = 'Pass' THEN 1.0 ELSE 0 END) * 100 as pass_rate,
-  AVG(Overall_Score) as avg_qa_score,
-  COUNT(*) as reviews_count
-FROM [Klaus pattern query with CTEs]
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - 30
-GROUP BY REVIEWEE_NAME
-ORDER BY pass_rate DESC
-```
-
-**Component analysis**:
-```sql
-SELECT 
-  AVG(Resolution) as avg_resolution,
-  AVG(Clear_Communication) as avg_communication,
-  AVG(Handling) as avg_handling,
-  AVG(CASE WHEN No_Auto_Fail < 100 THEN 1.0 ELSE 0 END) * 100 as auto_fail_rate
-FROM [Klaus pattern query]
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - 7
-```
-
-### Query Adaptations
-- **For date range**: `WHERE REVIEW_CREATED_AT >= CURRENT_DATE - 30`
-- **For specific scorecard**: `WHERE SCORECARD_ID = 53921`
-- **For pass rate**: `AVG(CASE WHEN IS_PASS_FAIL = 'Pass' THEN 1.0 ELSE 0 END) * 100`
-- **For component analysis**: Focus on specific score columns
-- **For team rollup**: Join with agent hierarchy tables
-
----
-
-## Pattern 3: Agent Handle Time Analysis
+## Pattern 2: Agent Handle Time Analysis
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME`
 
@@ -275,7 +190,7 @@ ORDER BY time_bucket
 
 ---
 
-## Pattern 4: First Contact Resolution (FCR) Analysis
+## Pattern 3: First Contact Resolution (FCR) Analysis
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS` (with window functions)
 
@@ -380,7 +295,7 @@ GROUP BY ISSUE_TYPE
 
 ---
 
-## Pattern 5: WOPS Agent Performance (Weekly Aggregated)
+## Pattern 4: WOPS Agent Performance (Weekly Aggregated)
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE`
 
@@ -401,13 +316,14 @@ GROUP BY ISSUE_TYPE
 - Customer satisfaction vs quality score correlation
 - Handle time vs volume relationship analysis
 - FCR leaders and improvement opportunities
+- **QA score trends and agent quality rankings** (replaces detailed Klaus analysis)
 
 ### Pre-Aggregated Metrics (No Calculations Needed)
 This table contains **pre-calculated weekly metrics** - no complex aggregations required.
 
 - **Volume**: `NUM_TICKETS` (total tickets solved per week)
 - **Efficiency**: `AHT_MINUTES` (average handle time in minutes)
-- **Quality**: `QA_SCORE` (average QA score 0-100)
+- **Quality**: `QA_SCORE` (average QA score 0-100) - *replaces Klaus detailed analysis*
 - **Effectiveness**: `FCR_PERCENTAGE` (first contact resolution rate 0-100)
 - **Customer Satisfaction**: `POSITIVE_RES_CSAT`, `NEGATIVE_RES_CSAT` (satisfaction counts)
 
@@ -416,7 +332,7 @@ This table contains **pre-calculated weekly metrics** - no complex aggregations 
 - **Dimensions**: ASSIGNEE_NAME, SOLVED_WEEK (week ending date)
 - **Volume Metrics**: NUM_TICKETS
 - **Efficiency Metrics**: AHT_MINUTES
-- **Quality Metrics**: QA_SCORE (0-100 scale)
+- **Quality Metrics**: QA_SCORE (0-100 scale) - *aggregated from all QA sources*
 - **Effectiveness Metrics**: FCR_PERCENTAGE (0-100 scale)
 - **Satisfaction Metrics**: POSITIVE_RES_CSAT, NEGATIVE_RES_CSAT
 
@@ -458,14 +374,18 @@ ORDER BY QA_SCORE DESC, FCR_PERCENTAGE DESC
 LIMIT 10
 ```
 
-**Weekly performance trends for specific agent**:
+**Weekly QA performance trends for specific agent**:
 ```sql
 SELECT 
   SOLVED_WEEK,
   NUM_TICKETS,
-  AHT_MINUTES,
-  FCR_PERCENTAGE,
-  QA_SCORE
+  QA_SCORE,
+  CASE
+    WHEN QA_SCORE >= 90 THEN 'Excellent'
+    WHEN QA_SCORE >= 80 THEN 'Good' 
+    WHEN QA_SCORE >= 70 THEN 'Needs Improvement'
+    ELSE 'Critical'
+  END as qa_tier
 FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
 WHERE ASSIGNEE_NAME = 'John Smith'
 ORDER BY SOLVED_WEEK DESC
@@ -496,7 +416,7 @@ LEFT JOIN previous_week p ON c.ASSIGNEE_NAME = p.ASSIGNEE_NAME
 ORDER BY qa_change DESC
 ```
 
-**Performance distribution analysis**:
+**Quality performance distribution analysis**:
 ```sql
 SELECT 
   CASE 
@@ -518,45 +438,39 @@ GROUP BY qa_tier, fcr_tier
 ORDER BY qa_tier, fcr_tier
 ```
 
-**Agent performance rankings**:
+**Agent quality rankings**:
 ```sql
 SELECT 
   ASSIGNEE_NAME,
-  AVG(NUM_TICKETS) as avg_weekly_tickets,
-  AVG(AHT_MINUTES) as avg_aht,
-  AVG(FCR_PERCENTAGE) as avg_fcr,
   AVG(QA_SCORE) as avg_qa_score,
-  AVG(POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100) as avg_csat_rate,
+  AVG(FCR_PERCENTAGE) as avg_fcr,
+  AVG(NUM_TICKETS) as avg_weekly_tickets,
   COUNT(*) as weeks_active,
-  ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as overall_rank
+  ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC) as qa_rank
 FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
 WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+  AND QA_SCORE IS NOT NULL
 GROUP BY ASSIGNEE_NAME
 HAVING COUNT(*) >= 8  -- At least 8 weeks of data
-ORDER BY overall_rank
-```
-
-**Performance correlation analysis**:
-```sql
-SELECT 
-  CORR(NUM_TICKETS, QA_SCORE) as volume_qa_correlation,
-  CORR(AHT_MINUTES, FCR_PERCENTAGE) as aht_fcr_correlation,
-  CORR(QA_SCORE, FCR_PERCENTAGE) as qa_fcr_correlation,
-  CORR(NUM_TICKETS, AHT_MINUTES) as volume_aht_correlation
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
-WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+ORDER BY qa_rank
 ```
 
 ### Query Adaptations
 - **For current week only**: `WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)`
 - **For last N weeks**: `WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL 'N weeks'`
 - **For specific agent**: `WHERE ASSIGNEE_NAME = 'Agent Name'`
-- **For performance trends**: `ORDER BY SOLVED_WEEK ASC/DESC`
-- **For rankings**: Use `ROW_NUMBER() OVER (ORDER BY metric DESC)`
-- **For team analysis**: Join with agent hierarchy tables if available
-- **For outlier exclusion**: `WHERE NUM_TICKETS >= 5` (minimum volume threshold)
+- **For QA analysis**: `WHERE QA_SCORE IS NOT NULL` (filter out weeks without QA data)
+- **For quality trends**: `ORDER BY SOLVED_WEEK ASC/DESC`
+- **For quality rankings**: Use `ROW_NUMBER() OVER (ORDER BY QA_SCORE DESC)`
+- **For quality thresholds**: Use CASE statements for QA score tiers
 
 ### Business Intelligence Use Cases
+
+**QA Performance Management** (replaces Klaus detailed analysis):
+- Weekly QA score trends across all agents
+- Quality rankings and tier distribution
+- QA performance correlation with other metrics
+- Quality improvement tracking over time
 
 **Executive Dashboard Metrics**:
 - Weekly performance summary across all agents
@@ -570,73 +484,50 @@ WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
 - Strength/weakness identification
 - Performance goal tracking
 
-**Team Management**:
-- Team performance comparisons
-- Capacity planning based on volume trends
-- Quality vs efficiency balance analysis
-- Customer satisfaction drivers
-
-### Integration with Other Patterns
-
-**Detailed Analysis Cross-Reference**:
-- **For ticket-level details**: Use Pattern 1 (WOPS Tickets) with `WHERE ASSIGNEE_NAME = 'agent'`
-- **For handle time breakdown**: Use Pattern 3 (Handle Time) with specific week filters
-- **For QA review details**: Use Pattern 2 (Klaus QA) for component-level scores
-- **For FCR incident analysis**: Use Pattern 4 (FCR) for repeat contact patterns
-
-**Join Opportunities**:
-```sql
--- Combine weekly summary with detailed tickets
-SELECT 
-  wp.ASSIGNEE_NAME,
-  wp.SOLVED_WEEK,
-  wp.NUM_TICKETS,
-  wp.QA_SCORE,
-  COUNT(wt.TICKET_ID) as detailed_ticket_count
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE wp
-LEFT JOIN ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS wt 
-  ON wp.ASSIGNEE_NAME = wt.ASSIGNEE_NAME 
-  AND DATE_TRUNC('week', wt.SOLVED_AT_PST) = wp.SOLVED_WEEK
-GROUP BY wp.ASSIGNEE_NAME, wp.SOLVED_WEEK, wp.NUM_TICKETS, wp.QA_SCORE
-```
-
-### Performance Benchmarks (Suggested Thresholds)
-- **Excellent QA**: 90+ score
-- **Good FCR**: 80%+ resolution rate
-- **Efficient AHT**: <10 minutes for most ticket types
-- **Active Volume**: 20+ tickets per week
-- **Strong CSAT**: 85%+ positive rate
-
 ---
 
 ## Cross-Pattern Analysis Guidelines
 
-### For Complete Agent Performance Analysis
-Choose between detailed analysis (Patterns 1-4) or executive summary (Pattern 5):
+### For Complete Performance Analysis
+Choose the appropriate level and pattern combination:
 
-**Option A: Executive/Weekly View (Recommended for most questions)**
-Use Pattern 5 (WOPS Agent Performance) for:
-- Weekly performance summaries
+**Option A: Team Lead/Supervisor Analysis (Pattern 5)**
+Use Pattern 5 (WOPS Team Lead Performance) for:
+- Team performance summaries and rankings
+- Supervisor effectiveness analysis
+- Team capacity and workload planning
+- Cross-team benchmarking
+- Team-level QA and performance trends
+
+**Option B: Individual Agent Analysis (Pattern 4)**
+Use Pattern 4 (WOPS Agent Performance) for:
+- Individual agent performance summaries
 - Agent rankings and comparisons
-- Performance trends over time
-- Executive dashboards
+- Personal performance trends over time
+- Agent coaching insights
+- Individual QA score analysis (weekly aggregates)
 
-**Option B: Detailed Analysis (When granular data needed)**
-Combine Patterns 1-4:
-1. **Volume**: Use WOPS Tickets pattern (tickets handled)
-2. **Efficiency**: Use Handle Time pattern (AHT metrics)
-3. **Quality**: Use Klaus QA pattern (quality scores)
-4. **Effectiveness**: Use FCR pattern (first contact resolution)
+**Option C: Detailed QA Component Analysis (Pattern 6)** 🆕
+Use Pattern 6 (WOPS Klaus QA & ATA) for:
+- Individual QA review details and component breakdowns
+- Auto-fail incident analysis
+- Reviewer performance and consistency
+- Scorecard-specific analysis (QA vs ATA)
+- Channel and ticket type QA impact
+- Root cause analysis for QA failures
 
-**Hybrid Approach: Start with Pattern 5, drill down with Patterns 1-4**
+**Option D: Detailed Operational Analysis (Patterns 1-3)**
+Combine Patterns 1-3 when granular, real-time data is needed:
+1. **Volume**: Use WOPS Tickets pattern (ticket-level details)
+2. **Efficiency**: Use Handle Time pattern (detailed AHT metrics)
+3. **Effectiveness**: Use FCR pattern (contact resolution analysis)
+
+**Multi-Level QA Analysis Flow**:
 ```sql
--- Executive view from Pattern 5
-SELECT * FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE 
-WHERE ASSIGNEE_NAME = 'John Smith' AND SOLVED_WEEK >= CURRENT_DATE - INTERVAL '8 weeks'
-
--- Then drill down with Pattern 1 for specific tickets
-SELECT * FROM ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
-WHERE ASSIGNEE_NAME = 'John Smith' AND CREATED_AT >= CURRENT_DATE - INTERVAL '7 days'
+-- Team QA Summary (Pattern 5)
+-- → Agent QA Weekly (Pattern 4) 
+-- → Individual Review Details (Pattern 6)
+-- → Related Ticket Analysis (Pattern 1)
 ```
 
 ### For Channel Comparison
@@ -648,6 +539,603 @@ WHERE ASSIGNEE_NAME = 'John Smith' AND CREATED_AT >= CURRENT_DATE - INTERVAL '7 
 - Use DATE_TRUNC for hourly/daily/weekly aggregations
 - Consider business hours filtering when relevant
 
+---
+
+## Pattern 5: WOPS Team Lead Performance (Weekly Aggregated)
+
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE`
+
+### Questions This Pattern Answers
+- What is team lead performance this week/last week?
+- Which team leads are top performers across all metrics?
+- Show weekly team lead performance trends for specific supervisors
+- Compare team lead performance week-over-week
+- What is the correlation between team volume and team quality metrics?
+- Which team leads have the best customer satisfaction scores?
+- Show supervisor performance rankings
+- What are the performance benchmarks by team lead?
+- Which teams need performance coaching or support?
+- Weekly team lead dashboard metrics
+- Team lead performance distribution analysis
+- Top/bottom performing teams identification
+- Team performance consistency analysis over time
+- Team-level customer satisfaction vs quality score correlation
+- Team handle time vs volume relationship analysis
+- Team FCR leaders and improvement opportunities
+- Supervisor QA score trends and team quality rankings
+- Team capacity and workload analysis
+- Multi-team comparison and benchmarking
+
+### Pre-Aggregated Metrics (No Calculations Needed)
+This table contains **pre-calculated weekly team-level metrics** - no complex aggregations required.
+
+- **Volume**: `NUM_TICKETS` (total tickets solved per week by team)
+- **Efficiency**: `AHT_MINUTES` (average handle time in minutes for the team)
+- **Quality**: `QA_SCORE` (average QA score 0-100 for the team)
+- **Effectiveness**: `FCR_PERCENTAGE` (first contact resolution rate 0-100 for the team)
+- **Customer Satisfaction**: `POSITIVE_RES_CSAT`, `NEGATIVE_RES_CSAT` (team satisfaction counts)
+
+### Important Columns
+- **Identifiers**: SOLVED_WEEK_SUPERVISOR_ID (unique weekly team performance record)
+- **Dimensions**: SUPERVISOR (team lead name), SOLVED_WEEK (week ending date)
+- **Volume Metrics**: NUM_TICKETS (team total)
+- **Efficiency Metrics**: AHT_MINUTES (team average)
+- **Quality Metrics**: QA_SCORE (team average, 0-100 scale)
+- **Effectiveness Metrics**: FCR_PERCENTAGE (team rate, 0-100 scale)
+- **Satisfaction Metrics**: POSITIVE_RES_CSAT, NEGATIVE_RES_CSAT (team totals)
+
+### Key Derived Fields for Analysis
+
+**Team CSAT Rate**:
+```sql
+CASE 
+  WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
+  ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
+END AS team_csat_percentage
+```
+
+**Team Performance Score** (composite metric):
+```sql
+(
+  (FCR_PERCENTAGE * 0.3) + 
+  (QA_SCORE * 0.3) + 
+  (CASE WHEN AHT_MINUTES <= 12 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 12) * 4) END * 0.2) +
+  (CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN 50 
+        ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 END * 0.2)
+) AS team_performance_score
+```
+
+**Tickets Per Agent Estimate** (assuming average team size):
+```sql
+CASE 
+  WHEN NUM_TICKETS = 0 THEN 0
+  ELSE NUM_TICKETS / 8.0  -- Assuming average team size of 8 agents
+END AS estimated_tickets_per_agent
+```
+
+### Sample Queries
+
+**Current week top performing teams**:
+```sql
+SELECT 
+  SUPERVISOR,
+  NUM_TICKETS,
+  AHT_MINUTES,
+  FCR_PERCENTAGE,
+  QA_SCORE,
+  POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 as team_csat_rate,
+  NUM_TICKETS / 8.0 as estimated_tickets_per_agent
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE)
+ORDER BY QA_SCORE DESC, FCR_PERCENTAGE DESC
+LIMIT 10
+```
+
+**Weekly team performance trends for specific team lead**:
+```sql
+SELECT 
+  SOLVED_WEEK,
+  NUM_TICKETS,
+  AHT_MINUTES,
+  FCR_PERCENTAGE,
+  QA_SCORE,
+  CASE
+    WHEN QA_SCORE >= 90 THEN 'Excellent Team'
+    WHEN QA_SCORE >= 80 THEN 'Good Team' 
+    WHEN QA_SCORE >= 70 THEN 'Needs Support'
+    ELSE 'Critical Support Needed'
+  END as team_qa_tier
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SUPERVISOR = 'Team Lead Name'
+ORDER BY SOLVED_WEEK DESC
+LIMIT 12  -- Last 12 weeks
+```
+
+**Week-over-week team performance comparison**:
+```sql
+WITH current_week AS (
+  SELECT * FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+  WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE)
+),
+previous_week AS (
+  SELECT * FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+  WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE) - INTERVAL '7 days'
+)
+SELECT 
+  c.SUPERVISOR,
+  c.NUM_TICKETS as current_team_tickets,
+  p.NUM_TICKETS as previous_team_tickets,
+  c.NUM_TICKETS - p.NUM_TICKETS as team_ticket_change,
+  c.QA_SCORE as current_team_qa,
+  p.QA_SCORE as previous_team_qa,
+  c.QA_SCORE - p.QA_SCORE as team_qa_change,
+  c.FCR_PERCENTAGE - p.FCR_PERCENTAGE as team_fcr_change,
+  c.AHT_MINUTES - p.AHT_MINUTES as team_aht_change
+FROM current_week c
+LEFT JOIN previous_week p ON c.SUPERVISOR = p.SUPERVISOR
+ORDER BY team_qa_change DESC
+```
+
+**Team performance distribution analysis**:
+```sql
+SELECT 
+  CASE 
+    WHEN QA_SCORE >= 90 THEN 'Excellent Teams (90+)'
+    WHEN QA_SCORE >= 80 THEN 'Good Teams (80-89)'
+    WHEN QA_SCORE >= 70 THEN 'Teams Need Support (70-79)'
+    ELSE 'Critical Support Needed (<70)'
+  END as team_qa_tier,
+  CASE
+    WHEN FCR_PERCENTAGE >= 80 THEN 'High Team FCR (80+)'
+    WHEN FCR_PERCENTAGE >= 70 THEN 'Medium Team FCR (70-79)'
+    ELSE 'Low Team FCR (<70)'
+  END as team_fcr_tier,
+  COUNT(*) as team_count,
+  AVG(NUM_TICKETS) as avg_team_volume,
+  SUM(NUM_TICKETS) as total_tickets_in_tier
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '4 weeks'
+GROUP BY team_qa_tier, team_fcr_tier
+ORDER BY team_qa_tier, team_fcr_tier
+```
+
+**Team lead performance rankings**:
+```sql
+SELECT 
+  SUPERVISOR,
+  AVG(NUM_TICKETS) as avg_weekly_team_tickets,
+  AVG(AHT_MINUTES) as avg_team_aht,
+  AVG(FCR_PERCENTAGE) as avg_team_fcr,
+  AVG(QA_SCORE) as avg_team_qa_score,
+  AVG(POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100) as avg_team_csat_rate,
+  COUNT(*) as weeks_active,
+  ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as team_rank
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+GROUP BY SUPERVISOR
+HAVING COUNT(*) >= 8  -- At least 8 weeks of data
+ORDER BY team_rank
+```
+
+**Team capacity and workload analysis**:
+```sql
+SELECT 
+  SUPERVISOR,
+  AVG(NUM_TICKETS) as avg_weekly_volume,
+  MAX(NUM_TICKETS) as peak_weekly_volume,
+  MIN(NUM_TICKETS) as min_weekly_volume,
+  STDDEV(NUM_TICKETS) as volume_consistency,
+  AVG(NUM_TICKETS) / 8.0 as estimated_tickets_per_agent,
+  CASE
+    WHEN AVG(NUM_TICKETS) >= 200 THEN 'High Capacity Team'
+    WHEN AVG(NUM_TICKETS) >= 120 THEN 'Medium Capacity Team'
+    ELSE 'Low Capacity Team'
+  END as capacity_tier
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '8 weeks'
+GROUP BY SUPERVISOR
+ORDER BY avg_weekly_volume DESC
+```
+
+**Team performance correlation analysis**:
+```sql
+SELECT 
+  CORR(NUM_TICKETS, QA_SCORE) as team_volume_qa_correlation,
+  CORR(AHT_MINUTES, FCR_PERCENTAGE) as team_aht_fcr_correlation,
+  CORR(QA_SCORE, FCR_PERCENTAGE) as team_qa_fcr_correlation,
+  CORR(NUM_TICKETS, AHT_MINUTES) as team_volume_aht_correlation,
+  AVG(NUM_TICKETS) as avg_team_volume,
+  AVG(QA_SCORE) as avg_team_qa_score
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+```
+
+### Query Adaptations
+- **For current week only**: `WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE)`
+- **For last N weeks**: `WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL 'N weeks'`
+- **For specific team lead**: `WHERE SUPERVISOR = 'Team Lead Name'`
+- **For team QA analysis**: `WHERE QA_SCORE IS NOT NULL` (filter out weeks without QA data)
+- **For team performance trends**: `ORDER BY SOLVED_WEEK ASC/DESC`
+- **For team rankings**: Use `ROW_NUMBER() OVER (ORDER BY QA_SCORE DESC)`
+- **For capacity analysis**: Focus on NUM_TICKETS metrics and volume patterns
+- **For multi-team comparison**: Use multiple WHERE conditions or GROUP BY rollups
+
+### Business Intelligence Use Cases
+
+**Team Lead Management Dashboard**:
+- Weekly team performance summary across all supervisors
+- Top/bottom performing teams identification
+- Team performance trend analysis
+- Capacity planning and workload distribution
+
+**Operations Management**:
+- Team capacity analysis and resource allocation
+- Cross-team performance benchmarking
+- Team efficiency vs quality balance
+- Supervisor coaching and development priorities
+
+**Executive Team Insights**:
+- Organization-wide team performance health
+- Team-level correlation between metrics
+- Capacity utilization and optimization opportunities
+- Customer satisfaction by team/supervisor
+
+**Workforce Planning**:
+- Team volume trends for staffing decisions
+- Performance consistency analysis
+- Team lead effectiveness evaluation
+- Resource allocation optimization
+
+### Integration with Other Patterns
+
+**Drill-Down Analysis**:
+- **From Team to Agent**: Use Pattern 4 (Agent Performance) filtered by supervisor
+- **From Team to Tickets**: Use Pattern 1 (WOPS Tickets) filtered by team/supervisor
+- **From Team to Handle Time**: Use Pattern 2 (Handle Time) with supervisor filters
+
+**Cross-Level Analysis**:
+```sql
+-- Compare team lead results with individual agent results
+SELECT 
+  tl.SUPERVISOR,
+  tl.QA_SCORE as team_qa_score,
+  AVG(ap.QA_SCORE) as individual_agents_avg_qa,
+  tl.QA_SCORE - AVG(ap.QA_SCORE) as team_vs_individual_qa_diff
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE tl
+LEFT JOIN ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE ap 
+  ON ap.SOLVED_WEEK = tl.SOLVED_WEEK 
+  AND ap.ASSIGNEE_NAME IN (SELECT agent_name FROM team_roster WHERE supervisor = tl.SUPERVISOR)
+WHERE tl.SOLVED_WEEK >= CURRENT_DATE - INTERVAL '4 weeks'
+GROUP BY tl.SUPERVISOR, tl.QA_SCORE
+```
+
+### Performance Benchmarks (Team-Level Suggested Thresholds)
+- **Excellent Team QA**: 85+ score (higher threshold than individual)
+- **Good Team FCR**: 75%+ resolution rate
+- **Efficient Team AHT**: <12 minutes average
+- **Active Team Volume**: 120+ tickets per week
+- **Strong Team CSAT**: 80%+ positive rate
+- **Consistent Performance**: Low standard deviation across weeks
+
+---
+
+---
+
+## Pattern 6: WOPS Klaus QA & ATA Detailed Reviews
+
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA`
+
+### Questions This Pattern Answers
+- What are individual QA review details and scores?
+- Show QA component breakdown (Resolution, Communication, Handling, Clerical)
+- Which reviews had auto-fail incidents?
+- What are the most common QA failures by component?
+- QA score distribution by scorecard type
+- Reviewer performance and consistency analysis
+- Agent QA performance on specific components
+- Detailed QA trends by ticket type and channel
+- ATA (Agent Training Assessment) vs QA comparison
+- QA review details for specific tickets
+- Component score correlation analysis
+- Scorecard-specific performance analysis
+- QA failure root cause analysis
+- Channel-specific QA performance
+- Ticket type impact on QA scores
+
+### Scorecard Types Available
+Based on SCORECARD_ID and SCORECARD_NAME columns, this table contains multiple scorecard types including QA and ATA assessments.
+
+### Component Scoring Structure
+Each component has both a **rating score** and a **base score**:
+- **Resolution**: `RESOLUTION_RATING_SCORE` / `RESOLUTION_BASE`
+- **Communication**: `COMMUNICATION_RATING_SCORE` / `COMMUNICATION_BASE`  
+- **Handling**: `HANDLING_RATING_SCORE` / `HANDLING_BASE`
+- **Clerical**: `CLERICAL_RATING_SCORE` / `CLERICAL_BASE`
+
+### Important Columns
+- **Identifiers**: REVIEW_ID, TICKET_ID, SCORECARD_ID
+- **Review Details**: SCORECARD_NAME, SOURCE_TYPE, REVIEW_URL, TICKET_URL
+- **People**: REVIEWEE_NAME, REVIEWEE_EMAIL, REVIEWER_NAME, REVIEWER_EMAIL
+- **Timestamps**: REVIEW_CREATED_AT, REVIEW_UPDATED_AT, CREATED_AT_ISO, UPDATED_AT_ISO
+- **Scores**: OVERALL_SCORE, NO_AUTO_FAIL_RATING_SCORE, component rating scores
+- **Context**: WOPS_TICKET_TYPE_A, PAYMENTS_CATEGORY_B, CONTACT_CHANNEL
+- **Details**: REVIEW_COMMENT, MARKDOWN_DETAIL
+
+### Key Derived Fields for Analysis
+
+**Component Percentage Scores**:
+```sql
+CASE 
+  WHEN RESOLUTION_BASE = 0 THEN NULL
+  ELSE (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100
+END AS resolution_percentage,
+
+CASE 
+  WHEN COMMUNICATION_BASE = 0 THEN NULL
+  ELSE (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100  
+END AS communication_percentage,
+
+CASE 
+  WHEN HANDLING_BASE = 0 THEN NULL
+  ELSE (HANDLING_RATING_SCORE / HANDLING_BASE) * 100
+END AS handling_percentage,
+
+CASE 
+  WHEN CLERICAL_BASE = 0 THEN NULL
+  ELSE (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100
+END AS clerical_percentage
+```
+
+**Pass/Fail Status**:
+```sql
+CASE
+  WHEN SCORECARD_NAME LIKE '%ATA%' AND OVERALL_SCORE >= 85 THEN 'Pass'
+  WHEN SCORECARD_NAME LIKE '%QA%' AND OVERALL_SCORE >= 80 THEN 'Pass'
+  WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 'Auto-Fail'
+  ELSE 'Fail'
+END AS review_status
+```
+
+**Auto-Fail Detection**:
+```sql
+CASE
+  WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1
+  ELSE 0
+END AS has_auto_fail
+```
+
+### Sample Queries
+
+**Agent QA component performance**:
+```sql
+SELECT 
+  REVIEWEE_NAME,
+  COUNT(*) as total_reviews,
+  AVG(OVERALL_SCORE) as avg_overall_score,
+  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution_pct,
+  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication_pct,
+  AVG(CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END) as avg_handling_pct,
+  AVG(CASE WHEN CLERICAL_BASE > 0 THEN (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 END) as avg_clerical_pct,
+  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) as auto_fail_count
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY REVIEWEE_NAME
+ORDER BY avg_overall_score DESC
+```
+
+**QA vs ATA scorecard comparison**:
+```sql
+SELECT 
+  CASE 
+    WHEN SCORECARD_NAME LIKE '%ATA%' THEN 'ATA'
+    WHEN SCORECARD_NAME LIKE '%QA%' THEN 'QA'
+    ELSE 'Other'
+  END as scorecard_type,
+  COUNT(*) as review_count,
+  AVG(OVERALL_SCORE) as avg_score,
+  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution,
+  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication,
+  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY scorecard_type
+ORDER BY scorecard_type
+```
+
+**Component failure analysis**:
+```sql
+SELECT 
+  'Resolution' as component,
+  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_score,
+  SUM(CASE WHEN RESOLUTION_BASE > 0 AND (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
+  COUNT(CASE WHEN RESOLUTION_BASE > 0 THEN 1 END) as total_scored
+
+UNION ALL
+
+SELECT 
+  'Communication' as component,
+  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_score,
+  SUM(CASE WHEN COMMUNICATION_BASE > 0 AND (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
+  COUNT(CASE WHEN COMMUNICATION_BASE > 0 THEN 1 END) as total_scored
+
+UNION ALL
+
+SELECT 
+  'Handling' as component,
+  AVG(CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END) as avg_score,
+  SUM(CASE WHEN HANDLING_BASE > 0 AND (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
+  COUNT(CASE WHEN HANDLING_BASE > 0 THEN 1 END) as total_scored
+
+UNION ALL
+
+SELECT 
+  'Clerical' as component,
+  AVG(CASE WHEN CLERICAL_BASE > 0 THEN (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 END) as avg_score,
+  SUM(CASE WHEN CLERICAL_BASE > 0 AND (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
+  COUNT(CASE WHEN CLERICAL_BASE > 0 THEN 1 END) as total_scored
+
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+ORDER BY avg_score DESC
+```
+
+**Channel-specific QA performance**:
+```sql
+SELECT 
+  CONTACT_CHANNEL,
+  COUNT(*) as review_count,
+  AVG(OVERALL_SCORE) as avg_overall_score,
+  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution,
+  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication,
+  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+  AND CONTACT_CHANNEL IS NOT NULL
+GROUP BY CONTACT_CHANNEL
+ORDER BY avg_overall_score DESC
+```
+
+**Reviewer consistency analysis**:
+```sql
+SELECT 
+  REVIEWER_NAME,
+  COUNT(*) as reviews_conducted,
+  AVG(OVERALL_SCORE) as avg_score_given,
+  STDDEV(OVERALL_SCORE) as score_std_dev,
+  MIN(OVERALL_SCORE) as min_score,
+  MAX(OVERALL_SCORE) as max_score,
+  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY REVIEWER_NAME
+HAVING COUNT(*) >= 10  -- Only reviewers with sufficient volume
+ORDER BY score_std_dev ASC  -- Most consistent reviewers first
+```
+
+**Ticket type QA impact**:
+```sql
+SELECT 
+  WOPS_TICKET_TYPE_A,
+  COUNT(*) as review_count,
+  AVG(OVERALL_SCORE) as avg_score,
+  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate,
+  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+  AND WOPS_TICKET_TYPE_A IS NOT NULL
+GROUP BY WOPS_TICKET_TYPE_A
+ORDER BY auto_fail_rate DESC
+```
+
+**Individual review details lookup**:
+```sql
+SELECT 
+  REVIEW_ID,
+  TICKET_ID,
+  REVIEWEE_NAME,
+  REVIEWER_NAME,
+  SCORECARD_NAME,
+  OVERALL_SCORE,
+  CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 'Yes' ELSE 'No' END as auto_fail,
+  CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END as resolution_pct,
+  CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END as communication_pct,
+  CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END as handling_pct,
+  CASE WHEN CLERICAL_BASE > 0 THEN (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 END as clerical_pct,
+  REVIEW_COMMENT,
+  REVIEW_CREATED_AT
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
+WHERE REVIEWEE_NAME = 'Agent Name'
+  AND REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
+ORDER BY REVIEW_CREATED_AT DESC
+```
+
+### Query Adaptations
+- **For specific agent**: `WHERE REVIEWEE_NAME = 'Agent Name'`
+- **For specific reviewer**: `WHERE REVIEWER_NAME = 'Reviewer Name'`
+- **For scorecard type**: `WHERE SCORECARD_NAME LIKE '%QA%'` or `WHERE SCORECARD_NAME LIKE '%ATA%'`
+- **For auto-fails only**: `WHERE NO_AUTO_FAIL_RATING_SCORE < 100`
+- **For specific ticket**: `WHERE TICKET_ID = 'ticket_id'`
+- **For channel analysis**: `WHERE CONTACT_CHANNEL = 'Chat'`
+- **For date range**: `WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL 'N days'`
+- **For component analysis**: Focus on specific RATING_SCORE/BASE combinations
+- **For pass/fail analysis**: Use derived pass/fail logic based on scorecard thresholds
+
+### Business Intelligence Use Cases
+
+**Quality Assurance Management**:
+- Individual QA review analysis and tracking
+- Component-level performance identification
+- Auto-fail incident investigation
+- QA coaching and development priorities
+
+**Agent Development**:
+- Detailed component strength/weakness analysis
+- QA improvement tracking over time
+- Specific skill area focus identification
+- Performance correlation with ticket types
+
+**QA Program Analysis**:
+- Reviewer consistency and calibration
+- Scorecard effectiveness evaluation
+- Channel-specific QA challenges
+- Component scoring distribution analysis
+
+**Operational Insights**:
+- Ticket type impact on QA performance
+- Contact channel QA correlation
+- QA trend analysis and patterns
+- Root cause analysis for QA failures
+
+### Integration with Other Patterns
+
+**Complement Weekly Summaries**:
+- **From Pattern 4/5 Weekly QA**: Drill down to individual reviews with Pattern 6
+- **From Pattern 6 Details**: Roll up to weekly trends with Pattern 4/5
+
+**Cross-Analysis Opportunities**:
+```sql
+-- Compare detailed QA (Pattern 6) with weekly performance (Pattern 4)
+SELECT 
+  ap.ASSIGNEE_NAME,
+  ap.SOLVED_WEEK,
+  ap.QA_SCORE as weekly_qa_avg,
+  AVG(qa.OVERALL_SCORE) as detailed_qa_avg,
+  COUNT(qa.REVIEW_ID) as reviews_count
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE ap
+LEFT JOIN ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA qa
+  ON ap.ASSIGNEE_NAME = qa.REVIEWEE_NAME
+  AND qa.REVIEW_CREATED_AT >= ap.SOLVED_WEEK - INTERVAL '7 days'
+  AND qa.REVIEW_CREATED_AT < ap.SOLVED_WEEK
+WHERE ap.SOLVED_WEEK >= CURRENT_DATE - INTERVAL '4 weeks'
+GROUP BY ap.ASSIGNEE_NAME, ap.SOLVED_WEEK, ap.QA_SCORE
+ORDER BY ap.SOLVED_WEEK DESC
+```
+
+**Ticket-Level Analysis**:
+```sql
+-- Connect QA reviews (Pattern 6) with ticket details (Pattern 1)
+SELECT 
+  qa.TICKET_ID,
+  qa.REVIEWEE_NAME,
+  qa.OVERALL_SCORE,
+  wt.WOPS_TICKET_TYPE_A,
+  wt.HANDLE_TIME,
+  wt.CONTACT_CHANNEL
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA qa
+JOIN ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS wt
+  ON qa.TICKET_ID = wt.TICKET_ID
+WHERE qa.REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '7 days'
+```
+
+### Performance Benchmarks (Review-Level)
+- **Excellent QA**: 90+ overall score
+- **Good QA**: 80-89 overall score
+- **Component Target**: 80%+ on each component
+- **Auto-Fail Rate**: <5% acceptable threshold
+- **Review Volume**: Minimum 2-3 reviews per agent per month
+
+---
+
 ## Pattern Selection Decision Tree
 
 When users ask performance-related questions, use this decision tree:
@@ -655,32 +1143,34 @@ When users ask performance-related questions, use this decision tree:
 ```
 Is the question about...
 
-├── Real-time/daily metrics? 
-│   └── Use Patterns 1-4 (detailed data)
+├── Detailed QA component analysis/individual reviews? 🆕
+│   └── Use Pattern 6 (WOPS Klaus QA & ATA) ✅
 │
-├── Weekly performance/trends/rankings?
-│   └── Use Pattern 5 (WOPS Agent Performance) ✅
+├── Individual agent weekly performance/trends?
+│   └── Use Pattern 4 (WOPS Agent Performance) ✅
 │
-├── Specific ticket investigation?
-│   └── Use Pattern 1 (WOPS Tickets)
+├── Team lead/supervisor/team performance?
+│   └── Use Pattern 5 (WOPS Team Lead Performance) ✅
 │
-├── QA review details/components?
-│   └── Use Pattern 2 (Klaus QA)
+├── Real-time/daily operational data?
+│   └── Use Patterns 1-3 (detailed data)
 │
-├── Handle time breakdown/voice metrics?
-│   └── Use Pattern 3 (Handle Time)
-│
-└── FCR failure analysis?
-    └── Use Pattern 4 (FCR)
+└── [Other specific analyses...]
 ```
 
-**Key Principle**: Pattern 5 should be the **default choice** for most agent performance questions unless specific granular details are needed.
+**Key Principle**: 
+- Pattern 5 for **team lead/supervisor performance** questions
+- Pattern 4 for **individual agent performance** questions  
+- Pattern 6 for **detailed QA component analysis and individual review investigation** 🆕
+- Patterns 1-3 for **detailed operational analysis** when weekly summaries aren't sufficient
 
 ## Priority Guidelines for AI Assistant
 
-1. **First Choice**: Pattern 5 for any agent performance, rankings, or weekly metrics questions
-2. **Second Choice**: Specific patterns (1-4) only when Pattern 5 doesn't have the required detail
-3. **Combination**: Use Pattern 5 for overview, then drill down with specific patterns if needed
+1. **First Choice - Team Level**: Pattern 5 for team lead, supervisor, or team performance questions
+2. **First Choice - Agent Level**: Pattern 4 for individual agent performance, rankings, or weekly metrics
+3. **First Choice - QA Details**: Pattern 6 for detailed QA component analysis, individual reviews, or QA investigation 🆕
+4. **Second Choice**: Specific patterns (1-3) only when Patterns 4-6 don't have the required detail
+5. **Multi-Level**: Start with appropriate summary pattern (4 or 5), drill down to detailed analysis (6 or 1-3) if needed
 
 This approach provides faster, more accurate responses for the majority of business questions while still allowing detailed analysis when necessary.
 
@@ -688,25 +1178,41 @@ This approach provides faster, more accurate responses for the majority of busin
 1. Always verify which filters are pre-applied in each pattern
 2. Some patterns (like FCR) already have significant filtering
 3. Handle time metrics are pre-calculated - no need for complex calculations
-4. QA scores have different thresholds by scorecard type
-5. Consider joining patterns on TICKET_ID or AGENT identifiers for comprehensive analysis
+4. **QA scores are available as:**
+   - **Weekly aggregates**: Patterns 4 and 5
+   - **Individual review details**: Pattern 6 🆕
+5. **Pattern 5 provides team-level insights, Pattern 4 provides agent-level insights, Pattern 6 provides review-level insights** 🆕
+6. Consider joining patterns on TICKET_ID, AGENT identifiers, or SUPERVISOR for comprehensive analysis
 
 ## Common Business Questions and Pattern Usage
 
 | Question | Primary Pattern | Additional Patterns | Notes |
 |----------|----------------|-------------------|-------|
 | "How many tickets today?" | WOPS Tickets (1) | - | Use for real-time daily metrics |
-| "What's our AHT?" | Handle Time (3) | WOPS Performance (5) | Pattern 5 for weekly averages |
-| "Agent performance dashboard" | **WOPS Performance (5)** | Patterns 1-4 for details | **Start with Pattern 5** |
-| "Top performing agents this week" | **WOPS Performance (5)** | - | **Perfect for this question** |
-| "Weekly performance trends" | **WOPS Performance (5)** | - | **Ideal use case** |
-| "Agent rankings" | **WOPS Performance (5)** | - | **Pre-calculated rankings** |
-| "Channel efficiency" | Handle Time (3) | WOPS Tickets (1) for volume | - |
-| "Quality scores by team" | Klaus QA (2) | WOPS Performance (5) | Pattern 5 for weekly averages |
-| "Why are customers calling back?" | FCR (4) | WOPS Tickets (1) for issue types | - |
-| "Peak hour analysis" | Handle Time (3) | WOPS Tickets (1) for volume | - |
-| "Escalation patterns" | WOPS Tickets (1) | Handle Time (3) for duration | - |
-| "Performance coaching insights" | **WOPS Performance (5)** | All patterns for details | **Start with Pattern 5** |
-| "Week-over-week comparison" | **WOPS Performance (5)** | - | **Built for this analysis** |
-| "Customer satisfaction trends" | **WOPS Performance (5)** | - | **New capability** |
-| "Performance correlation analysis" | **WOPS Performance (5)** | - | **Volume vs Quality insights** |
+| "What's our AHT?" | Handle Time (2) | WOPS Performance (4/5) | Patterns 4/5 for weekly averages |
+| "Agent performance dashboard" | **WOPS Agent Performance (4)** | Patterns 1-3 for details | **Start with Pattern 4** |
+| "Team performance dashboard" | **WOPS TL Performance (5)** | Pattern 4 for agent details | **Start with Pattern 5** |
+| "Top performing agents this week" | **WOPS Agent Performance (4)** | - | **Perfect for this question** |
+| "Top performing teams this week" | **WOPS TL Performance (5)** | - | **Perfect for this question** |
+| "Team lead rankings" | **WOPS TL Performance (5)** | - | **Team leader specific** |
+| "Supervisor performance" | **WOPS TL Performance (5)** | Pattern 4 for team agents | **Team lead focus** |
+| "Weekly performance trends" | **WOPS Performance (4/5)** | - | **Choose based on level needed** |
+| "Agent QA scores" | **WOPS Agent Performance (4)** | Pattern 6 for details | **Weekly agent QA aggregates** |
+| "Team QA scores" | **WOPS TL Performance (5)** | Pattern 6 for details | **Weekly team QA aggregates** |
+| "QA component breakdown" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Detailed component analysis** |
+| "QA review details" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Individual review investigation** |
+| "Auto-fail analysis" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Auto-fail incident details** |
+| "Reviewer performance" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **QA reviewer consistency** |
+| "QA by ticket type" | **WOPS Klaus QA & ATA (6)** 🆕 | Pattern 1 for ticket details | **Ticket type QA impact** |
+| "QA by channel" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Channel-specific QA analysis** |
+| "Quality rankings" | **WOPS Performance (4/5)** | Pattern 6 for details | **Choose appropriate level** |
+| "Channel efficiency" | Handle Time (2) | WOPS Tickets (1) for volume | - |
+| "Why are customers calling back?" | FCR (3) | WOPS Tickets (1) for issue types | - |
+| "Peak hour analysis" | Handle Time (2) | WOPS Tickets (1) for volume | - |
+| "Escalation patterns" | WOPS Tickets (1) | Handle Time (2) for duration | - |
+| "Performance coaching insights" | **WOPS Performance (4/5)** | Pattern 6 for QA details | **Start with appropriate level** |
+| "Week-over-week comparison" | **WOPS Performance (4/5)** | - | **Built for this analysis** |
+| "Customer satisfaction trends" | **WOPS Performance (4/5)** | - | **Available at both levels** |
+| "Team capacity planning" | **WOPS TL Performance (5)** | Pattern 4 for agent details | **Team lead specific** |
+| "Workload distribution" | **WOPS TL Performance (5)** | Pattern 4 for agents | **Team level analysis** |
+| "Cross-team benchmarking" | **WOPS TL Performance (5)** | - | **Multi-team comparison** |
