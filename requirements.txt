@@ -50,3 +50,4 @@ tzdata
 urllib3
 uvicorn
 valkey-glide
+tiktoken
