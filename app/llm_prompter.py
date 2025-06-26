@@ -11,6 +11,8 @@ import pandas as pd
 from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
     GlideClusterClientConfiguration
 from app.pattern_matcher import PatternMatcher, PatternBasedQueryHelper
+import tiktoken
+import hashlib
 
 # Import the pattern matcher
 try:
@@ -77,6 +79,18 @@ CONVERSATION_CACHE_PREFIX = f"{CACHE_PREFIX}:conversation"
 TABLE_SELECTION_PREFIX = f"{CACHE_PREFIX}:table_selection"
 TABLE_SAMPLES_PREFIX = f"{CACHE_PREFIX}:table_samples"
 FEEDBACK_PREFIX = f"{CACHE_PREFIX}:feedback"
+# Rate limiting configuration
+MAX_TOKENS_PER_USER_PER_DAY = int(os.getenv("MAX_TOKENS_PER_USER_PER_DAY", 1000000))
+MAX_TOKENS_PER_USER_PER_HOUR = int(os.getenv("MAX_TOKENS_PER_USER_PER_HOUR", 200000))
+MAX_TOKENS_PER_THREAD = int(os.getenv("MAX_TOKENS_PER_THREAD", 1000000))
+ENABLE_RATE_LIMITING = os.getenv("ENABLE_RATE_LIMITING", "true").lower() == "true"
+ADMIN_USERS = [u.strip() for u in os.getenv("ADMIN_USERS", "").split(",") if u.strip()]
+# Cache prefixes for token tracking
+TOKEN_USAGE_PREFIX = f"{CACHE_PREFIX}:token_usage"
+DAILY_USAGE_PREFIX = f"{TOKEN_USAGE_PREFIX}:daily"
+HOURLY_USAGE_PREFIX = f"{TOKEN_USAGE_PREFIX}:hourly"
+THREAD_USAGE_PREFIX = f"{TOKEN_USAGE_PREFIX}:thread"
+TOKEN_USAGE_CACHE_TTL = 86400  # 24 hours for daily limits
 
 # Stop words for phrase extraction
 STOP_WORDS = {'the', 'is', 'at', 'which', 'on', 'and', 'a', 'an', 'as', 'are',
@@ -2448,48 +2462,60 @@ def extract_sql_from_response(response: str) -> str:
     return "-- Error: Could not extract SQL from response"
 
 
-async def handle_question(user_question: str, user_id: str, channel_id: str, assistant_id: str = None) -> Tuple[str, str]:
-    """Main question handler - routes to appropriate handler"""
+async def handle_question(user_question: str, user_id: str, channel_id: str, assistant_id: str = None) -> Tuple[
+    str, str]:
+    """Main question handler with rate limiting"""
     global ASSISTANT_ID
     if assistant_id:
         ASSISTANT_ID = assistant_id
 
     try:
+        # Step 1: Check rate limits BEFORE processing
+        context = await get_conversation_context(user_id, channel_id)
+        estimated_tokens = await estimate_request_tokens(user_question, context)
+
+        rate_limit_check = await check_rate_limits(user_id, channel_id, estimated_tokens)
+
+        if not rate_limit_check["allowed"]:
+            # Return rate limit message
+            usage_info = f"""⚠️ **Usage Limit Reached**
+
+{rate_limit_check["reason"]}
+
+**Your Current Usage:**
+- Daily: {rate_limit_check['daily_usage']:,}/{rate_limit_check['limits']['daily']:,} tokens ({rate_limit_check['daily_usage'] / rate_limit_check['limits']['daily'] * 100:.1f}%)
+- Hourly: {rate_limit_check['hourly_usage']:,}/{rate_limit_check['limits']['hourly']:,} tokens ({rate_limit_check['hourly_usage'] / rate_limit_check['limits']['hourly'] * 100:.1f}%)
+- This thread: {rate_limit_check['thread_usage']:,}/{rate_limit_check['limits']['thread']:,} tokens ({rate_limit_check['thread_usage'] / rate_limit_check['limits']['thread'] * 100:.1f}%)
+
+*Limits reset hourly/daily. Try again later or start a new conversation.*"""
+            return usage_info, 'rate_limited'
+
         # Get conversation context FIRST
         context = await get_conversation_context(user_id, channel_id)
 
         # Initial classification
         question_type = classify_question_type(user_question)
 
-        # Special handling for SQL execution requests
-        if question_type == 'sql_execution_request' and context:
-            # Check if we have a SQL query in context
-            if context.get('last_response_type') == 'sql_shown' and context.get('last_sql'):
-                # Return the SQL that was shown for execution
-                sql_query = context['last_sql']
-                selected_table = context.get('last_table_used')
-                return sql_query, 'sql'
-
-        # IMPORTANT: Don't override sql_required classification
-        if question_type == 'sql_required':
-            # This is definitely a data query - keep it!
-            print(f"🎯 Keeping sql_required classification")
-        elif context and context.get('last_response_type') == 'sql_results':
-            # Only override for TRUE conversational follow-ups
+        # Override classification based on context
+        if context and context.get('last_response_type') == 'sql_results':
             question_lower = user_question.lower()
 
-            # These patterns after SQL results are conversational
             if any(pattern in question_lower for pattern in [
-                'source', 'where does', 'why', 'what is', 'explain',
-                'how did you', 'this data', 'that data', 'these',
+                'source', 'where', 'why', 'what is', 'explain',
+                'how', 'this data', 'that data', 'these',
                 'break down', 'tell me more', 'clarify'
             ]):
                 print(f"🔄 Reclassifying as conversational (follow-up after SQL results)")
                 question_type = 'conversational'
 
+            elif len(user_question.split()) <= 8:
+                print(f"🔄 Reclassifying as conversational (short follow-up after SQL results)")
+                question_type = 'conversational'
+
         print(f"\n{'=' * 60}")
         print(f"🔍 Processing question: {user_question}")
         print(f"📊 Question type: {question_type}")
+        print(f"🔢 Estimated tokens: {estimated_tokens:,}")
         if context:
             print(f"📝 Previous response type: {context.get('last_response_type', 'none')}")
 
@@ -2509,9 +2535,11 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
                     if feedback.get('negative_count', 0) > feedback.get('positive_count', 0):
                         print(f"⚠️ Skipping cached SQL due to negative feedback")
                     else:
-                        print(f"💰 Using cached SQL (success_count: {cached_sql['success_count']})")
+                        print(f"💰 Using cached SQL (minimal tokens used)")
                         sql = cached_sql['sql']
                         print(f"📝 Cached SQL:\n{sql}")
+                        # Track minimal token usage for cached response
+                        await track_actual_usage(user_id, channel_id, user_question, sql)
                         return sql, 'sql'
                 else:
                     print(f"🔄 Generating new SQL (no successful cache found)")
@@ -2519,8 +2547,11 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
                 print(f"⚠️ Error checking cache: {cache_error}")
                 print(f"🔄 Proceeding to generate new SQL")
 
-            # Generate new SQL using intelligent table discovery with patterns
+            # Generate new SQL using intelligent table discovery
             sql_query, selected_table = await generate_sql_intelligently(user_question, user_id, channel_id)
+
+            # Track actual token usage
+            await track_actual_usage(user_id, channel_id, user_question, sql_query)
 
             # Store the selected table in context for feedback
             if selected_table:
@@ -2531,13 +2562,24 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         else:
             # Handle conversational
             response = await handle_conversational_question(user_question, user_id, channel_id)
+
+            # Track actual token usage
+            await track_actual_usage(user_id, channel_id, user_question, response)
+
             return response, 'conversational'
 
     except Exception as e:
         print(f"❌ Error in handle_question: {e}")
         print(f"❌ Error type: {type(e).__name__}")
         traceback.print_exc()
+
+        # Return error as SQL comment to be handled by the caller
         return f"-- Error: {str(e)}", 'error'
+
+async def clear_token_usage_cache():
+    """Clear token usage cache"""
+    _local_cache.setdefault('token_usage', {}).clear()
+    print("🧹 Token usage cache cleared")
 
 async def update_conversation_context_with_sql(user_id: str, channel_id: str, question: str, response: str,
                                                response_type: str = None, table_used: str = None, sql: str = None):
@@ -3316,6 +3358,156 @@ async def execute_with_quality_analysis(question: str, sql: str, selected_table:
         "original_sql": original_sql,
         "attempts": attempts
     }
+
+def count_tokens(text: str, model: str = "gpt-4o-mini") -> int:
+    """Count tokens in text using tiktoken"""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except:
+        # Fallback estimation: roughly 4 characters per token
+        return len(text) // 4
+
+
+async def get_user_token_usage(user_id: str, period: str = "daily") -> int:
+    """Get current token usage for user"""
+    today = time.strftime("%Y-%m-%d")
+    current_hour = time.strftime("%Y-%m-%d-%H")
+
+    if period == "daily":
+        cache_key = f"{DAILY_USAGE_PREFIX}:{user_id}:{today}"
+    elif period == "hourly":
+        cache_key = f"{HOURLY_USAGE_PREFIX}:{user_id}:{current_hour}"
+    else:
+        return 0
+
+    usage = await safe_valkey_get(cache_key, 0)
+    return usage
+
+
+async def get_thread_token_usage(user_id: str, channel_id: str) -> int:
+    """Get token usage for specific thread"""
+    cache_key = f"{user_id}_{channel_id}"
+    thread_key = f"{THREAD_USAGE_PREFIX}:{cache_key}"
+    usage = await safe_valkey_get(thread_key, 0)
+    return usage
+
+
+async def update_token_usage(user_id: str, channel_id: str, tokens_used: int):
+    """Update token usage counters"""
+    today = time.strftime("%Y-%m-%d")
+    current_hour = time.strftime("%Y-%m-%d-%H")
+
+    # Update daily usage
+    daily_key = f"{DAILY_USAGE_PREFIX}:{user_id}:{today}"
+    daily_usage = await safe_valkey_get(daily_key, 0)
+    await safe_valkey_set(daily_key, daily_usage + tokens_used, ex=TOKEN_USAGE_CACHE_TTL)
+
+    # Update hourly usage
+    hourly_key = f"{HOURLY_USAGE_PREFIX}:{user_id}:{current_hour}"
+    hourly_usage = await safe_valkey_get(hourly_key, 0)
+    await safe_valkey_set(hourly_key, hourly_usage + tokens_used, ex=3600)  # 1 hour
+
+    # Update thread usage
+    cache_key = f"{user_id}_{channel_id}"
+    thread_key = f"{THREAD_USAGE_PREFIX}:{cache_key}"
+    thread_usage = await safe_valkey_get(thread_key, 0)
+    await safe_valkey_set(thread_key, thread_usage + tokens_used, ex=THREAD_CACHE_TTL)
+
+
+async def check_rate_limits(user_id: str, channel_id: str, estimated_tokens: int = 0) -> dict:
+    """Check if user has exceeded rate limits"""
+
+    # Skip rate limiting if disabled or user is admin
+    if not ENABLE_RATE_LIMITING or user_id in ADMIN_USERS:
+        return {
+            "allowed": True,
+            "reason": "Admin override" if user_id in ADMIN_USERS else "Rate limiting disabled",
+            "daily_usage": 0,
+            "hourly_usage": 0,
+            "thread_usage": 0,
+            "limits": {
+                "daily": MAX_TOKENS_PER_USER_PER_DAY,
+                "hourly": MAX_TOKENS_PER_USER_PER_HOUR,
+                "thread": MAX_TOKENS_PER_THREAD
+            }
+        }
+
+    daily_usage = await get_user_token_usage(user_id, "daily")
+    hourly_usage = await get_user_token_usage(user_id, "hourly")
+    thread_usage = await get_thread_token_usage(user_id, channel_id)
+
+    result = {
+        "allowed": True,
+        "reason": None,
+        "daily_usage": daily_usage,
+        "hourly_usage": hourly_usage,
+        "thread_usage": thread_usage,
+        "limits": {
+            "daily": MAX_TOKENS_PER_USER_PER_DAY,
+            "hourly": MAX_TOKENS_PER_USER_PER_HOUR,
+            "thread": MAX_TOKENS_PER_THREAD
+        }
+    }
+
+    # Check daily limit
+    if daily_usage + estimated_tokens > MAX_TOKENS_PER_USER_PER_DAY:
+        result["allowed"] = False
+        result["reason"] = f"Daily token limit exceeded ({daily_usage:,}/{MAX_TOKENS_PER_USER_PER_DAY:,})"
+        return result
+
+    # Check hourly limit
+    if hourly_usage + estimated_tokens > MAX_TOKENS_PER_USER_PER_HOUR:
+        result["allowed"] = False
+        result["reason"] = f"Hourly token limit exceeded ({hourly_usage:,}/{MAX_TOKENS_PER_USER_PER_HOUR:,})"
+        return result
+
+    # Check thread limit
+    if thread_usage + estimated_tokens > MAX_TOKENS_PER_THREAD:
+        result["allowed"] = False
+        result[
+            "reason"] = f"Thread token limit exceeded ({thread_usage:,}/{MAX_TOKENS_PER_THREAD:,}). Starting fresh conversation."
+        # Force new thread creation by clearing cache
+        cache_key = f"{user_id}_{channel_id}"
+        redis_key = f"{THREAD_CACHE_PREFIX}:{cache_key}"
+        await safe_valkey_delete(redis_key)
+        return result
+
+    return result
+
+
+async def estimate_request_tokens(question: str, context: dict = None) -> int:
+    """Estimate tokens for a request"""
+    # Count question tokens
+    question_tokens = count_tokens(question)
+
+    # Estimate system prompt and context tokens
+    system_tokens = 1000  # Base system prompt
+    context_tokens = 0
+
+    if context:
+        # Add context tokens if there's conversation history
+        context_tokens = count_tokens(str(context)) if context else 0
+
+    # Estimate response tokens (conservative estimate)
+    estimated_response_tokens = 1500
+
+    total_estimated = question_tokens + system_tokens + context_tokens + estimated_response_tokens
+    return total_estimated
+
+
+async def track_actual_usage(user_id: str, channel_id: str, request_text: str, response_text: str):
+    """Track actual token usage after API call"""
+    request_tokens = count_tokens(request_text)
+    response_tokens = count_tokens(response_text)
+    total_tokens = request_tokens + response_tokens
+
+    await update_token_usage(user_id, channel_id, total_tokens)
+
+    print(
+        f"🔢 Token usage - User: {user_id}, Request: {request_tokens}, Response: {response_tokens}, Total: {total_tokens}")
+
+    return total_tokens
 
 
 def detect_sql_error_type(error_message: str) -> Optional[str]:

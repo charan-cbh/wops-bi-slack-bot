@@ -38,7 +38,12 @@ from app.llm_prompter import (
     cache_table_selection,
     get_table_descriptions_from_manifest,
     record_feedback,
-    update_conversation_context_with_sql
+    update_conversation_context_with_sql,
+    check_rate_limits,
+    get_user_token_usage,
+    track_actual_usage,
+    estimate_request_tokens,
+    clear_token_usage_cache, MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -199,7 +204,7 @@ async def process_reaction_removed(event):
 
 
 async def process_app_mention(event):
-    """Process app mention event with smart routing"""
+    """Process app mention event with rate limiting"""
     user_question = event.get("text", "")
     channel_id = event.get("channel")
     user_id = event.get("user")
@@ -210,9 +215,14 @@ async def process_app_mention(event):
         clean_question = re.sub(r"<@[^>]+>", "", user_question).strip()
         print(f"🔍 Received: {clean_question}")
 
-        # Check for special debug commands
+        # Check for special debug commands first (no rate limiting for debug)
         if clean_question.lower().startswith("debug"):
             await handle_debug_command(clean_question, channel_id, user_id)
+            return
+
+        # Check for usage command
+        if clean_question.lower() in ["usage", "my usage", "token usage", "limits"]:
+            await show_user_usage(user_id, channel_id)
             return
 
         # Send thinking indicator
@@ -234,6 +244,17 @@ async def process_app_mention(event):
             response, response_type = await handle_question(clean_question, user_id, channel_id, ASSISTANT_ID)
 
             print(f"📊 Response type: {response_type}")
+
+            # Handle rate limited response
+            if response_type == 'rate_limited':
+                if thinking_msg:
+                    try:
+                        slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                    except:
+                        pass
+
+                await send_slack_message(channel_id, response, include_feedback_hint=False)
+                return
 
             if response_type == 'sql':
                 # Delete thinking message before executing
@@ -260,55 +281,21 @@ async def process_app_mention(event):
                 error_msg += "**Suggestions:**\n"
                 error_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
                 error_msg += f"• Try `@bot debug find {clean_question}` to find relevant tables\n"
+                error_msg += f"• Try `@bot usage` to check your token usage\n"
                 error_msg += "• Rephrase your question with more specific details\n"
                 error_msg += "• Mention specific metrics (e.g., 'ticket count', 'agent performance', 'AHT')"
 
                 await send_slack_message(channel_id, error_msg, include_feedback_hint=False)
             else:
-                # Handle conversational response
+                # Send conversational response directly
                 if thinking_msg:
                     try:
                         slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
                     except:
                         pass
-
-                # CRITICAL FIX: Check if response contains SQL
-                sql_detected = False
-                sql_query = None
-
-                # Check for SQL in code block
-                if "```sql" in response:
-                    try:
-                        sql_query = response.split("```sql")[1].split("```")[0].strip()
-                        sql_detected = True
-                    except:
-                        pass
-
-                # Check for raw SQL
-                if not sql_query and response.strip().upper().startswith("SELECT"):
-                    lines = response.split('\n')
-                    sql_lines = []
-                    for line in lines:
-                        sql_lines.append(line)
-                        if line.strip().endswith(';'):
-                            break
-                    if sql_lines:
-                        sql_query = '\n'.join(sql_lines).strip()
-                        sql_detected = True
-
-                if sql_detected and sql_query:
-                    # Execute SQL instead of showing it
-                    print(f"📊 Detected SQL in conversational response - executing it")
-                    await execute_sql_and_respond(clean_question, sql_query, channel_id, user_id, ts)
-
-                    # Store SQL in context for potential "share results" request
-                    await update_conversation_context_with_sql(
-                        user_id, channel_id, clean_question, response, 'sql_shown', None, sql_query
-                    )
-                else:
-                    # Normal conversational response
-                    await send_slack_message(channel_id, response, include_feedback_hint=False)
-                    await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
+                await send_slack_message(channel_id, response, include_feedback_hint=False)
+                # Update context for conversational responses
+                await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
 
         else:
             # Fallback to embedding search
@@ -337,10 +324,40 @@ async def process_app_mention(event):
 
         await send_slack_message(
             channel_id,
-            f"❌ **Error processing your request:**\n```{str(e)}```\n\nPlease try rephrasing your question or try `@bot debug analyze YOUR QUESTION` to see what's happening.",
+            f"❌ **Error processing your request:**\n```{str(e)}```\n\nTry `@bot usage` to check your limits or `@bot debug analyze YOUR QUESTION`",
             include_feedback_hint=False
         )
 
+
+async def show_user_usage(user_id: str, channel_id: str):
+    """Show user's current token usage"""
+    try:
+        daily_usage = await get_user_token_usage(user_id, "daily")
+        hourly_usage = await get_user_token_usage(user_id, "hourly")
+
+        # Get rate limits
+        rate_limit_info = await check_rate_limits(user_id, channel_id, 0)
+
+        usage_message = f"""📊 **Your Token Usage**
+
+**Today:** {daily_usage:,} / {rate_limit_info['limits']['daily']:,} tokens ({daily_usage / rate_limit_info['limits']['daily'] * 100:.1f}%)
+**This Hour:** {hourly_usage:,} / {rate_limit_info['limits']['hourly']:,} tokens ({hourly_usage / rate_limit_info['limits']['hourly'] * 100:.1f}%)
+**This Thread:** {rate_limit_info['thread_usage']:,} / {rate_limit_info['limits']['thread']:,} tokens ({rate_limit_info['thread_usage'] / rate_limit_info['limits']['thread'] * 100:.1f}%)
+
+**Status:** {"✅ All good!" if rate_limit_info['allowed'] else "⚠️ Approaching limits"}
+
+*Note: Tokens reset hourly/daily. SQL queries typically use 1,000-3,000 tokens.*
+
+**Cost Today:** ~${daily_usage * 0.0002:.4f} (estimated)"""
+
+        await send_slack_message(channel_id, usage_message, include_feedback_hint=False)
+
+    except Exception as e:
+        await send_slack_message(
+            channel_id,
+            f"❌ Error retrieving usage stats: {str(e)}",
+            include_feedback_hint=False
+        )
 
 async def handle_debug_command(clean_question: str, channel_id: str, user_id: str):
     """Handle debug commands"""
@@ -353,6 +370,11 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
     if not debug_query or debug_query.lower() == "help":
         # Show available debug commands
         debug_result = """🔧 **Available Debug Commands:**
+        
+**Usage & Limits:**
+- `usage` or `my usage` - Show your token usage
+- `debug limits` - Show current rate limits
+- `debug clear tokens` - Clear token usage cache
 
 **Cache & Stats:**
 • `debug cache` or `debug stats` - Show cache statistics
@@ -385,6 +407,30 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
         stats = await get_cache_stats()
         learning = await get_learning_insights()
         debug_result = f"📊 **Cache Statistics:**\n```{json.dumps(stats, indent=2)}```\n\n🧠 **Learning Insights:**\n```{learning}```"
+
+    elif debug_query.lower() == "limits":
+        # Show current rate limits
+        debug_result = f"""⚙️ **Current Rate Limits:**
+
+    **Per User Limits:**
+    - Daily: {MAX_TOKENS_PER_USER_PER_DAY:,} tokens (${MAX_TOKENS_PER_USER_PER_DAY * 0.0002:.2f})
+    - Hourly: {MAX_TOKENS_PER_USER_PER_HOUR:,} tokens (${MAX_TOKENS_PER_USER_PER_HOUR * 0.0002:.2f})
+    - Per Thread: {MAX_TOKENS_PER_THREAD:,} tokens (${MAX_TOKENS_PER_THREAD * 0.0002:.2f})
+
+    **Typical Usage:**
+    - Simple question: ~500-1,500 tokens
+    - SQL generation: ~1,000-3,000 tokens
+    - Complex analysis: ~2,000-5,000 tokens
+
+    **Reset Schedule:**
+    - Hourly limits reset every hour
+    - Daily limits reset at midnight
+    - Thread limits reset when thread expires (1 hour)"""
+
+    elif debug_query.lower() == "clear tokens":
+        # Clear token usage cache
+        await clear_token_usage_cache()
+        debug_result = "🧹 **Token usage cache cleared!**"
 
     elif debug_query.lower() in ["learning", "patterns"]:
         # Show learning patterns
