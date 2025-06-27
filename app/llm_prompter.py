@@ -1579,15 +1579,15 @@ def analyze_question_intent(question_lower: str) -> dict:
 
 
 def build_sql_instructions(intent: dict, table: str, schema: dict, original_question: str) -> dict:
-    """Build specific SQL instructions based on question intent and actual data"""
+    """Build specific SQL instructions with STRICT schema validation"""
 
     columns = schema.get('columns', [])
     column_descriptions = schema.get('column_descriptions', {})
     audit_columns = schema.get('audit_columns', [])
 
-    # Create column info string with descriptions
+    # Create comprehensive column info string with descriptions
     column_info_parts = []
-    for col in columns[:50]:  # Limit to first 50 columns
+    for col in columns:  # Show ALL columns, not just first 50
         desc = column_descriptions.get(col.lower(), {}).get('comment', '')
         col_type = column_descriptions.get(col.lower(), {}).get('type', '')
         if desc:
@@ -1597,141 +1597,110 @@ def build_sql_instructions(intent: dict, table: str, schema: dict, original_ques
 
     column_info = "\n".join(column_info_parts)
 
-    # Base instructions - emphasizing accuracy
+    # Base instructions - EXTREMELY strict about schema compliance
     base_instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL.
 
-    TABLE: {table}
-    AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
+🚨 CRITICAL SCHEMA COMPLIANCE RULES:
+1. YOU MUST ONLY USE COLUMNS LISTED BELOW - NO EXCEPTIONS
+2. If you need a column that doesn't exist, say "Column [NAME] not available in this table"
+3. Use EXACT column names as shown (case-sensitive)
+4. Do NOT assume column names - verify each one exists below
+5. Do NOT use aliases or shortened names not in the schema
 
-    AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
-    {column_info}
+TABLE: {table}
+TOTAL COLUMNS AVAILABLE: {len(columns)}
+AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
 
-    CRITICAL REQUIREMENTS:
-    1. Generate SQL that COMPLETELY and ACCURATELY answers the question and is executable - no syntax or compilation errors in snowflake
-    2. Use ONLY columns that exist in the schema above
-    3. Verify each column reference against the schema
-    4. Use appropriate aggregations and calculations
-    5. Apply correct filters and date ranges
-    6. Handle NULLs appropriately
-    7. Use the full table name: {table}
+📋 COMPLETE COLUMN INVENTORY (USE ONLY THESE):
+{column_info}
 
-    BUSINESS LOGIC FILTERS (ALWAYS APPLY FOR PERFORMANCE QUERIES):
-    - Filter out NULL/empty agent names: WHERE ASSIGNEE_NAME IS NOT NULL AND ASSIGNEE_NAME != ''
-    - For performance rankings, exclude unassigned tickets and system accounts
-    - For "best" or "top" queries, ensure results represent actual human agents
-    - When showing performance metrics, prioritize agents with complete data
+🔍 BEFORE WRITING SQL:
+- Check that EVERY column you want to use is listed above
+- If a required column is missing, explain what's missing
+- Only proceed if ALL needed columns exist
 
-    ACCURACY RULES:
-    - If calculating averages, ensure you're averaging the right values
-    - If counting, ensure you're counting distinct values when appropriate  
-    - If filtering by time, use the most appropriate date/timestamp column
-    - If grouping, ensure all non-aggregated columns are in GROUP BY
-    - Always consider data quality (NULL handling, data types)
-    - For performance queries, order by data completeness first, then performance metrics
+📊 BUSINESS REQUIREMENTS:
+1. Generate SQL that COMPLETELY answers the question
+2. Use ONLY columns from the inventory above
+3. Apply appropriate aggregations and calculations
+4. Apply correct filters and date ranges
+5. Handle NULLs appropriately
+6. Use the full table name: {table}
 
-    RESULT QUALITY ASSURANCE:
-    - Ensure first result represents meaningful business data (not NULL/system accounts)
-    - Use appropriate LIMIT to show relevant results
-    - Order results to prioritize complete, meaningful data
+⚠️ ERROR PREVENTION:
+- Do NOT use: HANDLE_TIME, FORECAST_DEMAND, FC_DEV_PERCENT, ADHERENCE unless they appear in the column list above
+- Do NOT assume column names based on business logic
+- Do NOT create calculated fields with non-existent source columns
 
-    Return ONLY the SQL query - no explanations."""
+Return ONLY the SQL query if all required columns exist, or a clear explanation of what's missing."""
 
-    # Intent-specific guidance (without hardcoded examples)
+    # Intent-specific guidance (keeping existing logic but emphasizing schema compliance)
     if intent['type'] == 'list_or_sample':
         specific_instructions = f"""
-Generate SQL to show what data is available in the table.
-- Select ALL relevant columns that answer the "what are" question
+Generate SQL to show available data:
+- Select columns that exist in the schema above
 - Show actual data rows, not aggregations
-- Use appropriate ORDER BY (prefer audit columns: {', '.join(audit_columns[-3:])})
+- Use ORDER BY with available columns (prefer: {', '.join(audit_columns[-3:]) if audit_columns else 'any available'})
 - LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'count':
         specific_instructions = f"""
-Generate SQL to count records accurately.
-- Use COUNT(*) for total records or COUNT(DISTINCT column) for unique values
-- Apply all necessary filters from the question
-- Consider if you need total count or distinct count
-- Return a single number with descriptive alias"""
+Generate SQL to count records:
+- Use COUNT(*) or COUNT(DISTINCT column) with existing columns only
+- Apply filters using only available columns
+- Return single number with descriptive alias"""
 
     elif intent['type'] == 'summary_stats':
         specific_instructions = f"""
-Generate SQL for accurate summary statistics.
-- Calculate the exact aggregates requested (AVG, SUM, MIN, MAX, etc.)
-- Handle NULLs appropriately in calculations
-- Use meaningful aliases that describe what's being calculated
-- Round numbers to appropriate precision
-- Include COUNT(*) to show sample size if relevant"""
+Generate SQL for summary statistics:
+- Use aggregates (AVG, SUM, MIN, MAX) only on columns that exist above
+- Handle NULLs appropriately
+- Use meaningful aliases"""
 
     elif intent['type'] == 'ranking':
         specific_instructions = f"""
-Generate SQL to rank/order data correctly.
-- Identify the correct grouping dimension
-- Calculate the exact metric to rank by
-- Use appropriate aggregation for the metric
-- Order {intent.get('order_by', 'DESC')}
-- Include all relevant columns in output
+Generate SQL for ranking:
+- GROUP BY and ORDER BY using only available columns
+- Calculate metrics using existing columns only
 - LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'breakdown':
         specific_instructions = f"""
-Generate SQL to break down data accurately by categories.
-- GROUP BY the exact dimension(s) requested
-- Calculate all requested aggregates
-- Include count per group
-- Order by the most relevant column
+Generate SQL for breakdowns:
+- GROUP BY using available columns only
+- Calculate aggregates using existing columns
 - Ensure all non-aggregated columns are in GROUP BY"""
 
     elif intent['type'] == 'trend':
         specific_instructions = f"""
-Generate SQL for time-based trend analysis.
-- Use appropriate date truncation (DATE_TRUNC)
-- Group by the time period requested
-- Calculate metrics for each period
-- Order by date/time ascending
-- Include all necessary date filters"""
+Generate SQL for time analysis:
+- Use DATE_TRUNC with available date columns only
+- Group by time periods using existing columns
+- Order by date/time ascending"""
 
     else:
         specific_instructions = f"""
-Generate SQL that completely answers the question.
-- Select all necessary columns
-- Apply all required filters
-- Use appropriate joins if needed
+Generate SQL that answers the question:
+- Use only columns listed in the schema above
+- Apply filters using available columns
 - LIMIT {intent.get('limit', 100)} unless aggregating"""
 
-    # Add time filter guidance if needed
+    # Time filter guidance (only if date columns exist)
+    time_instructions = ""
     if intent.get('time_filter'):
-        # Find the best date/time column
         date_columns = []
         for col in columns:
             col_lower = col.lower()
             col_type = column_descriptions.get(col_lower, {}).get('type', '').lower()
-            # Prefer audit columns for time filtering
             if col in audit_columns and ('date' in col_type or 'timestamp' in col_type):
-                date_columns.insert(0, col)  # Add audit columns at the beginning
+                date_columns.insert(0, col)
             elif any(pattern in col_lower for pattern in ['date', 'time', 'created', 'updated', '_at']):
                 if 'date' in col_type or 'timestamp' in col_type:
                     date_columns.append(col)
 
         if date_columns:
-            date_col = date_columns[0]  # Use first (best) date column found
-            time_instructions = f"\n\nTIME FILTER: Use column '{date_col}' for '{intent['time_filter']}' filter"
-
-            if intent['time_filter'] == 'today':
-                time_instructions += f"\nUse: WHERE DATE({date_col}) = CURRENT_DATE()"
-            elif intent['time_filter'] == 'yesterday':
-                time_instructions += f"\nUse: WHERE DATE({date_col}) = DATEADD(day, -1, CURRENT_DATE())"
-            elif intent['time_filter'] == 'last_week':
-                time_instructions += f"\nUse: WHERE {date_col} >= DATEADD(week, -1, CURRENT_DATE())"
-            elif intent['time_filter'] == 'this_week':
-                time_instructions += f"\nUse: WHERE WEEK({date_col}) = WEEK(CURRENT_DATE()) AND YEAR({date_col}) = YEAR(CURRENT_DATE())"
-            elif intent['time_filter'] == 'last_month':
-                time_instructions += f"\nUse: WHERE {date_col} >= DATEADD(month, -1, CURRENT_DATE())"
-            elif intent['time_filter'] == 'this_month':
-                time_instructions += f"\nUse: WHERE MONTH({date_col}) = MONTH(CURRENT_DATE()) AND YEAR({date_col}) = YEAR(CURRENT_DATE())"
-        else:
-            time_instructions = "\n\nWARNING: No suitable date column found for time filtering"
-    else:
-        time_instructions = ""
+            date_col = date_columns[0]
+            time_instructions = f"\n\n🕐 TIME FILTER: Use column '{date_col}' for '{intent['time_filter']}' filter"
 
     full_instructions = base_instructions + "\n\n" + specific_instructions + time_instructions
 
@@ -1739,9 +1708,11 @@ Generate SQL that completely answers the question.
     message = f"""Question: {original_question}
 
 Table: {table}
-Question Type: {intent['type']}
+Available Columns: {len(columns)}
 
-Generate ACCURATE SQL that completely answers this question using the schema provided."""
+🔍 MANDATORY SCHEMA CHECK: Verify ALL required columns exist in the complete column inventory above.
+
+Generate SQL using ONLY the columns listed in the schema above."""
 
     return {
         'instructions': full_instructions,
@@ -2575,7 +2546,16 @@ Use the helper SQL structure but improve upon it - add missing logic, fix any is
 
 
 def extract_sql_from_response(response: str) -> str:
-    """Extract SQL from assistant response with better error handling"""
+    """Extract SQL from assistant response with enhanced error detection"""
+
+    # Check for explicit column availability errors
+    column_error_indicators = [
+        'column', 'not available', 'not exist', 'missing', 'doesn\'t exist',
+        'not found in', 'not in the schema', 'required column'
+    ]
+
+    if any(indicator in response.lower() for indicator in column_error_indicators):
+        return f"-- Schema Error: {response.strip()}"
 
     # Check if response contains SQL indicators
     sql_indicators = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY']
@@ -2590,15 +2570,6 @@ def extract_sql_from_response(response: str) -> str:
 
     if not has_sql_indicators and any(indicator in response.lower() for indicator in conversational_indicators):
         return "-- This question should be handled conversationally, not with SQL"
-
-    # Check for explicit statements that this isn't a SQL query
-    no_sql_indicators = [
-        'this is not a sql query', 'no sql needed', 'conversational response',
-        'definition question', 'metadata question'
-    ]
-
-    if any(indicator in response.lower() for indicator in no_sql_indicators):
-        return "-- This appears to be a conversational response, not SQL"
 
     if "```sql" in response:
         try:
@@ -2634,13 +2605,9 @@ def extract_sql_from_response(response: str) -> str:
     if len(response.strip()) > 50 and not has_sql_indicators:
         return "-- This appears to be a conversational response, not SQL"
 
-    # Last resort - look for any SQL-like content
-    if 'SELECT' in response.upper():
-        # Extract everything from first SELECT to semicolon
-        start = response.upper().find('SELECT')
-        end = response.find(';', start)
-        if end != -1:
-            return response[start:end + 1].strip()
+    # Return the full response if it looks like an error explanation
+    if len(response.strip()) > 20:
+        return f"-- Response: {response.strip()}"
 
     return "-- Error: Could not extract SQL from response"
 
