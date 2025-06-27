@@ -43,7 +43,8 @@ from app.llm_prompter import (
     get_user_token_usage,
     track_actual_usage,
     estimate_request_tokens,
-    clear_token_usage_cache, MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD
+    clear_token_usage_cache, MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD,
+    handle_conversational_question
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -257,7 +258,35 @@ async def process_app_mention(event):
                 return
 
             if response_type == 'sql':
-                # Delete thinking message before executing
+                # Check if the "SQL" is actually a conversational response
+                if response.startswith("-- This question should be handled conversationally") or \
+                        response.startswith("-- This appears to be a conversational response"):
+
+                    print(f"🔄 SQL extraction detected conversational response, switching to conversational handler")
+
+                    # Delete thinking message
+                    if thinking_msg:
+                        try:
+                            slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                        except:
+                            pass
+
+                    # Try to get a conversational response instead
+                    try:
+                        conv_response = await handle_conversational_question(clean_question, user_id, channel_id)
+                        await send_slack_message(channel_id, conv_response, include_feedback_hint=False)
+                        await update_conversation_context(user_id, channel_id, clean_question, conv_response,
+                                                          'conversational')
+                    except Exception as e:
+                        print(f"❌ Error getting conversational response: {e}")
+                        await send_slack_message(
+                            channel_id,
+                            f"❌ I couldn't provide a clear response to your question. Please try rephrasing it or contact the analytics team.",
+                            include_feedback_hint=False
+                        )
+                    return
+
+                # Delete thinking message before executing SQL
                 if thinking_msg:
                     try:
                         slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
