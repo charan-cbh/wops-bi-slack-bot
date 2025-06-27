@@ -744,8 +744,119 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         await send_slack_message(channel_id, f"❌ {sql}", include_feedback_hint=False)
         return
 
-    # Continue with normal SQL execution...
-    # (rest of the existing function remains the same)
+    # Import the enhanced quality analysis functions
+    from app.llm_prompter import execute_with_quality_analysis
+
+    # Execute with intelligent error handling and auto-retry
+    df, result_count, analysis = await execute_with_quality_analysis(
+        clean_question, sql, selected_table, user_id, channel_id
+    )
+
+    if isinstance(df, str):
+        # Final error after all retry attempts
+        print(f"❌ Final query execution error: {df}")
+
+        # Check if it was a max attempts error
+        if analysis and analysis.get("error_type") == "max_attempts_exceeded":
+            error_msg = f"❌ **Query execution failed after {analysis.get('attempts', 3)} attempts**\n\n"
+            error_msg += f"I tried to automatically fix the SQL but couldn't resolve the issue.\n\n"
+            error_msg += "**Suggestions:**\n"
+            error_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
+            error_msg += f"• Try rephrasing your question with different terms\n"
+            error_msg += f"• Check if the data exists for your specified criteria\n\n"
+            error_msg += f"**Last Error:** {df}"
+            result_message = error_msg
+        else:
+            # Standard error handling
+            result_message = f"❌ Query error: {df}"
+
+        await update_sql_cache_with_results(clean_question, sql, 0, selected_table)
+    else:
+        # Success - process results
+        print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
+
+        # Check what happened during execution
+        sql_was_fixed = analysis.get("sql_was_fixed", False) if analysis else False
+        auto_retry_success = analysis.get("auto_retry_success", False) if analysis else False
+        quality_score = analysis.get("quality_score", 100) if analysis else 100
+
+        if sql_was_fixed:
+            print(f"🔧 SQL was auto-fixed during execution (attempts: {analysis.get('fix_attempts', 1)})")
+
+        if auto_retry_success:
+            print(f"🎉 Quality auto-retry was successful! Quality improved to {quality_score}/100")
+
+        # Extract table from SQL if we don't have it
+        if not selected_table and 'FROM' in sql.upper():
+            sql_upper = sql.upper()
+            from_idx = sql_upper.find('FROM')
+            if from_idx != -1:
+                after_from = sql[from_idx + 4:].strip()
+                selected_table = re.split(r'[\s\n]+', after_from)[0]
+
+        # Update cache with actual results (use the final working SQL)
+        final_sql = analysis.get("final_sql") or analysis.get("fixed_sql") or sql
+        await update_sql_cache_with_results(clean_question, final_sql, result_count, selected_table)
+
+        # Summarize results (this is what the user sees)
+        if USE_ASSISTANT_API and ASSISTANT_ID:
+            result_message = await summarize_with_assistant(
+                clean_question,
+                format_result_for_slack(df),
+                user_id,
+                channel_id,
+                ASSISTANT_ID
+            )
+        else:
+            result_message = summarize_results_with_llm(
+                clean_question,
+                format_result_for_slack(df)
+            )
+
+        # Add intelligent success messages based on what happened
+        success_messages = []
+
+        if sql_was_fixed:
+            success_messages.append("🔧 Query automatically fixed and executed")
+
+        if auto_retry_success:
+            success_messages.append("📊 Results automatically optimized for quality")
+
+        if success_messages:
+            result_message += f"\n\n_✨ {' • '.join(success_messages)}_"
+
+        # Update conversation context
+        await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
+                                          selected_table)
+
+    # Send the result message to user
+    is_success = result_count > 0
+    response = await send_slack_message(channel_id, result_message, include_feedback_hint=is_success)
+
+    # Store message info for feedback tracking if successful
+    if response and is_success and selected_table:
+        msg_ts = response.get("ts")
+        if msg_ts:
+            channel_ts = f"{channel_id}_{msg_ts}"
+            message_to_question_map[channel_ts] = {
+                'question': clean_question,
+                'sql': analysis.get("final_sql") or analysis.get("fixed_sql") or sql,
+                'table': selected_table,
+                'timestamp': time.time(),
+                'quality_score': quality_score,
+                'sql_was_fixed': sql_was_fixed,
+                'auto_retry_success': auto_retry_success
+            }
+            print(f"📝 Stored message {channel_ts} for feedback tracking")
+
+            # Clean up old entries (older than 24 hours)
+            current_time = time.time()
+            to_remove = []
+            for key, data in message_to_question_map.items():
+                if current_time - data.get('timestamp', 0) > 86400:  # 24 hours
+                    to_remove.append(key)
+            for key in to_remove:
+                del message_to_question_map[key]
 
 
 async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: str):
