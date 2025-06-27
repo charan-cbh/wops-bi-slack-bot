@@ -1579,15 +1579,15 @@ def analyze_question_intent(question_lower: str) -> dict:
 
 
 def build_sql_instructions(intent: dict, table: str, schema: dict, original_question: str) -> dict:
-    """Build specific SQL instructions with STRICT schema validation"""
+    """Build specific SQL instructions based on intent and actual data with schema validation"""
 
     columns = schema.get('columns', [])
     column_descriptions = schema.get('column_descriptions', {})
     audit_columns = schema.get('audit_columns', [])
 
-    # Create comprehensive column info string with descriptions
+    # Create column info string with descriptions (keep existing approach)
     column_info_parts = []
-    for col in columns:  # Show ALL columns, not just first 50
+    for col in columns:
         desc = column_descriptions.get(col.lower(), {}).get('comment', '')
         col_type = column_descriptions.get(col.lower(), {}).get('type', '')
         if desc:
@@ -1597,122 +1597,141 @@ def build_sql_instructions(intent: dict, table: str, schema: dict, original_ques
 
     column_info = "\n".join(column_info_parts)
 
-    # Base instructions - EXTREMELY strict about schema compliance
+    # Base instructions - keep existing approach but ADD schema validation
     base_instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL.
 
-🚨 CRITICAL SCHEMA COMPLIANCE RULES:
-1. YOU MUST ONLY USE COLUMNS LISTED BELOW - NO EXCEPTIONS
-2. If you need a column that doesn't exist, say "Column [NAME] not available in this table"
-3. Use EXACT column names as shown (case-sensitive)
-4. Do NOT assume column names - verify each one exists below
-5. Do NOT use aliases or shortened names not in the schema
-
 TABLE: {table}
-TOTAL COLUMNS AVAILABLE: {len(columns)}
 AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
 
-📋 COMPLETE COLUMN INVENTORY (USE ONLY THESE):
+AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
 {column_info}
 
-🔍 BEFORE WRITING SQL:
-- Check that EVERY column you want to use is listed above
-- If a required column is missing, explain what's missing
-- Only proceed if ALL needed columns exist
+CRITICAL REQUIREMENTS:
+1. Generate SQL that COMPLETELY and ACCURATELY answers the question
+2. Use ONLY columns that exist in the schema above
+3. Verify each column reference against the schema
+4. Use appropriate aggregations and calculations
+5. Apply correct filters and date ranges
+6. Handle NULLs appropriately
+7. Use the full table name: {table}
 
-📊 BUSINESS REQUIREMENTS:
-1. Generate SQL that COMPLETELY answers the question
-2. Use ONLY columns from the inventory above
-3. Apply appropriate aggregations and calculations
-4. Apply correct filters and date ranges
-5. Handle NULLs appropriately
-6. Use the full table name: {table}
+⚠️ SCHEMA VALIDATION: Before using any column, verify it exists in the list above. If a column you need doesn't exist, state clearly which columns are missing.
 
-⚠️ ERROR PREVENTION:
-- Do NOT use: HANDLE_TIME, FORECAST_DEMAND, FC_DEV_PERCENT, ADHERENCE unless they appear in the column list above
-- Do NOT assume column names based on business logic
-- Do NOT create calculated fields with non-existent source columns
+ACCURACY RULES:
+- If calculating averages, ensure you're averaging the right values
+- If counting, ensure you're counting distinct values when appropriate  
+- If filtering by time, use the most appropriate date/timestamp column
+- If grouping, ensure all non-aggregated columns are in GROUP BY
+- Always consider data quality (NULL handling, data types)
 
-Return ONLY the SQL query if all required columns exist, or a clear explanation of what's missing."""
+Return ONLY the SQL query - no explanations."""
 
-    # Intent-specific guidance (keeping existing logic but emphasizing schema compliance)
+    # Keep existing intent-specific guidance (unchanged)
     if intent['type'] == 'list_or_sample':
         specific_instructions = f"""
-Generate SQL to show available data:
-- Select columns that exist in the schema above
+Generate SQL to show what data is available in the table.
+- Select ALL relevant columns that answer the "what are" question
 - Show actual data rows, not aggregations
-- Use ORDER BY with available columns (prefer: {', '.join(audit_columns[-3:]) if audit_columns else 'any available'})
+- Use appropriate ORDER BY (prefer audit columns: {', '.join(audit_columns[-3:])})
 - LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'count':
         specific_instructions = f"""
-Generate SQL to count records:
-- Use COUNT(*) or COUNT(DISTINCT column) with existing columns only
-- Apply filters using only available columns
-- Return single number with descriptive alias"""
+Generate SQL to count records accurately.
+- Use COUNT(*) for total records or COUNT(DISTINCT column) for unique values
+- Apply all necessary filters from the question
+- Consider if you need total count or distinct count
+- Return a single number with descriptive alias"""
 
     elif intent['type'] == 'summary_stats':
         specific_instructions = f"""
-Generate SQL for summary statistics:
-- Use aggregates (AVG, SUM, MIN, MAX) only on columns that exist above
-- Handle NULLs appropriately
-- Use meaningful aliases"""
+Generate SQL for accurate summary statistics.
+- Calculate the exact aggregates requested (AVG, SUM, MIN, MAX, etc.)
+- Handle NULLs appropriately in calculations
+- Use meaningful aliases that describe what's being calculated
+- Round numbers to appropriate precision
+- Include COUNT(*) to show sample size if relevant"""
 
     elif intent['type'] == 'ranking':
         specific_instructions = f"""
-Generate SQL for ranking:
-- GROUP BY and ORDER BY using only available columns
-- Calculate metrics using existing columns only
+Generate SQL to rank/order data correctly.
+- Identify the correct grouping dimension
+- Calculate the exact metric to rank by
+- Use appropriate aggregation for the metric
+- Order {intent.get('order_by', 'DESC')}
+- Include all relevant columns in output
 - LIMIT {intent.get('limit', 10)}"""
 
     elif intent['type'] == 'breakdown':
         specific_instructions = f"""
-Generate SQL for breakdowns:
-- GROUP BY using available columns only
-- Calculate aggregates using existing columns
+Generate SQL to break down data accurately by categories.
+- GROUP BY the exact dimension(s) requested
+- Calculate all requested aggregates
+- Include count per group
+- Order by the most relevant column
 - Ensure all non-aggregated columns are in GROUP BY"""
 
     elif intent['type'] == 'trend':
         specific_instructions = f"""
-Generate SQL for time analysis:
-- Use DATE_TRUNC with available date columns only
-- Group by time periods using existing columns
-- Order by date/time ascending"""
+Generate SQL for time-based trend analysis.
+- Use appropriate date truncation (DATE_TRUNC)
+- Group by the time period requested
+- Calculate metrics for each period
+- Order by date/time ascending
+- Include all necessary date filters"""
 
     else:
         specific_instructions = f"""
-Generate SQL that answers the question:
-- Use only columns listed in the schema above
-- Apply filters using available columns
+Generate SQL that completely answers the question.
+- Select all necessary columns
+- Apply all required filters
+- Use appropriate joins if needed
 - LIMIT {intent.get('limit', 100)} unless aggregating"""
 
-    # Time filter guidance (only if date columns exist)
-    time_instructions = ""
+    # Keep existing time filter guidance (unchanged)
     if intent.get('time_filter'):
+        # Find the best date/time column
         date_columns = []
         for col in columns:
             col_lower = col.lower()
             col_type = column_descriptions.get(col_lower, {}).get('type', '').lower()
+            # Prefer audit columns for time filtering
             if col in audit_columns and ('date' in col_type or 'timestamp' in col_type):
-                date_columns.insert(0, col)
+                date_columns.insert(0, col)  # Add audit columns at the beginning
             elif any(pattern in col_lower for pattern in ['date', 'time', 'created', 'updated', '_at']):
                 if 'date' in col_type or 'timestamp' in col_type:
                     date_columns.append(col)
 
         if date_columns:
-            date_col = date_columns[0]
-            time_instructions = f"\n\n🕐 TIME FILTER: Use column '{date_col}' for '{intent['time_filter']}' filter"
+            date_col = date_columns[0]  # Use first (best) date column found
+            time_instructions = f"\n\nTIME FILTER: Use column '{date_col}' for '{intent['time_filter']}' filter"
+
+            if intent['time_filter'] == 'today':
+                time_instructions += f"\nUse: WHERE DATE({date_col}) = CURRENT_DATE()"
+            elif intent['time_filter'] == 'yesterday':
+                time_instructions += f"\nUse: WHERE DATE({date_col}) = DATEADD(day, -1, CURRENT_DATE())"
+            elif intent['time_filter'] == 'last_week':
+                time_instructions += f"\nUse: WHERE {date_col} >= DATEADD(week, -1, CURRENT_DATE())"
+            elif intent['time_filter'] == 'this_week':
+                time_instructions += f"\nUse: WHERE WEEK({date_col}) = WEEK(CURRENT_DATE()) AND YEAR({date_col}) = YEAR(CURRENT_DATE())"
+            elif intent['time_filter'] == 'last_month':
+                time_instructions += f"\nUse: WHERE {date_col} >= DATEADD(month, -1, CURRENT_DATE())"
+            elif intent['time_filter'] == 'this_month':
+                time_instructions += f"\nUse: WHERE MONTH({date_col}) = MONTH(CURRENT_DATE()) AND YEAR({date_col}) = YEAR(CURRENT_DATE())"
+        else:
+            time_instructions = "\n\nWARNING: No suitable date column found for time filtering"
+    else:
+        time_instructions = ""
 
     full_instructions = base_instructions + "\n\n" + specific_instructions + time_instructions
 
-    # Build the message
+    # Build the message (keep existing approach)
     message = f"""Question: {original_question}
 
 Table: {table}
-Available Columns: {len(columns)}
+Question Type: {intent['type']}
 
-🔍 MANDATORY SCHEMA CHECK: Verify ALL required columns exist in the complete column inventory above.
-
-Generate SQL using ONLY the columns listed in the schema above."""
+Generate ACCURATE SQL that completely answers this question using the schema provided."""
 
     return {
         'instructions': full_instructions,
@@ -2266,6 +2285,33 @@ async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -
 
     return result
 
+def validate_sql_columns(sql: str, available_columns: list) -> tuple[bool, list]:
+    """Simple validation to check if SQL uses non-existent columns"""
+
+    if not sql or sql.startswith("--"):
+        return True, []
+
+    # Extract potential column references (simple approach)
+    import re
+
+    # Find words that might be column names (after SELECT, WHERE, GROUP BY, ORDER BY)
+    sql_upper = sql.upper()
+
+    # Common column patterns that don't exist in many tables
+    problematic_columns = [
+        'HANDLE_TIME', 'FORECAST_DEMAND', 'FC_DEV_PERCENT',
+        'ADHERENCE', 'PRODUCTIVE_HOUR', 'FRT'
+    ]
+
+    missing_columns = []
+
+    for col in problematic_columns:
+        if col in sql_upper:
+            # Check if this column exists in available columns
+            if not any(col.lower() in avail_col.lower() for avail_col in available_columns):
+                missing_columns.append(col)
+
+    return len(missing_columns) == 0, missing_columns
 
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
     """
@@ -2382,6 +2428,13 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
 
     # Extract SQL from response
     sql = extract_sql_from_response(response)
+
+    # Validate SQL columns against schema
+    is_valid, missing_columns = validate_sql_columns(sql, schema.get('columns', []))
+
+    if not is_valid and missing_columns:
+        print(f"❌ SQL validation failed - missing columns: {missing_columns}")
+        print(f"❌ **Schema Validation Failed**\n\nThe generated SQL uses columns that don't exist in table `{selected_table}`:\n• {', '.join(missing_columns)}\n\n**Available columns:** {', '.join(schema.get('columns', [])[:20])}{'...' if len(schema.get('columns', [])) > 20 else ''}\n\n**Suggestion:** This query might need a different table with the required metrics. :: selected_table :: {selected_table}")
 
     # Validate and fix common SQL issues
     sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
