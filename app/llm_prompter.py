@@ -298,17 +298,10 @@ def extract_key_phrases(question: str) -> List[str]:
 
 
 def classify_question_type(question: str) -> str:
-    """Simple classification - is this a data query or conversation?"""
+    """Enhanced classification for data queries vs conversational questions"""
     question_lower = question.lower()
 
-    # FIRST: Check if this is asking for SQL execution
-    if any(phrase in question_lower for phrase in [
-        'share the results', 'run this', 'execute this', 'run the query',
-        'show the results', 'give me the results'
-    ]):
-        return 'sql_execution_request'
-
-    # SECOND: Check for follow-up indicators about previous results
+    # FIRST: Check for follow-up indicators about previous results
     followup_about_results = [
         'what is the source', 'where does this data', 'where is this from',
         'how did you get', 'what table', 'which database',
@@ -318,6 +311,46 @@ def classify_question_type(question: str) -> str:
     ]
 
     if any(indicator in question_lower for indicator in followup_about_results):
+        return 'conversational'
+
+    # NEW: Check for metadata/definition questions (EXPANDED)
+    metadata_questions = [
+        'what metric is used', 'which metric', 'what is the metric',
+        'is the metric', 'metric being used', 'what does aht mean',
+        'definition of', 'what is aht', 'what does', 'meaning of',
+        'switched to', 'changed to', 'still using', 'still the metric',
+        'clarify', 'clarification', 'qq for clarity', 'quick question',
+        'what column', 'which column', 'column used', 'field used',
+        'handle time vs', 'resolution time vs', 'difference between',
+        'currently being used', 'currently using', 'what represents',
+        'how is calculated', 'calculation method', 'methodology',
+        'what is fcr', 'what does fcr mean', 'fcr definition',
+        'what kpis', 'available kpis', 'kpi definition',
+        'business logic', 'business rules', 'how do you calculate',
+        'what makes', 'how is determined', 'logic behind', 'why do we'
+    ]
+
+    if any(indicator in question_lower for indicator in metadata_questions):
+        return 'conversational'
+
+    # NEW: Check for data discovery questions
+    discovery_questions = [
+        'what data', 'what tables', 'what columns', 'available data',
+        'what information', 'what metrics', 'data sources',
+        'what can you tell me', 'what do you know', 'data available'
+    ]
+
+    if any(indicator in question_lower for indicator in discovery_questions):
+        return 'conversational'
+
+    # NEW: Check for capability questions
+    capability_questions = [
+        'what can you', 'help', 'capabilities', 'questions can',
+        'how do you work', 'how to use', 'what commands',
+        'what types of questions', 'how to ask'
+    ]
+
+    if any(indicator in question_lower for indicator in capability_questions):
         return 'conversational'
 
     # Check for data query indicators - EXPANDED LIST
@@ -333,23 +366,7 @@ def classify_question_type(question: str) -> str:
         'created', 'today', 'yesterday', 'this week', 'last week',
         'this month', 'last month', 'zendesk', 'chat', 'email',
         'what are the', 'give me', 'provide', 'fetch',
-        'calculate', 'sum', 'aggregate', 'breakdown',
-        # Add PST/timezone indicators
-        'pst', 'pdt', 'pacific time', 'timezone', 'time zone'
-    ]
-
-    # IMPORTANT: Data indicators take priority
-    if any(indicator in question_lower for indicator in data_indicators):
-        # Only treat as conversational if explicitly asking about the source/method
-        if 'source' in question_lower or ('where' in question_lower and 'data' in question_lower):
-            return 'conversational'
-        return 'sql_required'
-
-    # Check for meta/help indicators
-    meta_indicators = [
-        'what can you', 'help', 'capabilities', 'questions can',
-        'how do you work', 'what data', 'explain how',
-        'how to use', 'what commands'
+        'calculate', 'sum', 'aggregate', 'breakdown'
     ]
 
     # Check for general follow-up indicators
@@ -367,9 +384,14 @@ def classify_question_type(question: str) -> str:
             word in question_lower for word in ['ticket', 'tickets', 'agent', 'chat', 'email']):
         return 'sql_required'
 
-    if any(indicator in question_lower for indicator in meta_indicators):
-        return 'conversational'
-    elif any(indicator in question_lower for indicator in general_followup_indicators):
+    # Check if it's asking for specific data (but not about definitions/metadata)
+    if any(indicator in question_lower for indicator in data_indicators):
+        # Double check it's not asking about the data source or definitions
+        if any(meta in question_lower for meta in ['source', 'definition', 'meaning', 'what does', 'clarify', 'switched', 'changed']):
+            return 'conversational'
+        return 'sql_required'
+
+    if any(indicator in question_lower for indicator in general_followup_indicators):
         # But if it also contains data indicators, it might be a data query
         if any(indicator in question_lower for indicator in data_indicators):
             return 'sql_required'
@@ -378,6 +400,10 @@ def classify_question_type(question: str) -> str:
         # For ambiguous cases, check if it contains entities or time references
         entities = ['ticket', 'agent', 'customer', 'zendesk', 'chat', 'email', 'messaging']
         time_refs = ['today', 'yesterday', 'week', 'month', 'year', 'date']
+
+        # If asking about definitions/clarifications of entities, it's conversational
+        if any(meta in question_lower for meta in ['what is', 'definition', 'meaning', 'clarify', 'switched', 'changed', 'still using']):
+            return 'conversational'
 
         if any(entity in question_lower for entity in entities) or any(time in question_lower for time in time_refs):
             return 'sql_required'
@@ -1275,7 +1301,7 @@ async def send_message_and_run(thread_id: str, message: str, instructions: str =
 
 
 async def handle_conversational_question(user_question: str, user_id: str, channel_id: str) -> str:
-    """Handle conversational questions"""
+    """Handle conversational questions - both follow-ups and standalone informational questions"""
     thread_id = await get_or_create_thread(user_id, channel_id)
     if not thread_id:
         return "⚠️ Could not create conversation thread"
@@ -1283,11 +1309,47 @@ async def handle_conversational_question(user_question: str, user_id: str, chann
     # Get conversation context
     context = await get_conversation_context(user_id, channel_id)
 
-    # Build context-aware instructions
-    if context and context.get('last_response_type') == 'sql_results':
-        print(f"💬 Using SQL follow-up context")
-        print(f"   Previous question: {context.get('last_question', 'unknown')[:100]}")
+    # Categorize the type of conversational question
+    question_lower = user_question.lower()
 
+    # Is this a follow-up about previous results?
+    is_followup = context and context.get('last_response_type') == 'sql_results' and any(
+        indicator in question_lower for indicator in [
+            'this data', 'these results', 'that data', 'the source',
+            'why is it', 'what does this mean', 'explain this'
+        ]
+    )
+
+    # Is this a metadata/definition question?
+    is_metadata_question = any(indicator in question_lower for indicator in [
+        'what metric', 'which metric', 'definition of', 'what does', 'meaning of',
+        'what is aht', 'what is fcr', 'how is calculated', 'methodology',
+        'switched to', 'changed to', 'still using', 'currently using',
+        'handle time vs', 'resolution time vs', 'difference between'
+    ])
+
+    # Is this a data discovery question?
+    is_discovery_question = any(indicator in question_lower for indicator in [
+        'what data', 'what tables', 'what columns', 'available data',
+        'what information', 'what metrics', 'what kpis', 'data sources',
+        'what can you tell me', 'what do you know'
+    ])
+
+    # Is this a capability question?
+    is_capability_question = any(indicator in question_lower for indicator in [
+        'what can you', 'how do you work', 'what questions', 'capabilities',
+        'help me', 'what types', 'how to use', 'what commands'
+    ])
+
+    # Is this a business logic question?
+    is_business_logic = any(indicator in question_lower for indicator in [
+        'how do you calculate', 'what makes', 'how is determined',
+        'business rules', 'logic behind', 'why do we', 'calculation method'
+    ])
+
+    # Build appropriate instructions based on question type
+    if is_followup:
+        print(f"💬 Handling follow-up question about previous results")
         instructions = """You are a BI assistant responding to a follow-up question about previous query results.
 
 Use the conversation history to understand what data they're asking about.
@@ -1296,28 +1358,121 @@ Be helpful in explaining the data source, methodology, or clarifying the results
 IMPORTANT - Use Slack formatting:
 - Use *text* for bold (NOT **text**)
 - Use _text_ for italic
+- Use `text` for code/table names"""
+
+    elif is_metadata_question:
+        print(f"💬 Handling metadata/definition question")
+        instructions = """You are a BI expert with deep knowledge of business intelligence data and metrics.
+
+Answer this definition/metadata question using your knowledge of:
+- Table schemas and column definitions from the dbt manifest
+- Business metrics and KPI calculations (AHT, FCR, resolution times, etc.)
+- Data warehouse structure and relationships
+- Industry standard BI terminology
+
+For AHT (Average Handling Time) questions specifically:
+- Reference actual column names like HANDLE_TIME_IN_MINUTES from handle time tables
+- Explain the difference between handle time vs full resolution time
+- Be specific about which metric is currently used based on the data model
+
+Be specific and definitive in your explanations. Reference actual table/column names when relevant.
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic  
+- Use `text` for code/table names"""
+
+    elif is_discovery_question:
+        print(f"💬 Handling data discovery question")
+        instructions = """You are a BI expert helping users understand what data is available.
+
+Use your knowledge of the dbt manifest and table schemas to explain:
+- What tables and data sources are available (Zendesk tickets, Klaus QA, handle time, etc.)
+- What metrics and KPIs can be calculated (ticket volume, AHT, QA scores, FCR, etc.)
+- What dimensions and attributes exist (agents, teams, channels, ticket types, etc.)
+- How different data elements relate to each other
+
+Be comprehensive but organized in your response. Give practical examples.
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
 - Use `text` for code/table names
 - Use bullet points with •"""
-    else:
-        print(f"💬 Standard conversational response")
-        instructions = """You are a BI assistant. Be helpful and concise.
-Use your knowledge from the dbt manifest to answer questions about available data.
+
+    elif is_capability_question:
+        print(f"💬 Handling capability question")
+        instructions = """You are a BI assistant explaining your capabilities to help users get the most value.
+
+Explain what you can help with:
+- Answering questions about data definitions and metrics
+- Running SQL queries to get specific data and analytics
+- Explaining business logic and calculation methods
+- Providing insights about ticket volume, agent performance, QA scores, etc.
+- Finding relevant tables and understanding data structure
+
+Give examples of good questions to ask. Be helpful and encouraging.
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
+- Use `text` for code/table names
+- Use bullet points with •"""
+
+    elif is_business_logic:
+        print(f"💬 Handling business logic question")
+        instructions = """You are a BI expert explaining business logic and calculation methods.
+
+Use your knowledge of business processes and data models to explain:
+- How metrics like AHT, FCR, QA scores are calculated
+- What business rules apply to ticket handling and agent performance
+- Why certain logic is used in the data warehouse
+- How different processes work (ticket resolution, quality assurance, etc.)
+
+Be clear about methodology and reasoning. Reference actual calculation logic when possible.
 
 IMPORTANT - Use Slack formatting:
 - Use *text* for bold (NOT **text**)
 - Use _text_ for italic
 - Use `text` for code/table names"""
 
-    # Add context to message if available
+    else:
+        print(f"💬 Handling general informational question")
+        instructions = """You are a knowledgeable BI assistant helping users understand data and analytics.
+
+Use your expertise to provide helpful, accurate information about:
+- Data definitions and terminology
+- Available metrics and dimensions  
+- How to approach data analysis
+- Best practices for business intelligence
+
+Be conversational but authoritative in your response. Act as a helpful data expert.
+
+IMPORTANT - Use Slack formatting:
+- Use *text* for bold (NOT **text**)
+- Use _text_ for italic
+- Use `text` for code/table names"""
+
+    # Build message with appropriate context
     message_parts = [f"User question: {user_question}"]
 
-    if context:
+    # Add context only for follow-ups
+    if is_followup and context:
         if context.get('last_question'):
             message_parts.append(f"\nPrevious question: {context['last_question']}")
-        if context.get('last_response_type') == 'sql_results':
-            message_parts.append("\nNote: The user just received SQL query results and is asking a follow-up question.")
+        message_parts.append("\nNote: The user is asking a follow-up question about recent query results.")
         if context.get('last_table_used'):
             message_parts.append(f"Table used in previous query: {context['last_table_used']}")
+
+    # Add guidance for standalone questions
+    else:
+        message_parts.append(f"\nThis is a standalone informational question about data/analytics.")
+        if is_metadata_question:
+            message_parts.append("Focus on providing clear definitions and explanations based on actual data model.")
+        elif is_discovery_question:
+            message_parts.append("Help them understand what data and capabilities are available.")
+        elif is_capability_question:
+            message_parts.append("Explain your capabilities and how to best use the BI assistant.")
 
     message = "\n".join(message_parts)
 
@@ -2420,7 +2575,31 @@ Use the helper SQL structure but improve upon it - add missing logic, fix any is
 
 
 def extract_sql_from_response(response: str) -> str:
-    """Extract SQL from assistant response"""
+    """Extract SQL from assistant response with better error handling"""
+
+    # Check if response contains SQL indicators
+    sql_indicators = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY']
+    has_sql_indicators = any(indicator in response.upper() for indicator in sql_indicators)
+
+    # If no SQL indicators and response looks conversational, return as conversational
+    conversational_indicators = [
+        'based on the', 'according to', 'the metric', 'currently used',
+        'definition', 'refers to', 'represents', 'calculated', 'methodology',
+        'in our data warehouse', 'the column', 'table contains', 'business logic'
+    ]
+
+    if not has_sql_indicators and any(indicator in response.lower() for indicator in conversational_indicators):
+        return "-- This question should be handled conversationally, not with SQL"
+
+    # Check for explicit statements that this isn't a SQL query
+    no_sql_indicators = [
+        'this is not a sql query', 'no sql needed', 'conversational response',
+        'definition question', 'metadata question'
+    ]
+
+    if any(indicator in response.lower() for indicator in no_sql_indicators):
+        return "-- This appears to be a conversational response, not SQL"
+
     if "```sql" in response:
         try:
             return response.split("```sql")[1].split("```")[0].strip()
@@ -2450,6 +2629,10 @@ def extract_sql_from_response(response: str) -> str:
     # Check if it's an error message
     if "don't have enough" in response or "cannot find" in response.lower():
         return response
+
+    # If no SQL found but response has content, it might be conversational
+    if len(response.strip()) > 50 and not has_sql_indicators:
+        return "-- This appears to be a conversational response, not SQL"
 
     # Last resort - look for any SQL-like content
     if 'SELECT' in response.upper():
