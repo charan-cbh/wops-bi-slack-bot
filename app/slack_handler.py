@@ -44,7 +44,8 @@ from app.llm_prompter import (
     track_actual_usage,
     estimate_request_tokens,
     clear_token_usage_cache, MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD,
-    handle_conversational_question, discover_table_schema
+    handle_conversational_question, discover_table_schema, classify_question_with_openai,
+    classify_question_type_fallback
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -581,6 +582,33 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
 
         else:
             debug_result = "❌ **Usage:** `debug schema TABLE_NAME`"
+
+    elif debug_query.lower().startswith("classify"):
+        # Test question classification
+        test_question = debug_query.replace("classify", "").strip()
+        if test_question:
+            try:
+                # Get context
+                context = await get_conversation_context(user_id, channel_id)
+
+                # Test OpenAI classification
+                openai_result = await classify_question_with_openai(test_question, user_id, channel_id, context)
+                fallback_result = classify_question_type_fallback(test_question)
+
+                debug_result = f"""🧠 **Classification Test**
+
+    **Question:** '{test_question}'
+
+    **OpenAI Result:** {openai_result}
+    **Fallback Result:** {fallback_result}
+    **Agreement:** {'✅ Yes' if openai_result == fallback_result else '❌ No'}
+
+    **Context:** {context.get('last_response_type', 'none') if context else 'none'}"""
+
+            except Exception as e:
+                debug_result = f"❌ **Classification error:** {str(e)}"
+        else:
+            debug_result = "❌ **Usage:** `debug classify YOUR QUESTION HERE`"
 
     elif debug_query.lower().startswith("sample"):
         # Sample data from a table

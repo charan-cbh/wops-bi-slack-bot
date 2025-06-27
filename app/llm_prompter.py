@@ -297,6 +297,113 @@ def extract_key_phrases(question: str) -> List[str]:
     return list(set(phrases))  # Remove duplicates
 
 
+async def classify_question_with_openai(question: str, user_id: str, channel_id: str, context: dict = None) -> str:
+    """Use OpenAI to classify question type with context awareness"""
+
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return 'sql_required'  # Default fallback
+
+    # Build classification instructions
+    instructions = """You are a BI expert who needs to classify user questions into two categories:
+
+**sql_required**: Questions that need data analysis, queries, calculations, rankings, comparisons, or retrieving specific information from databases
+**conversational**: Questions about definitions, explanations, capabilities, or clarifications about previous results
+
+**SQL_REQUIRED Examples:**
+- "How many tickets were created today?"
+- "Who has the highest QA scores?"  
+- "Can you tell me who has made the most improvement in QA out of these agents in the last 2 weeks?"
+- "Show me agent performance for these specific agents"
+- "What's the average handle time by team?"
+- "Compare performance between agents X, Y, Z"
+- "Show trends for the last month"
+- "Which agent performed best?"
+- "Top 10 agents by resolution time"
+- Any question asking for WHO, WHAT (metrics), HOW MANY, SHOW ME, COMPARE
+
+**CONVERSATIONAL Examples:**
+- "What does AHT mean?" (definition)
+- "What is the source of this data?" (about previous results)
+- "How do you calculate QA scores?" (methodology)
+- "What tables do you have access to?" (capabilities)
+- "Explain these results" (clarification about previous results)
+- "What does that number mean?" (about previous results)
+
+**CRITICAL CLASSIFICATION RULES:**
+1. Questions asking for specific data, metrics, comparisons, rankings = sql_required
+2. Questions with agent names + performance/improvement = sql_required  
+3. Questions asking WHO, WHAT metrics, HOW MANY, SHOW ME = sql_required
+4. Questions about definitions, explanations, or data sources = conversational
+5. If unsure between data vs explanation, lean toward sql_required
+
+Return ONLY one word: "sql_required" or "conversational" (no explanation, no other text)"""
+
+    # Build message with context
+    message_parts = [f"Question to classify: {question}"]
+
+    # Add context if it might affect classification
+    if context and context.get('last_response_type') == 'sql_results':
+        # Check if this looks like a follow-up about previous results
+        followup_indicators = ['this data', 'these results', 'that number', 'the source', 'why is it',
+                               'what does this mean', 'explain this']
+        if any(indicator in question.lower() for indicator in followup_indicators):
+            message_parts.append("Context: This appears to be a follow-up question about previous SQL results.")
+
+    message = "\n".join(message_parts)
+
+    try:
+        response = await send_message_and_run(thread_id, message, instructions)
+
+        # Extract classification
+        response_clean = response.strip().lower()
+        if 'sql_required' in response_clean:
+            return 'sql_required'
+        elif 'conversational' in response_clean:
+            return 'conversational'
+        else:
+            print(f"⚠️ Unclear OpenAI classification response: {response}")
+            # Fallback to simple heuristic
+            return classify_question_type_fallback(question)
+
+    except Exception as e:
+        print(f"❌ Error in OpenAI classification: {e}")
+        # Fallback to simple heuristic
+        return classify_question_type_fallback(question)
+
+
+def classify_question_type_fallback(question: str) -> str:
+    """Simple fallback classification if OpenAI fails"""
+    question_lower = question.lower()
+
+    # Strong indicators for SQL queries
+    strong_sql_indicators = [
+        'how many', 'count', 'show me', 'list', 'who has', 'who is',
+        'what is the', 'compare', 'vs', 'versus', 'ranking', 'rank',
+        'improvement', 'performance', 'metrics', 'agents', 'tickets',
+        'highest', 'lowest', 'best', 'worst', 'most', 'least',
+        'average', 'total', 'sum', 'breakdown', 'analysis'
+    ]
+
+    # Strong indicators for conversational
+    strong_conversational_indicators = [
+        'what does', 'definition of', 'meaning of', 'explain',
+        'what is the source', 'how do you calculate', 'methodology',
+        'what tables', 'what data do you have', 'capabilities'
+    ]
+
+    # Check for strong SQL indicators first
+    if any(indicator in question_lower for indicator in strong_sql_indicators):
+        return 'sql_required'
+
+    # Check for strong conversational indicators
+    if any(indicator in question_lower for indicator in strong_conversational_indicators):
+        return 'conversational'
+
+    # For ambiguous cases, default to sql_required
+    # Better to try SQL and fail than miss a data request
+    return 'sql_required'
+
 def classify_question_type(question: str) -> str:
     """Enhanced classification for data queries vs conversational questions"""
     question_lower = question.lower()
@@ -2667,7 +2774,7 @@ def extract_sql_from_response(response: str) -> str:
 
 async def handle_question(user_question: str, user_id: str, channel_id: str, assistant_id: str = None) -> Tuple[
     str, str]:
-    """Main question handler with rate limiting"""
+    """Main question handler with OpenAI-powered classification"""
     global ASSISTANT_ID
     if assistant_id:
         ASSISTANT_ID = assistant_id
@@ -2680,7 +2787,6 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
         rate_limit_check = await check_rate_limits(user_id, channel_id, estimated_tokens)
 
         if not rate_limit_check["allowed"]:
-            # Return rate limit message
             usage_info = f"""⚠️ **Usage Limit Reached**
 
 {rate_limit_check["reason"]}
@@ -2693,31 +2799,16 @@ async def handle_question(user_question: str, user_id: str, channel_id: str, ass
 *Limits reset hourly/daily. Try again later or start a new conversation.*"""
             return usage_info, 'rate_limited'
 
-        # Get conversation context FIRST
+        # Step 2: Get conversation context
         context = await get_conversation_context(user_id, channel_id)
 
-        # Initial classification
-        question_type = classify_question_type(user_question)
-
-        # Override classification based on context
-        if context and context.get('last_response_type') == 'sql_results':
-            question_lower = user_question.lower()
-
-            if any(pattern in question_lower for pattern in [
-                'source', 'where', 'why', 'what is', 'explain',
-                'how', 'this data', 'that data', 'these',
-                'break down', 'tell me more', 'clarify'
-            ]):
-                print(f"🔄 Reclassifying as conversational (follow-up after SQL results)")
-                question_type = 'conversational'
-
-            elif len(user_question.split()) <= 8:
-                print(f"🔄 Reclassifying as conversational (short follow-up after SQL results)")
-                question_type = 'conversational'
+        # Step 3: Use OpenAI for intelligent classification
+        print(f"🤖 Using OpenAI for question classification...")
+        question_type = await classify_question_with_openai(user_question, user_id, channel_id, context)
 
         print(f"\n{'=' * 60}")
         print(f"🔍 Processing question: {user_question}")
-        print(f"📊 Question type: {question_type}")
+        print(f"📊 OpenAI classified as: {question_type}")
         print(f"🔢 Estimated tokens: {estimated_tokens:,}")
         if context:
             print(f"📝 Previous response type: {context.get('last_response_type', 'none')}")
