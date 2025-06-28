@@ -711,7 +711,7 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
 
 async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str, user_id: str,
                                   original_ts: str = None):
-    """Execute SQL query and send results with enhanced error handling"""
+    """Execute SQL query and send results with proper error handling"""
     print("⚡ Executing query...")
     await send_slack_message(channel_id, "⚡ Executing query...", include_feedback_hint=False)
 
@@ -724,19 +724,9 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
     context = await get_conversation_context(user_id, channel_id)
     selected_table = context.get('last_table_used') if context else None
 
-    # Check for schema errors first
-    if sql.startswith("-- Schema Error:"):
-        error_msg = sql.replace("-- Schema Error:", "").strip()
-        schema_error_response = f"❌ **Schema Validation Error**\n\n{error_msg}\n\n"
-        schema_error_response += "**What this means:**\n"
-        schema_error_response += "• The selected table doesn't have the columns needed for this analysis\n"
-        schema_error_response += "• This might require a different table with the right metrics\n\n"
-        schema_error_response += "**Suggestions:**\n"
-        schema_error_response += f"• Try `@bot debug sample {selected_table}` to see available columns\n" if selected_table else ""
-        schema_error_response += f"• Try `@bot debug find {clean_question}` to find tables with the right data\n"
-        schema_error_response += "• Rephrase your question to use available metrics"
-
-        await send_slack_message(channel_id, schema_error_response, include_feedback_hint=False)
+    # Check for schema validation errors first
+    if sql.startswith("❌ **Schema Validation Failed**"):
+        await send_slack_message(channel_id, sql, include_feedback_hint=False)
         return
 
     # Check if SQL generation failed
@@ -744,61 +734,72 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         await send_slack_message(channel_id, f"❌ {sql}", include_feedback_hint=False)
         return
 
-    # Import the enhanced quality analysis functions
-    from app.llm_prompter import execute_with_quality_analysis
+    # Execute the SQL query
+    df = run_query(sql)
+    result_count = 0
 
-    # Execute with intelligent error handling and auto-retry
-    df, result_count, analysis = await execute_with_quality_analysis(
-        clean_question, sql, selected_table, user_id, channel_id
-    )
-
+    # PROPER ERROR DETECTION
     if isinstance(df, str):
-        # Final error after all retry attempts
-        print(f"❌ Final query execution error: {df}")
+        # This IS an error - log it properly
+        print(f"❌ Query execution failed: {df}")
 
-        # Check if it was a max attempts error
-        if analysis and analysis.get("error_type") == "max_attempts_exceeded":
-            error_msg = f"❌ **Query execution failed after {analysis.get('attempts', 3)} attempts**\n\n"
-            error_msg += f"I tried to automatically fix the SQL but couldn't resolve the issue.\n\n"
-            error_msg += "**Suggestions:**\n"
-            error_msg += f"• Try `@bot debug analyze {clean_question}` to see table analysis\n"
-            error_msg += f"• Try rephrasing your question with different terms\n"
-            error_msg += f"• Check if the data exists for your specified criteria\n\n"
-            error_msg += f"**Last Error:** {df}"
-            result_message = error_msg
+        # Check for specific error types
+        if "invalid identifier" in df.lower():
+            # Extract the problematic column name
+            match = re.search(r"invalid identifier '([^']+)'", df, re.IGNORECASE)
+            if match:
+                bad_column = match.group(1)
+                print(f"❌ Column '{bad_column}' does not exist in the table")
+
+                suggestions_msg = f"❌ **Query Failed: Column Not Found**\n\n"
+                suggestions_msg += f"Column `{bad_column}` does not exist in table `{selected_table or 'selected table'}`\n\n"
+                suggestions_msg += "**What went wrong:**\n"
+                suggestions_msg += "• The bot used a column name that doesn't exist in the selected table\n"
+                suggestions_msg += "• This indicates a schema validation failure\n\n"
+                suggestions_msg += "**Next steps:**\n"
+                if selected_table:
+                    suggestions_msg += f"1. `@bot debug sample {selected_table}` - See actual columns\n"
+                    suggestions_msg += f"2. `@bot debug schema {selected_table}` - View complete schema\n"
+                suggestions_msg += f"3. `@bot debug find {clean_question}` - Find tables with right data\n"
+                suggestions_msg += "4. Try rephrasing your question with different terms\n\n"
+                suggestions_msg += f"**Error details:** {df}"
+
+                result_message = suggestions_msg
+            else:
+                result_message = f"❌ **Query Error:** Column not found\n\n{df}"
+
+        elif "compilation error" in df.lower():
+            result_message = f"❌ **SQL Compilation Error**\n\n{df}\n\n**This usually means:**\n• Column names don't exist in the table\n• Table structure doesn't match expectations\n\nTry `@bot debug sample {selected_table}` to see available columns."
+
         else:
-            # Standard error handling
-            result_message = f"❌ Query error: {df}"
+            result_message = f"❌ **Query Error:** {df}"
 
+        # Update cache with failure (result_count = 0)
         await update_sql_cache_with_results(clean_question, sql, 0, selected_table)
+
+        # Send error message
+        await send_slack_message(channel_id, result_message, include_feedback_hint=False)
+        return
+
+    # SUCCESS case - only reach here if query actually worked
     else:
-        # Success - process results
+        result_count = len(df) if hasattr(df, '__len__') else 0
         print(f"✅ Query successful - returned {result_count} rows, {len(df.columns)} columns")
-
-        # Check what happened during execution
-        sql_was_fixed = analysis.get("sql_was_fixed", False) if analysis else False
-        auto_retry_success = analysis.get("auto_retry_success", False) if analysis else False
-        quality_score = analysis.get("quality_score", 100) if analysis else 100
-
-        if sql_was_fixed:
-            print(f"🔧 SQL was auto-fixed during execution (attempts: {analysis.get('fix_attempts', 1)})")
-
-        if auto_retry_success:
-            print(f"🎉 Quality auto-retry was successful! Quality improved to {quality_score}/100")
 
         # Extract table from SQL if we don't have it
         if not selected_table and 'FROM' in sql.upper():
             sql_upper = sql.upper()
             from_idx = sql_upper.find('FROM')
             if from_idx != -1:
+                # Extract table name (handle multi-line SQL)
                 after_from = sql[from_idx + 4:].strip()
+                # Get first word (table name) - handle newlines and multiple spaces
                 selected_table = re.split(r'[\s\n]+', after_from)[0]
 
-        # Update cache with actual results (use the final working SQL)
-        final_sql = analysis.get("final_sql") or analysis.get("fixed_sql") or sql
-        await update_sql_cache_with_results(clean_question, final_sql, result_count, selected_table)
+        # Update cache with actual results
+        await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
 
-        # Summarize results (this is what the user sees)
+        # Summarize results
         if USE_ASSISTANT_API and ASSISTANT_ID:
             result_message = await summarize_with_assistant(
                 clean_question,
@@ -813,23 +814,11 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 format_result_for_slack(df)
             )
 
-        # Add intelligent success messages based on what happened
-        success_messages = []
-
-        if sql_was_fixed:
-            success_messages.append("🔧 Query automatically fixed and executed")
-
-        if auto_retry_success:
-            success_messages.append("📊 Results automatically optimized for quality")
-
-        if success_messages:
-            result_message += f"\n\n_✨ {' • '.join(success_messages)}_"
-
-        # Update conversation context
+        # Update conversation context to indicate SQL results were returned
         await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
                                           selected_table)
 
-    # Send the result message to user
+    # Send the result message
     is_success = result_count > 0
     response = await send_slack_message(channel_id, result_message, include_feedback_hint=is_success)
 
@@ -840,12 +829,9 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
             channel_ts = f"{channel_id}_{msg_ts}"
             message_to_question_map[channel_ts] = {
                 'question': clean_question,
-                'sql': analysis.get("final_sql") or analysis.get("fixed_sql") or sql,
+                'sql': sql,
                 'table': selected_table,
-                'timestamp': time.time(),
-                'quality_score': quality_score,
-                'sql_was_fixed': sql_was_fixed,
-                'auto_retry_success': auto_retry_success
+                'timestamp': time.time()
             }
             print(f"📝 Stored message {channel_ts} for feedback tracking")
 
