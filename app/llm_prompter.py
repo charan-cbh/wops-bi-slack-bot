@@ -1707,31 +1707,36 @@ def build_sql_instructions(intent: dict, table: str, schema: dict, original_ques
     # Base instructions - keep existing approach but ADD schema validation
     base_instructions = f"""You are a SQL expert representing the Business Intelligence team. Generate PERFECT Snowflake SQL.
 
-TABLE: {table}
-AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
+    TABLE: {table}
+    AUDIT COLUMNS: {', '.join(audit_columns) if audit_columns else 'None found'}
 
-AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
-{column_info}
+    🔍 COMPLETE COLUMN INVENTORY (Total: {len(columns)}):
+    {column_info}
 
-CRITICAL REQUIREMENTS:
-1. Generate SQL that COMPLETELY and ACCURATELY answers the question
-2. Use ONLY columns that exist in the schema above
-3. Verify each column reference against the schema
-4. Use appropriate aggregations and calculations
-5. Apply correct filters and date ranges
-6. Handle NULLs appropriately
-7. Use the full table name: {table}
+    ⚠️ SCHEMA COMPLIANCE: Use ONLY columns from the list above. If you need columns not listed, state clearly that they're missing from this table.
 
-⚠️ SCHEMA VALIDATION: Before using any column, verify it exists in the list above. If a column you need doesn't exist, state clearly which columns are missing.
+    COMMON MISTAKES TO AVOID:
+    - Do NOT assume column names like TEAM_NAME, QA_SCORE, HANDLE_TIME unless they appear above
+    - Do NOT use business logic to guess column names  
+    - Do NOT use columns from other tables or systems
 
-ACCURACY RULES:
-- If calculating averages, ensure you're averaging the right values
-- If counting, ensure you're counting distinct values when appropriate  
-- If filtering by time, use the most appropriate date/timestamp column
-- If grouping, ensure all non-aggregated columns are in GROUP BY
-- Always consider data quality (NULL handling, data types)
+    CRITICAL REQUIREMENTS:
+    1. Generate SQL that COMPLETELY and ACCURATELY answers the question
+    2. Use ONLY columns that exist in the schema above
+    3. Verify each column reference against the schema
+    4. Use appropriate aggregations and calculations
+    5. Apply correct filters and date ranges
+    6. Handle NULLs appropriately
+    7. Use the full table name: {table}
 
-Return ONLY the SQL query - no explanations."""
+    ACCURACY RULES:
+    - If calculating averages, ensure you're averaging the right values
+    - If counting, ensure you're counting distinct values when appropriate  
+    - If filtering by time, use the most appropriate date/timestamp column
+    - If grouping, ensure all non-aggregated columns are in GROUP BY
+    - Always consider data quality (NULL handling, data types)
+
+    Return ONLY the SQL query - no explanations."""
 
     # Keep existing intent-specific guidance (unchanged)
     if intent['type'] == 'list_or_sample':
@@ -2392,31 +2397,55 @@ async def debug_pattern_analysis(question: str, user_id: str, channel_id: str) -
 
     return result
 
-def validate_sql_columns(sql: str, available_columns: list) -> tuple[bool, list]:
-    """Simple validation to check if SQL uses non-existent columns"""
 
-    if not sql or sql.startswith("--"):
+def validate_sql_columns(sql: str, available_columns: list) -> tuple[bool, list]:
+    """Validate that SQL only uses columns that actually exist"""
+
+    if not sql or sql.startswith("--") or not available_columns:
         return True, []
 
-    # Extract potential column references (simple approach)
     import re
 
-    # Find words that might be column names (after SELECT, WHERE, GROUP BY, ORDER BY)
-    sql_upper = sql.upper()
+    # Create a set of actual column names (case-insensitive)
+    available_cols_lower = {col.lower() for col in available_columns}
 
-    # Common column patterns that don't exist in many tables
-    problematic_columns = [
-        'HANDLE_TIME', 'FORECAST_DEMAND', 'FC_DEV_PERCENT',
-        'ADHERENCE', 'PRODUCTIVE_HOUR', 'FRT'
-    ]
+    # Extract all potential column references from SQL
+    # Remove string literals and quoted strings first
+    sql_clean = re.sub(r'\'[^\']*\'', '', sql)  # Remove string literals
+    sql_clean = re.sub(r'"[^"]*"', '', sql_clean)  # Remove quoted strings
+
+    # Find words that look like column names (alphanumeric + underscore)
+    potential_columns = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', sql_clean)
+
+    # Filter out SQL keywords and functions
+    sql_keywords = {
+        'select', 'from', 'where', 'group', 'by', 'order', 'having', 'as', 'and', 'or', 'not',
+        'in', 'is', 'null', 'count', 'sum', 'avg', 'max', 'min', 'distinct', 'case', 'when',
+        'then', 'else', 'end', 'inner', 'left', 'right', 'outer', 'join', 'on', 'union',
+        'limit', 'offset', 'desc', 'asc', 'analytics', 'dbt_production', 'current_date',
+        'date_trunc', 'extract', 'year', 'month', 'week', 'day', 'hour', 'minute', 'dateadd',
+        'datediff', 'to_date', 'cast', 'varchar', 'number', 'boolean', 'timestamp'
+    }
 
     missing_columns = []
 
-    for col in problematic_columns:
-        if col in sql_upper:
-            # Check if this column exists in available columns
-            if not any(col.lower() in avail_col.lower() for avail_col in available_columns):
+    for col in potential_columns:
+        col_lower = col.lower()
+        # Skip SQL keywords, table names, functions, and schema references
+        if (col_lower not in sql_keywords and
+                'analytics' not in col_lower and
+                'dbt' not in col_lower and
+                not col_lower.startswith('fct_') and
+                not col_lower.startswith('dim_') and
+                not col_lower.startswith('stg_') and
+                len(col) > 2):  # Skip very short identifiers
+
+            # Check if this looks like a column name and doesn't exist
+            if col_lower not in available_cols_lower:
                 missing_columns.append(col)
+
+    # Remove duplicates
+    missing_columns = list(set(missing_columns))
 
     return len(missing_columns) == 0, missing_columns
 
@@ -2536,17 +2565,44 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
     # Extract SQL from response
     sql = extract_sql_from_response(response)
 
-    # Validate SQL columns against schema
+    # ENHANCED schema validation
     is_valid, missing_columns = validate_sql_columns(sql, schema.get('columns', []))
 
     if not is_valid and missing_columns:
-        print(f"❌ SQL validation failed - missing columns: {missing_columns}")
-        print(f"❌ **Schema Validation Failed**\n\nThe generated SQL uses columns that don't exist in table `{selected_table}`:\n• {', '.join(missing_columns)}\n\n**Available columns:** {', '.join(schema.get('columns', [])[:20])}{'...' if len(schema.get('columns', [])) > 20 else ''}\n\n**Suggestion:** This query might need a different table with the required metrics. :: selected_table :: {selected_table}")
+        print(f"❌ Schema validation failed - missing columns: {missing_columns}")
+
+        # Create detailed error message
+        error_msg = f"❌ **Schema Validation Failed**\n\n"
+        error_msg += f"The generated SQL uses columns that don't exist in `{selected_table}`:\n"
+        for col in missing_columns:
+            error_msg += f"• `{col}` ❌\n"
+
+        error_msg += f"\n**Available columns in {selected_table}:**\n"
+        available_cols = schema.get('columns', [])
+        for i, col in enumerate(available_cols[:15]):
+            error_msg += f"• `{col}` ✅\n"
+        if len(available_cols) > 15:
+            error_msg += f"• ... and {len(available_cols) - 15} more columns\n"
+
+        error_msg += f"\n**What this means:**\n"
+        error_msg += f"• This table doesn't have the columns needed for your analysis\n"
+        error_msg += f"• You might need a different table with the required metrics\n\n"
+        error_msg += f"**Suggestions:**\n"
+        error_msg += f"• `@bot debug find {user_question}` - Find tables with the right data\n"
+        error_msg += f"• `@bot debug sample {selected_table}` - See what's available in this table\n"
+        error_msg += f"• Rephrase your question using available column names"
+
+        return error_msg, selected_table
+
+    # NEW: Enhanced validation
+    if sql.startswith("❌"):
+        # This is a validation error message, return it directly
+        return sql, selected_table
 
     # Validate and fix common SQL issues
     sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
 
-    print(f"\n🧠 Final SQL generated by OpenAI:")
+    print(f"\n🧠 Generated SQL:")
     print(f"{sql}")
     print(f"{'=' * 60}\n")
 
