@@ -1965,7 +1965,7 @@ async def generate_sql_with_patterns(user_question: str, user_id: str, channel_i
     sql = extract_sql_from_response(response)
 
     # Validate and fix common SQL issues
-    # sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
+    sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
 
     print(f"\n🧠 Generated SQL:")
     print(f"{sql}")
@@ -1973,95 +1973,6 @@ async def generate_sql_with_patterns(user_question: str, user_id: str, channel_i
 
     return sql, selected_table
 
-async def regenerate_sql_with_error_context(question: str, failed_sql: str, error_message: str,
-                                            table_name: str, problematic_column: str,
-                                            user_id: str, channel_id: str) -> str:
-    """Regenerate SQL using the actual error message as context"""
-
-    thread_id = await get_or_create_thread(user_id, channel_id)
-    if not thread_id:
-        return ""
-
-    # Get fresh schema info
-    schema = await discover_table_schema(table_name)
-    available_columns = schema.get('columns', [])
-    column_descriptions = schema.get('column_descriptions', {})
-
-    # Build column info with descriptions
-    column_info_parts = []
-    for col in available_columns:
-        desc = column_descriptions.get(col.lower(), {}).get('comment', '')
-        if desc:
-            column_info_parts.append(f"• {col}: {desc}")
-        else:
-            column_info_parts.append(f"• {col}")
-
-    column_info = "\n".join(column_info_parts)
-
-    instructions = f"""You are a SQL expert fixing a failed query based on the actual database error.
-
-The SQL failed with this Snowflake error: {error_message}
-
-TASK: Fix the SQL to work with the actual table schema while preserving the original intent.
-
-TABLE: {table_name}
-AVAILABLE COLUMNS:
-{column_info}
-
-FIXING STRATEGY:
-1. Identify why the SQL failed (usually missing columns)
-2. Find similar/equivalent columns in the available list
-3. Replace problematic columns with correct ones
-4. Keep the same business logic and query intent
-5. Use exact column names as shown above
-
-COMMON FIXES:
-- If "TEAM_NAME" missing → try "GROUP_NAME" or similar
-- If "QA_SCORE" missing → try "QA_SCORE" variations or performance metrics
-- If "HANDLE_TIME" missing → try time-related columns
-- Match column purpose, not just name
-
-Return ONLY the corrected SQL query - no explanations."""
-
-    # Build context message
-    message_parts = [
-        f"Original question: {question}",
-        "",
-        "Failed SQL:",
-        f"```sql\n{failed_sql}\n```",
-        "",
-        f"Snowflake Error: {error_message}"
-    ]
-
-    if problematic_column:
-        message_parts.extend([
-            "",
-            f"Specific problematic column: {problematic_column}"
-        ])
-
-    message_parts.extend([
-        "",
-        "Fix this SQL to use only the available columns listed above.",
-        "Find the best matching columns for the intended analysis."
-    ])
-
-    message = "\n".join(message_parts)
-
-    try:
-        response = await send_message_and_run(thread_id, message, instructions)
-        fixed_sql = extract_sql_from_response(response)
-
-        if fixed_sql and not fixed_sql.startswith("--") and not fixed_sql.startswith("❌"):
-            print(f"🔧 Regenerated SQL successfully")
-            return fixed_sql
-        else:
-            print(f"⚠️ Could not extract valid fixed SQL from response: {response[:200]}...")
-            return ""
-
-    except Exception as e:
-        print(f"❌ Error regenerating SQL: {e}")
-        traceback.print_exc()
-        return ""
 
 def build_pattern_enhanced_instructions(question: str, table: str, schema: dict, pattern: Dict = None,
                                         intent: dict = None) -> str:
