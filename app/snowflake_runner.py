@@ -59,7 +59,7 @@ def run_query(sql: str):
         print(f"⚠️ Snowflake Exception: {e}")
         return pd.DataFrame([{"Error": str(e)}])
 
-def format_result_for_slack(df: pd.DataFrame, max_rows=10, max_width=60) -> str:
+def format_result_for_slack(df: pd.DataFrame, max_rows=50, max_width=60) -> str:
     if df.empty:
         return "⚠️ No data returned."
 
