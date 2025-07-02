@@ -1715,7 +1715,7 @@ AVAILABLE COLUMNS WITH TYPES AND DESCRIPTIONS:
 
 CRITICAL REQUIREMENTS:
 1. Generate SQL that COMPLETELY and ACCURATELY answers the question
-2. Use ONLY columns that exist in the schema above
+2. Use ONLY columns that exist in the schema above do not use or assume columns which are not present in the available columns.
 3. Verify each column reference against the schema
 4. Use appropriate aggregations and calculations
 5. Apply correct filters and date ranges
@@ -2552,6 +2552,7 @@ async def generate_sql_intelligently(user_question: str, user_id: str, channel_i
 
     return sql, selected_table
 
+
 def build_sql_instructions_with_business_logic(intent: Dict, table: str, schema: Dict, original_question: str) -> Dict:
     """Enhanced SQL instructions that include business logic for non-pattern queries"""
 
@@ -2565,9 +2566,9 @@ def build_sql_instructions_with_business_logic(intent: Dict, table: str, schema:
 🎯 ENHANCED BUSINESS LOGIC FOR PERFORMANCE QUERIES:
 
 CRITICAL FILTERING (ALWAYS APPLY):
-- ALWAYS filter out NULL/empty agent names: WHERE ASSIGNEE_NAME IS NOT NULL AND ASSIGNEE_NAME != ''
-- Filter out system accounts: WHERE ASSIGNEE_NAME NOT IN ('None', 'null', 'Automated Update', 'TechOps Bot')
-- Filter out empty/null strings: WHERE TRIM(ASSIGNEE_NAME) != '' AND LOWER(ASSIGNEE_NAME) NOT IN ('null', 'none')
+- ALWAYS filter out NULL/empty agent names: WHERE AGENT_NAME IS NOT NULL AND AGENT_NAME != ''
+- Filter out system accounts: WHERE AGENT_NAME NOT IN ('None', 'null', 'Automated Update', 'TechOps Bot')
+- Filter out empty/null strings: WHERE TRIM(AGENT_NAME) != '' AND LOWER(AGENT_NAME) NOT IN ('null', 'none')
 
 SMART ORDERING FOR PERFORMANCE QUERIES:
 - For "best" or "top" queries, order by data completeness first, then performance metrics
@@ -2576,11 +2577,11 @@ SMART ORDERING FOR PERFORMANCE QUERIES:
 
 EXAMPLE FILTERS TO ALWAYS INCLUDE:
 ```sql
-WHERE ASSIGNEE_NAME IS NOT NULL 
-  AND ASSIGNEE_NAME != '' 
-  AND ASSIGNEE_NAME != 'None'
-  AND LOWER(ASSIGNEE_NAME) NOT IN ('null', 'none', 'nan')
-  AND TRIM(ASSIGNEE_NAME) != ''
+WHERE AGENT_NAME IS NOT NULL 
+  AND AGENT_NAME != '' 
+  AND AGENT_NAME != 'None'
+  AND LOWER(AGENT_NAME) NOT IN ('null', 'none', 'nan')
+  AND TRIM(AGENT_NAME) != ''
 ```
 
 SMART ORDERING EXAMPLE:
@@ -2604,13 +2605,13 @@ PERFORMANCE BENCHMARKS FOR CONTEXT:
 🎯 ENHANCED BUSINESS LOGIC FOR TICKET QUERIES:
 
 STANDARD TICKET FILTERS (ALWAYS APPLY):
-- STATUS IN ('closed', 'solved')
-- Valid channels: CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+- TICKET_STATUS IN ('closed', 'solved')
+- Valid channels: NATIVE_ZENDESK_CHANNEL IN ('api', 'email', 'native_messaging', 'web')
 - Valid brands: BRAND_ID IN ('29186504989207', '360002340693')
-- Exclude system accounts: ASSIGNEE_NAME NOT IN ('Automated Update', 'TechOps Bot') OR ASSIGNEE_NAME IS NULL
+- Exclude system accounts: AGENT_NAME NOT IN ('Automated Update', 'TechOps Bot') OR AGENT_NAME IS NULL
 - Exclude test data: NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL
 
-CONTACT CHANNEL MAPPING:
+CONTACT CHANNEL MAPPING (if not available as direct field):
 ```sql
 CASE 
   WHEN GROUP_ID = '5495272772503' THEN 'Web'
