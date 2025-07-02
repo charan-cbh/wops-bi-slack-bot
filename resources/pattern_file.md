@@ -9,7 +9,7 @@ Each pattern represents a validated approach to answering specific types of busi
 
 ## Pattern 1: WOPS Tickets Comprehensive Analysis
 
-**Primary Table**: `ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS`
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS`
 
 ### Questions This Pattern Answers
 - How many tickets were created today/yesterday/this week/last month?
@@ -24,82 +24,104 @@ Each pattern represents a validated approach to answering specific types of busi
 - Dispute and payment-related tickets analysis
 - Urgent shift requests volume
 - Waiver requests analysis
+- Worker-specific ticket analysis
+- Team lead performance metrics
 
-### Standard Business Filters (Always Apply)
+### Pre-Filtered Business-Ready Data
+✅ **RPT_WOPS_TICKETS is pre-filtered and includes only:**
+- Closed/solved tickets
+- Excludes automated agents (TechOps Bot, Automated Update)
+- Excludes blocked emails (email_blocked, bulk_email_tool, seattle_psst_monthly_email)
+- Only standard channels (api, email, native_messaging, web)
+- Correct brand IDs (29186504989207, 360002340693)
+
+**Simply add your specific criteria:**
 ```sql
-WHERE STATUS IN ('closed', 'solved')
-  AND (ASSIGNEE_NAME <> 'Automated Update' OR ASSIGNEE_NAME IS NULL)
-  AND (NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL)
-  AND CHANNEL IN ('api', 'email', 'native_messaging', 'web')
-  AND (ASSIGNEE_NAME <> 'TechOps Bot' OR ASSIGNEE_NAME IS NULL)
-  AND BRAND_ID IN ('29186504989207', '360002340693')
-  AND (NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' OR TICKET_TAGS IS NULL)
-  AND (NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%' OR TICKET_TAGS IS NULL)
+WHERE CREATED_AT_PST >= CURRENT_DATE - 7    -- Date filtering
+  AND AGENT_NAME = 'John Smith'             -- Agent filtering  
+  AND CONTACT_CHANNEL = 'Chat'              -- Channel filtering
+  AND TICKET_TYPE = 'General Assistance'   -- Type filtering
 ```
 
-### Key Derived Fields
-**Contact Channel** (derive from GROUP_ID):
-```sql
-CASE 
-  WHEN GROUP_ID = '5495272772503' THEN 'Web'
-  WHEN GROUP_ID = '17837476387479' THEN 'Chat'
-  WHEN GROUP_ID = '28949203098007' THEN 'Voice'
-  ELSE 'Other'
-END AS Contact_Channel
-```
+### Key Fields (Direct Access - No Derivation Needed)
+**Contact Channel**: Direct field `CONTACT_CHANNEL` 
+- Values: 'Web', 'Chat', 'Voice', 'Other'
 
-**Ticket Sub-Type** (complex mapping based on WOPS_TICKET_TYPE_A):
-```sql
-CASE
-  WHEN WOPS_TICKET_TYPE_A = 'wops_attendance_waiver_request' THEN WAIVER_REQUEST_DRIVER
-  WHEN WOPS_TICKET_TYPE_A = 'mpt_ticket_type_payments' THEN PAYMENTS_CATEGORY_B
-  WHEN WOPS_TICKET_TYPE_A = 'mpt_ticket_type_general_assistance' THEN PRODUCT_FEATURE_A
-  WHEN WOPS_TICKET_TYPE_A = 'mpt_ticket_type_urgent_shifts' THEN URGENT_SHIFTS_TYPE_A
-  WHEN WOPS_TICKET_TYPE_A = 'mpt_ticket_type_reactivation_request' THEN DEACTIVATION_REASON
-  ELSE WOPS_TICKET_TYPE_A
-END AS ticket_sub_type
-```
+**Ticket Classification**: Direct field `TICKET_SUB_TYPE`
+- Pre-calculated business categories
 
 ### Important Columns
-- **Identifiers**: TICKET_ID, REQUESTER_ID, ASSIGNEE_ID, WORKER_ID
-- **Dimensions**: GROUP_NAME, CHANNEL, STATUS, PRIORITY, TICKET_TYPE, ASSIGNEE_NAME
-- **Timestamps**: CREATED_AT, SOLVED_AT, ASSIGNED_AT, UPDATED_AT (all have _PST versions)
-- **Metrics**: REPLY_TIME_IN_MINUTES, FIRST_RESOLUTION_TIME_IN_MINUTES, FULL_RESOLUTION_TIME_IN_MINUTES, HANDLE_TIME
-- **Categories**: WOPS_TICKET_TYPE_A, PAYMENTS_CATEGORY_B, DISPUTE_DRIVER_A, ESCALATION_TEAM
+- **Identifiers**: TICKET_ID, ASSIGNEE_ID, WORKER_ID
+- **People**: WORKER_NAME, WORKER_EMAIL, AGENT_NAME, AGENT_EMAIL, TEAM_LEAD
+- **Dimensions**: GROUP_ID, NATIVE_ZENDESK_CHANNEL, CONTACT_CHANNEL, TICKET_STATUS, TICKET_TYPE, TICKET_SUB_TYPE
+- **Categories**: 
+  - WAIVER_REQUEST_DRIVER, WAIVER_REQUEST_RESOLUTION, ATTENDANCE_WAIVER_CRITERIA
+  - PRODUCT_HELP_CATEGORY, PAYMENTS_CATEGORY, URGENT_SHIFTS_TYPE
+  - ESCALATION_TEAM, ESCALATING_AGENT, RESOLUTION_TYPE, RESOLUTION
+- **Timestamps**: CREATED_AT_PST, INITIALLY_ASSIGNED_AT_PST, ASSIGNED_AT_PST, SOLVED_AT_PST
+- **Metrics**: 
+  - REPLY_TIME_IN_MINUTES, FIRST_RESOLUTION_TIME_IN_MINUTES, FULL_RESOLUTION_TIME_IN_MINUTES
+  - HANDLE_TIME, LAST_TOUCH_HANDLE_TIME
+  - CONNECT_HANDLE_TIME_TOTAL_MIN, CONNECT_HANDLE_TIME_LAST_CALL_MIN
+  - REOPENS, REPLIES, PROVIDED_SCORE
 
 ### Sample Queries
 
 **Daily ticket count**:
 ```sql
 SELECT COUNT(*) as ticket_count 
-FROM ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS 
-WHERE DATE(CREATED_AT) = CURRENT_DATE()
-  AND STATUS IN ('closed', 'solved')
-  AND [other standard filters]
+FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS 
+WHERE DATE(CREATED_AT_PST) = CURRENT_DATE()
 ```
 
-**Ticket volume by channel**:
+**Ticket volume by contact channel**:
 ```sql
 SELECT 
-  CASE 
-    WHEN GROUP_ID = '5495272772503' THEN 'Web'
-    WHEN GROUP_ID = '17837476387479' THEN 'Chat'
-    WHEN GROUP_ID = '28949203098007' THEN 'Voice'
-    ELSE 'Other'
-  END AS Contact_Channel,
-  COUNT(*) as ticket_count
-FROM ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
-WHERE [standard filters]
-GROUP BY Contact_Channel
+  CONTACT_CHANNEL,
+  COUNT(*) as ticket_count,
+  AVG(HANDLE_TIME) as avg_handle_time
+FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
+WHERE CREATED_AT_PST >= CURRENT_DATE - 7
+GROUP BY CONTACT_CHANNEL
+ORDER BY ticket_count DESC
+```
+
+**Agent performance summary**:
+```sql
+SELECT 
+  AGENT_NAME,
+  TEAM_LEAD,
+  COUNT(*) as tickets_handled,
+  AVG(HANDLE_TIME) as avg_handle_time,
+  AVG(REPLY_TIME_IN_MINUTES) as avg_reply_time,
+  AVG(FIRST_RESOLUTION_TIME_IN_MINUTES) as avg_resolution_time
+FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
+WHERE CREATED_AT_PST >= CURRENT_DATE - 7
+GROUP BY AGENT_NAME, TEAM_LEAD
+ORDER BY tickets_handled DESC
+```
+
+**Ticket type breakdown with resolution analysis**:
+```sql
+SELECT 
+  TICKET_TYPE,
+  TICKET_SUB_TYPE,
+  COUNT(*) as ticket_count,
+  AVG(FULL_RESOLUTION_TIME_IN_MINUTES) as avg_resolution_time,
+  COUNT(CASE WHEN REOPENS > 0 THEN 1 END) as tickets_with_reopens
+FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
+WHERE CREATED_AT_PST >= CURRENT_DATE - 30
+GROUP BY TICKET_TYPE, TICKET_SUB_TYPE
 ORDER BY ticket_count DESC
 ```
 
 ### Query Adaptations
-- **For date filtering**: `WHERE CREATED_AT >= CURRENT_DATE - 7`
-- **For specific agent**: `WHERE ASSIGNEE_NAME = 'John Smith'`
-- **For ticket type**: `WHERE WOPS_TICKET_TYPE_A = 'specific_type'`
-- **For volume by group**: `GROUP BY GROUP_NAME`
+- **For date filtering**: `WHERE CREATED_AT_PST >= CURRENT_DATE - 7`
+- **For specific agent**: `WHERE AGENT_NAME = 'John Smith'`
+- **For ticket type**: `WHERE TICKET_TYPE = 'specific_type'`
+- **For team analysis**: `GROUP BY TEAM_LEAD`
 - **For hourly trends**: `GROUP BY DATE_TRUNC('hour', CREATED_AT_PST)`
+- **For worker-specific analysis**: `WHERE WORKER_ID = 'specific_worker_id'`
 
 ---
 
@@ -486,61 +508,6 @@ ORDER BY qa_rank
 
 ---
 
-## Cross-Pattern Analysis Guidelines
-
-### For Complete Performance Analysis
-Choose the appropriate level and pattern combination:
-
-**Option A: Team Lead/Supervisor Analysis (Pattern 5)**
-Use Pattern 5 (WOPS Team Lead Performance) for:
-- Team performance summaries and rankings
-- Supervisor effectiveness analysis
-- Team capacity and workload planning
-- Cross-team benchmarking
-- Team-level QA and performance trends
-
-**Option B: Individual Agent Analysis (Pattern 4)**
-Use Pattern 4 (WOPS Agent Performance) for:
-- Individual agent performance summaries
-- Agent rankings and comparisons
-- Personal performance trends over time
-- Agent coaching insights
-- Individual QA score analysis (weekly aggregates)
-
-**Option C: Detailed QA Component Analysis (Pattern 6)** 🆕
-Use Pattern 6 (WOPS Klaus QA & ATA) for:
-- Individual QA review details and component breakdowns
-- Auto-fail incident analysis
-- Reviewer performance and consistency
-- Scorecard-specific analysis (QA vs ATA)
-- Channel and ticket type QA impact
-- Root cause analysis for QA failures
-
-**Option D: Detailed Operational Analysis (Patterns 1-3)**
-Combine Patterns 1-3 when granular, real-time data is needed:
-1. **Volume**: Use WOPS Tickets pattern (ticket-level details)
-2. **Efficiency**: Use Handle Time pattern (detailed AHT metrics)
-3. **Effectiveness**: Use FCR pattern (contact resolution analysis)
-
-**Multi-Level QA Analysis Flow**:
-```sql
--- Team QA Summary (Pattern 5)
--- → Agent QA Weekly (Pattern 4) 
--- → Individual Review Details (Pattern 6)
--- → Related Ticket Analysis (Pattern 1)
-```
-
-### For Channel Comparison
-- Use Contact Channel derivation (same logic across patterns)
-- Compare metrics across Chat, Voice, and Web channels
-
-### For Time-Based Analysis
-- All patterns have PST timestamp columns
-- Use DATE_TRUNC for hourly/daily/weekly aggregations
-- Consider business hours filtering when relevant
-
----
-
 ## Pattern 5: WOPS Team Lead Performance (Weekly Aggregated)
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE`
@@ -819,400 +786,205 @@ GROUP BY tl.SUPERVISOR, tl.QA_SCORE
 
 ---
 
----
+## Pattern 6: Agent Schedule Adherence Analysis
 
-## Pattern 6: WOPS Klaus QA & ATA Detailed Reviews
-
-**Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA`
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE`
 
 ### Questions This Pattern Answers
-- What are individual QA review details and scores?
-- Show QA component breakdown (Resolution, Communication, Handling, Clerical)
-- Which reviews had auto-fail incidents?
-- What are the most common QA failures by component?
-- QA score distribution by scorecard type
-- Reviewer performance and consistency analysis
-- Agent QA performance on specific components
-- Detailed QA trends by ticket type and channel
-- ATA (Agent Training Assessment) vs QA comparison
-- QA review details for specific tickets
-- Component score correlation analysis
-- Scorecard-specific performance analysis
-- QA failure root cause analysis
-- Channel-specific QA performance
-- Ticket type impact on QA scores
+- What is the overall schedule adherence rate?
+- Which agents have the best/worst adherence?
+- Schedule adherence by team/supervisor
+- What are the most common non-adherent activities?
+- How much time do agents spend offline vs scheduled?
+- Schedule adherence trends over time
+- Impact of scheduled task type on adherence
+- Peak adherence hours analysis
+- Adherence patterns by day of week
+- Scheduled vs actual time analysis
+- Break adherence patterns
+- Training schedule adherence
+- Meeting attendance rates
+- Schedule variance analysis
 
-### Scorecard Types Available
-Based on SCORECARD_ID and SCORECARD_NAME columns, this table contains multiple scorecard types including QA and ATA assessments.
-
-### Component Scoring Structure
-Each component has both a **rating score** and a **base score**:
-- **Resolution**: `RESOLUTION_RATING_SCORE` / `RESOLUTION_BASE`
-- **Communication**: `COMMUNICATION_RATING_SCORE` / `COMMUNICATION_BASE`  
-- **Handling**: `HANDLING_RATING_SCORE` / `HANDLING_BASE`
-- **Clerical**: `CLERICAL_RATING_SCORE` / `CLERICAL_BASE`
+### Key Metrics (Pre-Calculated)
+- **Adherence Percentage**: Direct field `ADHERENCE_PERCENTAGE`
+- **Time Metrics**: 
+  - SCHEDULED_MINUTES: Total time scheduled for the task
+  - ADHERENT_MINUTES: Time actually spent adhering to schedule
+  - NON_ADHERENT_LOGGED_MINUTES: Time logged but not adherent to schedule
+  - OFFLINE_MINUTES: Time completely offline
+  - TOTAL_NON_ADHERENT_MINUTES: Total time not following schedule
+  - TOTAL_OVERLAP_MINUTES: Time overlapping between scheduled and actual
 
 ### Important Columns
-- **Identifiers**: REVIEW_ID, TICKET_ID, SCORECARD_ID
-- **Review Details**: SCORECARD_NAME, SOURCE_TYPE, REVIEW_URL, TICKET_URL
-- **People**: REVIEWEE_NAME, REVIEWEE_EMAIL, REVIEWER_NAME, REVIEWER_EMAIL
-- **Timestamps**: REVIEW_CREATED_AT, REVIEW_UPDATED_AT, CREATED_AT_ISO, UPDATED_AT_ISO
-- **Scores**: OVERALL_SCORE, NO_AUTO_FAIL_RATING_SCORE, component rating scores
-- **Context**: WOPS_TICKET_TYPE_A, PAYMENTS_CATEGORY_B, CONTACT_CHANNEL
-- **Details**: REVIEW_COMMENT, MARKDOWN_DETAIL
+- **Identifiers**: ADHERENCE_KEY, AGENT_ID, AGENT_AVAILABILITY_ID, SCHEDULE_ID, TASK_ID
+- **Agent Info**: AGENT_NAME, AGENT_EMAIL
+- **Schedule Info**: SCHEDULED_TASK, SCHEDULED_START, SCHEDULED_END
+- **Date/Time**: ADHERENCE_DATE
+- **Metrics**: All time-based columns listed above
 
-### Key Derived Fields for Analysis
-
-**Component Percentage Scores**:
-```sql
-CASE 
-  WHEN RESOLUTION_BASE = 0 THEN NULL
-  ELSE (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100
-END AS resolution_percentage,
-
-CASE 
-  WHEN COMMUNICATION_BASE = 0 THEN NULL
-  ELSE (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100  
-END AS communication_percentage,
-
-CASE 
-  WHEN HANDLING_BASE = 0 THEN NULL
-  ELSE (HANDLING_RATING_SCORE / HANDLING_BASE) * 100
-END AS handling_percentage,
-
-CASE 
-  WHEN CLERICAL_BASE = 0 THEN NULL
-  ELSE (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100
-END AS clerical_percentage
-```
-
-**Pass/Fail Status**:
-```sql
-CASE
-  WHEN SCORECARD_NAME LIKE '%ATA%' AND OVERALL_SCORE >= 85 THEN 'Pass'
-  WHEN SCORECARD_NAME LIKE '%QA%' AND OVERALL_SCORE >= 80 THEN 'Pass'
-  WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 'Auto-Fail'
-  ELSE 'Fail'
-END AS review_status
-```
-
-**Auto-Fail Detection**:
-```sql
-CASE
-  WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1
-  ELSE 0
-END AS has_auto_fail
-```
+### Key Scheduled Tasks
+Common values in SCHEDULED_TASK field:
+- "Available" - Regular availability periods
+- "Break" - Scheduled breaks
+- "Lunch" - Lunch periods  
+- "Meeting" - Scheduled meetings
+- "Training" - Training sessions
+- "Coaching" - Coaching sessions
+- "Admin" - Administrative tasks
 
 ### Sample Queries
 
-**Agent QA component performance**:
+**Overall adherence rate**:
 ```sql
 SELECT 
-  REVIEWEE_NAME,
-  COUNT(*) as total_reviews,
-  AVG(OVERALL_SCORE) as avg_overall_score,
-  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution_pct,
-  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication_pct,
-  AVG(CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END) as avg_handling_pct,
-  AVG(CASE WHEN CLERICAL_BASE > 0 THEN (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 END) as avg_clerical_pct,
-  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) as auto_fail_count
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY REVIEWEE_NAME
-ORDER BY avg_overall_score DESC
+  AVG(ADHERENCE_PERCENTAGE) as overall_adherence_rate,
+  COUNT(DISTINCT AGENT_ID) as agents_count,
+  COUNT(*) as total_schedule_periods
+FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+WHERE ADHERENCE_DATE >= CURRENT_DATE - 7
 ```
 
-**QA vs ATA scorecard comparison**:
+**Agent adherence ranking**:
 ```sql
 SELECT 
-  CASE 
-    WHEN SCORECARD_NAME LIKE '%ATA%' THEN 'ATA'
-    WHEN SCORECARD_NAME LIKE '%QA%' THEN 'QA'
-    ELSE 'Other'
-  END as scorecard_type,
-  COUNT(*) as review_count,
-  AVG(OVERALL_SCORE) as avg_score,
-  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution,
-  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication,
-  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY scorecard_type
-ORDER BY scorecard_type
+  AGENT_NAME,
+  AVG(ADHERENCE_PERCENTAGE) as avg_adherence_rate,
+  SUM(SCHEDULED_MINUTES) as total_scheduled_minutes,
+  SUM(ADHERENT_MINUTES) as total_adherent_minutes,
+  SUM(OFFLINE_MINUTES) as total_offline_minutes,
+  COUNT(*) as schedule_periods
+FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+WHERE ADHERENCE_DATE >= CURRENT_DATE - 30
+GROUP BY AGENT_NAME, AGENT_EMAIL
+ORDER BY avg_adherence_rate DESC
 ```
 
-**Component failure analysis**:
+**Schedule adherence by task type**:
 ```sql
 SELECT 
-  'Resolution' as component,
-  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_score,
-  SUM(CASE WHEN RESOLUTION_BASE > 0 AND (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
-  COUNT(CASE WHEN RESOLUTION_BASE > 0 THEN 1 END) as total_scored
-
-UNION ALL
-
-SELECT 
-  'Communication' as component,
-  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_score,
-  SUM(CASE WHEN COMMUNICATION_BASE > 0 AND (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
-  COUNT(CASE WHEN COMMUNICATION_BASE > 0 THEN 1 END) as total_scored
-
-UNION ALL
-
-SELECT 
-  'Handling' as component,
-  AVG(CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END) as avg_score,
-  SUM(CASE WHEN HANDLING_BASE > 0 AND (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
-  COUNT(CASE WHEN HANDLING_BASE > 0 THEN 1 END) as total_scored
-
-UNION ALL
-
-SELECT 
-  'Clerical' as component,
-  AVG(CASE WHEN CLERICAL_BASE > 0 THEN (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 END) as avg_score,
-  SUM(CASE WHEN CLERICAL_BASE > 0 AND (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 < 80 THEN 1 ELSE 0 END) as failure_count,
-  COUNT(CASE WHEN CLERICAL_BASE > 0 THEN 1 END) as total_scored
-
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-ORDER BY avg_score DESC
+  SCHEDULED_TASK,
+  AVG(ADHERENCE_PERCENTAGE) as avg_adherence_rate,
+  COUNT(*) as instances,
+  AVG(SCHEDULED_MINUTES) as avg_scheduled_duration,
+  AVG(ADHERENT_MINUTES) as avg_adherent_duration,
+  AVG(OFFLINE_MINUTES) as avg_offline_duration
+FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+WHERE ADHERENCE_DATE >= CURRENT_DATE - 7
+GROUP BY SCHEDULED_TASK
+ORDER BY avg_adherence_rate DESC
 ```
 
-**Channel-specific QA performance**:
+**Daily adherence trends**:
 ```sql
 SELECT 
-  CONTACT_CHANNEL,
-  COUNT(*) as review_count,
-  AVG(OVERALL_SCORE) as avg_overall_score,
-  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution,
-  AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication,
-  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-  AND CONTACT_CHANNEL IS NOT NULL
-GROUP BY CONTACT_CHANNEL
-ORDER BY avg_overall_score DESC
+  ADHERENCE_DATE,
+  AVG(ADHERENCE_PERCENTAGE) as daily_adherence_rate,
+  COUNT(DISTINCT AGENT_ID) as agents_scheduled,
+  SUM(SCHEDULED_MINUTES) as total_scheduled_minutes,
+  SUM(ADHERENT_MINUTES) as total_adherent_minutes
+FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+WHERE ADHERENCE_DATE >= CURRENT_DATE - 30
+GROUP BY ADHERENCE_DATE
+ORDER BY ADHERENCE_DATE
 ```
 
-**Reviewer consistency analysis**:
+**Break adherence analysis**:
 ```sql
 SELECT 
-  REVIEWER_NAME,
-  COUNT(*) as reviews_conducted,
-  AVG(OVERALL_SCORE) as avg_score_given,
-  STDDEV(OVERALL_SCORE) as score_std_dev,
-  MIN(OVERALL_SCORE) as min_score,
-  MAX(OVERALL_SCORE) as max_score,
-  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-GROUP BY REVIEWER_NAME
-HAVING COUNT(*) >= 10  -- Only reviewers with sufficient volume
-ORDER BY score_std_dev ASC  -- Most consistent reviewers first
+  AGENT_NAME,
+  COUNT(CASE WHEN SCHEDULED_TASK = 'Break' THEN 1 END) as break_periods,
+  AVG(CASE WHEN SCHEDULED_TASK = 'Break' THEN ADHERENCE_PERCENTAGE END) as avg_break_adherence,
+  AVG(CASE WHEN SCHEDULED_TASK = 'Break' THEN SCHEDULED_MINUTES END) as avg_break_duration,
+  AVG(CASE WHEN SCHEDULED_TASK = 'Break' THEN OFFLINE_MINUTES END) as avg_break_offline_time
+FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+WHERE ADHERENCE_DATE >= CURRENT_DATE - 7
+  AND SCHEDULED_TASK IN ('Break', 'Lunch')
+GROUP BY AGENT_NAME
+ORDER BY avg_break_adherence DESC
 ```
 
-**Ticket type QA impact**:
+**Hourly adherence patterns**:
 ```sql
 SELECT 
-  WOPS_TICKET_TYPE_A,
-  COUNT(*) as review_count,
-  AVG(OVERALL_SCORE) as avg_score,
-  SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate,
-  AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-  AND WOPS_TICKET_TYPE_A IS NOT NULL
-GROUP BY WOPS_TICKET_TYPE_A
-ORDER BY auto_fail_rate DESC
-```
-
-**Individual review details lookup**:
-```sql
-SELECT 
-  REVIEW_ID,
-  TICKET_ID,
-  REVIEWEE_NAME,
-  REVIEWER_NAME,
-  SCORECARD_NAME,
-  OVERALL_SCORE,
-  CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 'Yes' ELSE 'No' END as auto_fail,
-  CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END as resolution_pct,
-  CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END as communication_pct,
-  CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END as handling_pct,
-  CASE WHEN CLERICAL_BASE > 0 THEN (CLERICAL_RATING_SCORE / CLERICAL_BASE) * 100 END as clerical_pct,
-  REVIEW_COMMENT,
-  REVIEW_CREATED_AT
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA
-WHERE REVIEWEE_NAME = 'Agent Name'
-  AND REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'
-ORDER BY REVIEW_CREATED_AT DESC
+  EXTRACT(HOUR FROM SCHEDULED_START) as hour_of_day,
+  AVG(ADHERENCE_PERCENTAGE) as avg_adherence_rate,
+  COUNT(*) as schedule_instances,
+  AVG(OFFLINE_MINUTES) as avg_offline_minutes
+FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+WHERE ADHERENCE_DATE >= CURRENT_DATE - 7
+  AND SCHEDULED_TASK = 'Available'
+GROUP BY EXTRACT(HOUR FROM SCHEDULED_START)
+ORDER BY hour_of_day
 ```
 
 ### Query Adaptations
-- **For specific agent**: `WHERE REVIEWEE_NAME = 'Agent Name'`
-- **For specific reviewer**: `WHERE REVIEWER_NAME = 'Reviewer Name'`
-- **For scorecard type**: `WHERE SCORECARD_NAME LIKE '%QA%'` or `WHERE SCORECARD_NAME LIKE '%ATA%'`
-- **For auto-fails only**: `WHERE NO_AUTO_FAIL_RATING_SCORE < 100`
-- **For specific ticket**: `WHERE TICKET_ID = 'ticket_id'`
-- **For channel analysis**: `WHERE CONTACT_CHANNEL = 'Chat'`
-- **For date range**: `WHERE REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL 'N days'`
-- **For component analysis**: Focus on specific RATING_SCORE/BASE combinations
-- **For pass/fail analysis**: Use derived pass/fail logic based on scorecard thresholds
+- **For specific date range**: `WHERE ADHERENCE_DATE BETWEEN 'YYYY-MM-DD' AND 'YYYY-MM-DD'`
+- **For specific agents**: `WHERE AGENT_NAME IN ('Agent1', 'Agent2')`
+- **For work hours only**: `WHERE EXTRACT(HOUR FROM SCHEDULED_START) BETWEEN 8 AND 17`
+- **For non-break activities**: `WHERE SCHEDULED_TASK NOT IN ('Break', 'Lunch')`
+- **For poor adherence**: `WHERE ADHERENCE_PERCENTAGE < 80`
+- **For high offline time**: `WHERE OFFLINE_MINUTES > 30`
 
-### Business Intelligence Use Cases
-
-**Quality Assurance Management**:
-- Individual QA review analysis and tracking
-- Component-level performance identification
-- Auto-fail incident investigation
-- QA coaching and development priorities
-
-**Agent Development**:
-- Detailed component strength/weakness analysis
-- QA improvement tracking over time
-- Specific skill area focus identification
-- Performance correlation with ticket types
-
-**QA Program Analysis**:
-- Reviewer consistency and calibration
-- Scorecard effectiveness evaluation
-- Channel-specific QA challenges
-- Component scoring distribution analysis
-
-**Operational Insights**:
-- Ticket type impact on QA performance
-- Contact channel QA correlation
-- QA trend analysis and patterns
-- Root cause analysis for QA failures
-
-### Integration with Other Patterns
-
-**Complement Weekly Summaries**:
-- **From Pattern 4/5 Weekly QA**: Drill down to individual reviews with Pattern 6
-- **From Pattern 6 Details**: Roll up to weekly trends with Pattern 4/5
-
-**Cross-Analysis Opportunities**:
-```sql
--- Compare detailed QA (Pattern 6) with weekly performance (Pattern 4)
-SELECT 
-  ap.ASSIGNEE_NAME,
-  ap.SOLVED_WEEK,
-  ap.QA_SCORE as weekly_qa_avg,
-  AVG(qa.OVERALL_SCORE) as detailed_qa_avg,
-  COUNT(qa.REVIEW_ID) as reviews_count
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE ap
-LEFT JOIN ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA qa
-  ON ap.ASSIGNEE_NAME = qa.REVIEWEE_NAME
-  AND qa.REVIEW_CREATED_AT >= ap.SOLVED_WEEK - INTERVAL '7 days'
-  AND qa.REVIEW_CREATED_AT < ap.SOLVED_WEEK
-WHERE ap.SOLVED_WEEK >= CURRENT_DATE - INTERVAL '4 weeks'
-GROUP BY ap.ASSIGNEE_NAME, ap.SOLVED_WEEK, ap.QA_SCORE
-ORDER BY ap.SOLVED_WEEK DESC
-```
-
-**Ticket-Level Analysis**:
-```sql
--- Connect QA reviews (Pattern 6) with ticket details (Pattern 1)
-SELECT 
-  qa.TICKET_ID,
-  qa.REVIEWEE_NAME,
-  qa.OVERALL_SCORE,
-  wt.WOPS_TICKET_TYPE_A,
-  wt.HANDLE_TIME,
-  wt.CONTACT_CHANNEL
-FROM ANALYTICS.DBT_PRODUCTION.WOPS_KLAUS__QA_ATA qa
-JOIN ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS wt
-  ON qa.TICKET_ID = wt.TICKET_ID
-WHERE qa.REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '7 days'
-```
-
-### Performance Benchmarks (Review-Level)
-- **Excellent QA**: 90+ overall score
-- **Good QA**: 80-89 overall score
-- **Component Target**: 80%+ on each component
-- **Auto-Fail Rate**: <5% acceptable threshold
-- **Review Volume**: Minimum 2-3 reviews per agent per month
+### Business Rules
+- **Good Adherence**: >= 85%
+- **Acceptable Adherence**: 80-84%
+- **Poor Adherence**: < 80%
+- **Excessive Offline**: > 15 minutes per hour scheduled
 
 ---
 
-## Pattern Selection Decision Tree
+## Cross-Pattern Analysis Guidelines
 
-When users ask performance-related questions, use this decision tree:
+### For Complete Agent Performance Analysis
+Combine all six patterns:
+1. **Volume**: Use WOPS Tickets pattern (tickets handled)
+2. **Efficiency**: Use Handle Time pattern (AHT metrics)
+3. **Effectiveness**: Use FCR pattern (first contact resolution)
+4. **Performance**: Use Agent Performance pattern (weekly summaries)
+5. **Leadership**: Use Team Lead Performance pattern (supervisor metrics)
+6. **Adherence**: Use Schedule Adherence pattern (schedule compliance)
 
-```
-Is the question about...
+### For Channel Comparison
+- Use Contact Channel derivation (same logic across patterns)
+- Compare metrics across Chat, Voice, and Web channels
 
-├── Detailed QA component analysis/individual reviews? 🆕
-│   └── Use Pattern 6 (WOPS Klaus QA & ATA) ✅
-│
-├── Individual agent weekly performance/trends?
-│   └── Use Pattern 4 (WOPS Agent Performance) ✅
-│
-├── Team lead/supervisor/team performance?
-│   └── Use Pattern 5 (WOPS Team Lead Performance) ✅
-│
-├── Real-time/daily operational data?
-│   └── Use Patterns 1-3 (detailed data)
-│
-└── [Other specific analyses...]
-```
+### For Time-Based Analysis
+- All patterns have PST timestamp columns
+- Use DATE_TRUNC for hourly/daily/weekly aggregations
+- Consider business hours filtering when relevant
 
-**Key Principle**: 
-- Pattern 5 for **team lead/supervisor performance** questions
-- Pattern 4 for **individual agent performance** questions  
-- Pattern 6 for **detailed QA component analysis and individual review investigation** 🆕
-- Patterns 1-3 for **detailed operational analysis** when weekly summaries aren't sufficient
-
-## Priority Guidelines for AI Assistant
-
-1. **First Choice - Team Level**: Pattern 5 for team lead, supervisor, or team performance questions
-2. **First Choice - Agent Level**: Pattern 4 for individual agent performance, rankings, or weekly metrics
-3. **First Choice - QA Details**: Pattern 6 for detailed QA component analysis, individual reviews, or QA investigation 🆕
-4. **Second Choice**: Specific patterns (1-3) only when Patterns 4-6 don't have the required detail
-5. **Multi-Level**: Start with appropriate summary pattern (4 or 5), drill down to detailed analysis (6 or 1-3) if needed
-
-This approach provides faster, more accurate responses for the majority of business questions while still allowing detailed analysis when necessary.
+### For Team Performance Analysis
+- Join patterns on AGENT_NAME or AGENT_EMAIL
+- Use TEAM_LEAD field from RPT_WOPS_TICKETS for team grouping
+- Consider schedule adherence as a leading indicator
 
 ## Important Notes
-1. Always verify which filters are pre-applied in each pattern
-2. Some patterns (like FCR) already have significant filtering
+1. **RPT tables are pre-filtered** - no complex WHERE clauses needed for Pattern 1
+2. **Direct field access** for CONTACT_CHANNEL, TICKET_SUB_TYPE in Pattern 1
 3. Handle time metrics are pre-calculated - no need for complex calculations
-4. **QA scores are available as:**
-   - **Weekly aggregates**: Patterns 4 and 5
-   - **Individual review details**: Pattern 6 🆕
-5. **Pattern 5 provides team-level insights, Pattern 4 provides agent-level insights, Pattern 6 provides review-level insights** 🆕
-6. Consider joining patterns on TICKET_ID, AGENT identifiers, or SUPERVISOR for comprehensive analysis
+4. Schedule adherence percentages are pre-calculated and ready to use
+5. Consider joining patterns on AGENT_NAME/AGENT_EMAIL for comprehensive analysis
+6. RPT_WOPS_TICKETS includes both WORKER_ID and AGENT_ID for different analysis perspectives
 
 ## Common Business Questions and Pattern Usage
 
-| Question | Primary Pattern | Additional Patterns | Notes |
-|----------|----------------|-------------------|-------|
-| "How many tickets today?" | WOPS Tickets (1) | - | Use for real-time daily metrics |
-| "What's our AHT?" | Handle Time (2) | WOPS Performance (4/5) | Patterns 4/5 for weekly averages |
-| "Agent performance dashboard" | **WOPS Agent Performance (4)** | Patterns 1-3 for details | **Start with Pattern 4** |
-| "Team performance dashboard" | **WOPS TL Performance (5)** | Pattern 4 for agent details | **Start with Pattern 5** |
-| "Top performing agents this week" | **WOPS Agent Performance (4)** | - | **Perfect for this question** |
-| "Top performing teams this week" | **WOPS TL Performance (5)** | - | **Perfect for this question** |
-| "Team lead rankings" | **WOPS TL Performance (5)** | - | **Team leader specific** |
-| "Supervisor performance" | **WOPS TL Performance (5)** | Pattern 4 for team agents | **Team lead focus** |
-| "Weekly performance trends" | **WOPS Performance (4/5)** | - | **Choose based on level needed** |
-| "Agent QA scores" | **WOPS Agent Performance (4)** | Pattern 6 for details | **Weekly agent QA aggregates** |
-| "Team QA scores" | **WOPS TL Performance (5)** | Pattern 6 for details | **Weekly team QA aggregates** |
-| "QA component breakdown" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Detailed component analysis** |
-| "QA review details" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Individual review investigation** |
-| "Auto-fail analysis" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Auto-fail incident details** |
-| "Reviewer performance" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **QA reviewer consistency** |
-| "QA by ticket type" | **WOPS Klaus QA & ATA (6)** 🆕 | Pattern 1 for ticket details | **Ticket type QA impact** |
-| "QA by channel" | **WOPS Klaus QA & ATA (6)** 🆕 | - | **Channel-specific QA analysis** |
-| "Quality rankings" | **WOPS Performance (4/5)** | Pattern 6 for details | **Choose appropriate level** |
-| "Channel efficiency" | Handle Time (2) | WOPS Tickets (1) for volume | - |
-| "Why are customers calling back?" | FCR (3) | WOPS Tickets (1) for issue types | - |
-| "Peak hour analysis" | Handle Time (2) | WOPS Tickets (1) for volume | - |
-| "Escalation patterns" | WOPS Tickets (1) | Handle Time (2) for duration | - |
-| "Performance coaching insights" | **WOPS Performance (4/5)** | Pattern 6 for QA details | **Start with appropriate level** |
-| "Week-over-week comparison" | **WOPS Performance (4/5)** | - | **Built for this analysis** |
-| "Customer satisfaction trends" | **WOPS Performance (4/5)** | - | **Available at both levels** |
-| "Team capacity planning" | **WOPS TL Performance (5)** | Pattern 4 for agent details | **Team lead specific** |
-| "Workload distribution" | **WOPS TL Performance (5)** | Pattern 4 for agents | **Team level analysis** |
-| "Cross-team benchmarking" | **WOPS TL Performance (5)** | - | **Multi-team comparison** |
+| Question | Primary Pattern | Additional Patterns |
+|----------|----------------|-------------------|
+| "How many tickets today?" | WOPS Tickets (1) | - |
+| "What's our AHT?" | Handle Time (2) | - |
+| "Agent performance dashboard" | Agent Performance (4) | All patterns for complete view |
+| "Team performance dashboard" | Team Lead Performance (5) | Pattern 4 for agent details |
+| "Channel efficiency" | Handle Time (2) | WOPS Tickets (1) for volume |
+| "Quality scores by team" | Team Lead Performance (5) | Agent Performance (4) |
+| "Why are customers calling back?" | FCR (3) | WOPS Tickets (1) for issue types |
+| "Peak hour analysis" | Handle Time (2), Schedule Adherence (6) | WOPS Tickets (1) for volume |
+| "Escalation patterns" | WOPS Tickets (1) | Handle Time (2) for duration |
+| "Schedule compliance issues" | Schedule Adherence (6) | - |
+| "Agent coaching priorities" | Agent Performance (4), Schedule Adherence (6) | Handle Time (2), FCR (3) |
+| "Workforce planning metrics" | Schedule Adherence (6), Team Lead Performance (5) | Handle Time (2) for capacity |
+| "Break pattern analysis" | Schedule Adherence (6) | - |
+| "Training effectiveness" | Agent Performance (4) | Schedule Adherence (6) for training sessions |
+| "Adherence trends" | Schedule Adherence (6) | - |
+| "Offline time analysis" | Schedule Adherence (6) | - |
+| "Meeting attendance" | Schedule Adherence (6) | - |
