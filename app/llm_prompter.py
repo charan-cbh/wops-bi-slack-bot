@@ -36,6 +36,12 @@ VALKEY_PORT = int(os.getenv("VALKEY_PORT", 6379))
 VALKEY_USE_TLS = os.getenv("VALKEY_USE_TLS", "true").lower() == "true"
 IS_LOCAL_DEV = os.getenv("IS_LOCAL_DEV", "false").lower() == "true"
 
+ENABLE_CACHE = os.getenv("ENABLE_CACHE", "true").lower() == "true"
+MAX_SQL_ATTEMPTS = int(os.getenv("MAX_SQL_ATTEMPTS", "3"))
+
+print(f"🔧 Cache enabled: {ENABLE_CACHE}")
+print(f"🔧 Max SQL attempts: {MAX_SQL_ATTEMPTS}")
+
 # Import Snowflake runner for schema discovery
 try:
     from app.snowflake_runner import run_query
@@ -976,6 +982,12 @@ Return ONLY a JSON object with table names as keys and descriptions as values.""
 
 async def cache_table_selection(question: str, selected_table: str, reason: str, success: bool = True):
     """Cache the table selection for future similar questions"""
+
+    # Check cache flag first
+    if not ENABLE_CACHE:
+        print(f"💾 Cache disabled - not storing table selection")
+        return
+
     # Extract key phrases
     key_phrases = extract_key_phrases(question)
 
@@ -1015,6 +1027,12 @@ async def cache_table_selection(question: str, selected_table: str, reason: str,
 
 async def get_cached_table_suggestion(question: str) -> Optional[str]:
     """Check if we have a cached table selection for this question"""
+
+    # Check cache flag first
+    if not ENABLE_CACHE:
+        print(f"💾 Cache disabled - no cached suggestions available")
+        return None
+
     # First check exact question match
     selection_key = f"{TABLE_SELECTION_PREFIX}:{get_question_hash(question)}"
     cached_selection = await safe_valkey_get(selection_key)
@@ -1045,7 +1063,7 @@ async def get_cached_table_suggestion(question: str) -> Optional[str]:
 
             # Weight by success rate and recency
             success_rate = stats['success_count'] / stats['count'] if stats['count'] > 0 else 0
-            recency_weight = 1.0 if (time.time() - stats['last_used']) < 86400 else 0.5  # Less weight if >1 day old
+            recency_weight = 1.0 if (time.time() - stats['last_used']) < 86400 else 0.5
 
             table_scores[table] += success_rate * recency_weight * stats['count']
 
@@ -2539,75 +2557,16 @@ def validate_sql_columns(sql: str, available_columns: list) -> tuple[bool, list]
 
     return len(missing_columns) == 0, missing_columns
 
+
 async def generate_sql_intelligently(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
-    """Clean SQL generation - let assistant handle the intelligence"""
-    print(f"\n🤖 Generating SQL for: {user_question}")
+    """Generate SQL with optional retry logic based on configuration"""
 
-    await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
-
-    selected_table = None
-
-    try:
-        # Step 1: Get cached table or find new one
-        cached_table = await get_cached_table_suggestion(user_question)
-
-        if cached_table:
-            print(f"📋 Using cached table: {cached_table}")
-            selected_table = cached_table
-        else:
-            print("🔍 Finding relevant tables...")
-            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=8)
-
-            if not candidate_tables:
-                return "-- Error: Could not find relevant tables for this question.", None
-
-            print(f"📊 Found {len(candidate_tables)} candidate tables")
-
-            selected_table, selection_reason = await select_best_table_using_samples(
-                user_question, candidate_tables, user_id, channel_id
-            )
-
-            if not selected_table:
-                return "-- Error: Could not determine appropriate table", None
-
-            await cache_table_selection(user_question, selected_table, selection_reason)
-
-        # Step 2: Get schema
-        schema = await discover_table_schema(selected_table)
-        if schema.get('error'):
-            print(f"⚠️ Schema discovery failed: {schema.get('error')}")
-            schema = {'table': selected_table, 'columns': [], 'error': schema.get('error')}
-
-    except Exception as e:
-        print(f"⚠️ Error during table selection: {e}")
-        return f"-- Error: {str(e)}", None
-
-    # Step 3: Let assistant generate perfect SQL
-    question_intent = analyze_question_intent(user_question.lower())
-    print(f"🎯 Question intent: {question_intent['type']}")
-
-    thread_id = await get_or_create_thread(user_id, channel_id)
-    if not thread_id:
-        return "-- Error: Could not create conversation thread", selected_table
-
-    # Enhanced instructions for better SQL generation
-    sql_instructions = build_enhanced_sql_instructions(question_intent, selected_table, schema, user_question)
-
-    # Get SQL from assistant
-    response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
-
-    # Extract SQL - minimal processing
-    sql = extract_sql_from_response(response)
-
-    # Only basic cleanup - no validation logic
-    if sql and not sql.strip().endswith(';'):
-        sql = sql.strip() + ';'
-
-    print(f"\n🧠 Generated SQL:")
-    print(f"{sql}")
-    print(f"{'=' * 60}\n")
-
-    return sql, selected_table
+    if MAX_SQL_ATTEMPTS > 1:
+        print(f"🔄 Using retry logic with {MAX_SQL_ATTEMPTS} attempts")
+        return await generate_sql_with_retry_logic(user_question, user_id, channel_id)
+    else:
+        print(f"🔄 Using normal generation (no retry)")
+        return await generate_sql_intelligently_normal(user_question, user_id, channel_id)
 
 
 def build_sql_instructions_with_business_logic(intent: Dict, table: str, schema: Dict, original_question: str) -> Dict:
@@ -2950,9 +2909,16 @@ async def update_conversation_context_with_sql(user_id: str, channel_id: str, qu
 
     await safe_valkey_set(redis_key, context, ex=CONVERSATION_CACHE_TTL)
 
+
 async def update_sql_cache_with_results(user_question: str, sql_query: str, result_count: int,
                                         selected_table: str = None):
     """Update cache after execution"""
+
+    # Check cache flag first
+    if not ENABLE_CACHE:
+        print(f"💾 Cache disabled - not storing SQL results")
+        return
+
     try:
         if not sql_query or sql_query.startswith("--") or sql_query.startswith("⚠️"):
             print(f"🚫 Not caching failed query")
@@ -2995,7 +2961,6 @@ async def update_sql_cache_with_results(user_question: str, sql_query: str, resu
 
     except Exception as e:
         print(f"⚠️ Error updating SQL cache: {e}")
-        # Don't raise - this is non-critical
 
 
 async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str,
@@ -3188,6 +3153,316 @@ async def get_learning_insights():
 
     return "\n".join(insights)
 
+async def generate_sql_with_retry_logic(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
+    """Generate SQL with intelligent retry - assistant learns from errors"""
+
+    print(f"\n🔄 Starting SQL generation with retry logic (max {MAX_SQL_ATTEMPTS} attempts)")
+
+    selected_table = None
+    last_error = None
+
+    for attempt in range(MAX_SQL_ATTEMPTS):
+        print(f"\n{'=' * 60}")
+        print(f"🔄 ATTEMPT {attempt + 1}/{MAX_SQL_ATTEMPTS}")
+        print(f"{'=' * 60}")
+
+        try:
+            if attempt == 0:
+                # First attempt - normal generation
+                sql, selected_table = await generate_sql_intelligently_normal(user_question, user_id, channel_id)
+            else:
+                # Retry attempts - include error context for assistant to learn
+                sql, selected_table = await generate_sql_with_error_context(
+                    user_question, user_id, channel_id, selected_table, last_error, attempt
+                )
+
+            if not sql or sql.startswith("-- Error:"):
+                print(f"❌ Attempt {attempt + 1}: SQL generation failed")
+                last_error = sql
+                continue
+
+            # Test the generated SQL by executing it
+            print(f"🧪 Testing SQL from attempt {attempt + 1}...")
+
+            # Quick validation test
+            test_result = await test_sql_execution(sql)
+
+            if test_result['success']:
+                print(f"✅ Attempt {attempt + 1}: SQL validation successful!")
+                return sql, selected_table
+            else:
+                print(f"❌ Attempt {attempt + 1}: SQL validation failed - {test_result['error']}")
+                last_error = test_result['error']
+                continue
+
+        except Exception as e:
+            print(f"💥 Attempt {attempt + 1}: Exception during generation - {str(e)}")
+            last_error = str(e)
+            continue
+
+    # All attempts failed
+    print(f"\n❌ ALL {MAX_SQL_ATTEMPTS} ATTEMPTS FAILED")
+    error_message = f"-- Error: Failed to generate working SQL after {MAX_SQL_ATTEMPTS} attempts. Last error: {last_error}"
+    return error_message, selected_table
+
+
+async def generate_sql_intelligently_normal(user_question: str, user_id: str, channel_id: str) -> Tuple[str, str]:
+    """Normal SQL generation (existing logic with cache flag)"""
+    print(f"\n🤖 Starting SQL generation for: {user_question}")
+
+    # Store the fact that we're generating SQL for context
+    await update_conversation_context(user_id, channel_id, user_question, "Generating SQL query...", 'sql_generation')
+
+    selected_table = None
+
+    try:
+        # Step 1: Check cache (respects ENABLE_CACHE flag)
+        cached_table = await get_cached_table_suggestion(user_question)
+
+        if cached_table:
+            print(f"📋 Using cached table suggestion: {cached_table}")
+            selected_table = cached_table
+            selection_reason = "Based on successful similar queries"
+        else:
+            # Step 2: Use vector search to find relevant tables
+            print("🔍 Searching dbt manifest for relevant tables...")
+            candidate_tables = await find_relevant_tables_from_vector_store(user_question, user_id, channel_id, top_k=8)
+
+            if not candidate_tables:
+                print("⚠️ No candidate tables found from vector search")
+                return "-- Error: Could not find relevant tables for this question. Please ensure your question mentions specific metrics or entities.", None
+
+            print(f"📊 Found {len(candidate_tables)} candidate tables")
+
+            # Step 3: Sample data from candidate tables and select best one
+            selected_table, selection_reason = await select_best_table_using_samples(
+                user_question, candidate_tables, user_id, channel_id
+            )
+
+            if not selected_table:
+                return "-- Error: Could not determine appropriate table", None
+
+            # Cache this selection for future use (respects ENABLE_CACHE flag)
+            await cache_table_selection(user_question, selected_table, selection_reason)
+
+        # Step 4: Discover schema for the selected table
+        schema = await discover_table_schema(selected_table)
+
+        if schema.get('error'):
+            print(f"⚠️ Schema discovery failed: {schema.get('error')}")
+            schema = {
+                'table': selected_table,
+                'columns': [],
+                'error': schema.get('error')
+            }
+
+    except Exception as e:
+        print(f"⚠️ Error during intelligent table selection: {e}")
+        traceback.print_exc()
+        return f"-- Error: {str(e)}", None
+
+    # Step 5: Analyze question intent
+    question_lower = user_question.lower()
+    question_intent = analyze_question_intent(question_lower)
+    print(f"🎯 Question intent: {question_intent['type']}")
+
+    # Step 6: Generate SQL with assistant
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return "-- Error: Could not create conversation thread", selected_table
+
+    # Build SQL generation instructions based on intent and actual data
+    sql_instructions = build_enhanced_sql_instructions(
+        question_intent,
+        selected_table,
+        schema,
+        user_question
+    )
+
+    response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
+
+    # Extract SQL from response
+    sql = extract_sql_from_response(response)
+
+    # Validate and fix common SQL issues
+    sql = validate_and_fix_sql(sql, user_question, selected_table, schema.get('columns', []))
+
+    print(f"\n🧠 Generated SQL:")
+    print(f"{sql}")
+    print(f"{'=' * 60}\n")
+
+    return sql, selected_table
+
+
+async def generate_sql_with_error_context(user_question: str, user_id: str, channel_id: str,
+                                          selected_table: str, previous_error: str, attempt_number: int) -> Tuple[str, str]:
+    """Generate SQL with context from previous error"""
+
+    print(f"🔧 Generating SQL with error context (attempt {attempt_number + 1})")
+
+    # Get schema for the same table (don't re-select table)
+    schema = await discover_table_schema(selected_table)
+    if schema.get('error'):
+        schema = {'table': selected_table, 'columns': [], 'error': schema.get('error')}
+
+    # Analyze question intent
+    question_intent = analyze_question_intent(user_question.lower())
+
+    thread_id = await get_or_create_thread(user_id, channel_id)
+    if not thread_id:
+        return "-- Error: Could not create conversation thread", selected_table
+
+    # Enhanced instructions WITH ERROR LEARNING
+    sql_instructions = build_sql_instructions_with_error_context(
+        question_intent, selected_table, schema, user_question, previous_error, attempt_number
+    )
+
+    # Get improved SQL from assistant
+    response = await send_message_and_run(thread_id, sql_instructions['message'], sql_instructions['instructions'])
+
+    # Extract SQL
+    sql = extract_sql_from_response(response)
+    if sql and not sql.strip().endswith(';'):
+        sql = sql.strip() + ';'
+
+    print(f"\n🧠 Generated SQL (Attempt {attempt_number + 1} with error context):")
+    print(f"{sql}")
+    print(f"{'=' * 60}\n")
+
+    return sql, selected_table
+
+
+def build_sql_instructions_with_error_context(intent: dict, table: str, schema: dict,
+                                              original_question: str, previous_error: str, attempt_number: int) -> dict:
+    """Build SQL instructions that include learning from previous errors"""
+
+    columns = schema.get('columns', [])
+    column_descriptions = schema.get('column_descriptions', {})
+
+    # Show column info
+    column_info_parts = []
+    for col in columns[:80]:
+        desc = column_descriptions.get(col.lower(), {}).get('comment', '')
+        col_type = column_descriptions.get(col.lower(), {}).get('type', '')
+        if desc:
+            column_info_parts.append(f"{col} ({col_type}): {desc}")
+        else:
+            column_info_parts.append(f"{col} ({col_type})")
+
+    column_info = "\n".join(column_info_parts)
+
+    # ERROR-AWARE INSTRUCTIONS
+    base_instructions = f"""You are a SQL expert. Your previous SQL attempt failed. Learn from the error and generate PERFECT Snowflake SQL.
+
+PREVIOUS ERROR (Attempt {attempt_number}):
+{previous_error}
+
+LEARN FROM THIS ERROR:
+- If "invalid identifier" - use ONLY columns from the schema below
+- If "group by" error - ensure ALL non-aggregate SELECT columns are in GROUP BY
+- If syntax error - use proper Snowflake syntax (no square brackets, proper functions)
+- If compilation error - check column names and table references
+
+TABLE: {table}
+AVAILABLE COLUMNS (USE ONLY THESE):
+{column_info}
+
+CRITICAL SUCCESS REQUIREMENTS:
+1. LEARN from the previous error and avoid the same mistake
+2. Use ONLY columns that exist in the schema above - verify each column name exactly
+3. Generate syntactically correct Snowflake SQL (no square brackets, proper semicolons)
+4. Ensure GROUP BY includes ALL non-aggregate columns from SELECT
+5. Use proper Snowflake functions and syntax
+6. Double-check your SQL before responding
+
+SNOWFLAKE SYNTAX RULES:
+- Use double quotes for identifiers if needed, NOT square brackets
+- Use DATEADD(day, -7, CURRENT_DATE()) for date arithmetic
+- Use CURRENT_DATE() not CURDATE()
+- All non-aggregate columns in SELECT must appear in GROUP BY
+- Use proper table name: {table}
+
+Generate SQL that will execute successfully this time. Return ONLY the SQL query."""
+
+    # Add specific guidance based on error type
+    if "invalid identifier" in previous_error.lower():
+        specific_guidance = """
+COLUMN ERROR DETECTED:
+The previous query used a column that doesn't exist. Check the schema above carefully.
+Common mistakes:
+- Using USER_NAME when column is ASSIGNEE_NAME
+- Using DATE when column is CREATED_AT_PST
+- Adding table prefixes to non-existent columns
+"""
+    elif "group by" in previous_error.lower():
+        specific_guidance = """
+GROUP BY ERROR DETECTED:
+The previous query had GROUP BY issues. Rules:
+- Every non-aggregate column in SELECT must be in GROUP BY
+- Don't use aggregate functions in GROUP BY
+- Use exact column names (no table prefixes in GROUP BY)
+"""
+    elif "syntax" in previous_error.lower() or "compilation" in previous_error.lower():
+        specific_guidance = """
+SYNTAX ERROR DETECTED:
+The previous query had syntax issues. Check:
+- No square brackets []
+- Proper semicolon at end
+- Correct Snowflake function names
+- Valid WHERE clause syntax
+"""
+    else:
+        specific_guidance = """
+GENERAL ERROR DETECTED:
+Review the error message and fix the specific issue mentioned.
+"""
+
+    full_instructions = base_instructions + "\n\n" + specific_guidance
+
+    message = f"""Question: {original_question}
+
+Table: {table}
+Previous Attempt Failed With: {previous_error}
+
+Generate corrected Snowflake SQL that fixes the previous error and answers the question accurately."""
+
+    return {
+        'instructions': full_instructions,
+        'message': message
+    }
+
+
+async def test_sql_execution(sql: str) -> dict:
+    """Test SQL execution without full processing"""
+
+    print(f"🧪 Testing SQL execution...")
+
+    try:
+        # Execute the SQL
+        df = run_query(sql)
+
+        if isinstance(df, str):
+            # Error case
+            return {
+                'success': False,
+                'error': df,
+                'result_count': 0
+            }
+        else:
+            # Success case
+            result_count = len(df) if hasattr(df, '__len__') else 0
+            return {
+                'success': True,
+                'error': None,
+                'result_count': result_count
+            }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e),
+            'result_count': 0
+        }
 
 def test_question_classification():
     """Test question classification"""

@@ -43,9 +43,10 @@ from app.llm_prompter import (
     get_user_token_usage,
     track_actual_usage,
     estimate_request_tokens,
-    clear_token_usage_cache, MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD,
+    clear_token_usage_cache,
+    MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD, MAX_SQL_ATTEMPTS,
     handle_conversational_question, discover_table_schema, classify_question_with_openai,
-    classify_question_type_fallback
+    classify_question_type_fallback, ENABLE_CACHE, generate_sql_with_retry_logic
 )
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
@@ -295,7 +296,7 @@ async def process_app_mention(event):
                         pass
 
                 # Execute SQL and get results
-                await execute_sql_and_respond(
+                await execute_sql_with_retry_integration(
                     clean_question, response, channel_id, user_id, ts
                 )
             elif response_type == 'error':
@@ -811,6 +812,171 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
                 'timestamp': time.time()
             }
 
+
+async def execute_sql_with_retry_integration(clean_question: str, sql: str, channel_id: str, user_id: str,
+                                             original_ts: str = None):
+    """Execute SQL with retry integration - handles both generation and execution failures"""
+
+    print(f"\n🧠 Executing SQL with retry integration")
+    print(f"📝 Question: {clean_question}")
+    print(f"📝 SQL:\n{sql}")
+    print(f"📝 Cache enabled: {ENABLE_CACHE}")
+    print(f"📝 Max attempts: {MAX_SQL_ATTEMPTS}")
+    print(f"{'=' * 60}")
+
+    # Get context
+    context = await get_conversation_context(user_id, channel_id)
+    selected_table = context.get('last_table_used') if context else None
+
+    # Check if SQL generation failed at assistant level
+    if not sql or sql.strip().startswith("--") or sql.strip().startswith("⚠️") or "Error:" in sql:
+        print(f"❌ Assistant reported SQL generation failure")
+
+        # If we have retry attempts available, try generating new SQL
+        if MAX_SQL_ATTEMPTS > 1:
+            print(f"🔄 SQL generation failed, attempting retry with {MAX_SQL_ATTEMPTS} attempts...")
+            await send_slack_message(channel_id, "🔄 Query generation failed, trying alternative approach...",
+                                     include_feedback_hint=False)
+
+            # Try generating completely new SQL with retry logic
+            new_sql, new_table = await generate_sql_with_retry_logic(clean_question, user_id, channel_id)
+
+            if new_sql and not new_sql.startswith("-- Error:"):
+                # Try executing the new SQL
+                return await execute_sql_final(clean_question, new_sql, channel_id, user_id, original_ts, new_table)
+            else:
+                await send_slack_message(channel_id,
+                                         f"❌ Unable to generate working SQL after {MAX_SQL_ATTEMPTS} attempts. Please try rephrasing your question.",
+                                         include_feedback_hint=False)
+                return
+        else:
+            await send_slack_message(channel_id, f"❌ {sql}", include_feedback_hint=False)
+            return
+
+    # Try executing the provided SQL
+    execution_result = await execute_sql_final(clean_question, sql, channel_id, user_id, original_ts, selected_table)
+
+    # If execution failed and we have retry attempts, try generating new SQL
+    if not execution_result.get('success', False) and MAX_SQL_ATTEMPTS > 1:
+        print(f"🔄 SQL execution failed, attempting retry with improved generation...")
+        await send_slack_message(channel_id, "🔄 Query failed, generating improved SQL...", include_feedback_hint=False)
+
+        # Generate completely new SQL with retry logic that includes the execution error
+        new_sql, new_table = await generate_sql_with_retry_logic(clean_question, user_id, channel_id)
+
+        if new_sql and not new_sql.startswith("-- Error:"):
+            # Try executing the new SQL one final time
+            final_result = await execute_sql_final(clean_question, new_sql, channel_id, user_id, original_ts, new_table)
+
+            if not final_result.get('success', False):
+                # Final failure message
+                await send_slack_message(
+                    channel_id,
+                    f"❌ Unable to generate working SQL after multiple attempts. Please try:\n1. Rephrasing your question\n2. `@bot debug analyze {clean_question}`\n3. Being more specific about what data you need",
+                    include_feedback_hint=False
+                )
+        else:
+            # SQL generation completely failed
+            await send_slack_message(
+                channel_id,
+                f"❌ Unable to generate SQL for this question. Please try:\n1. Rephrasing with different terms\n2. `@bot debug analyze {clean_question}`\n3. Asking for help with available data",
+                include_feedback_hint=False
+            )
+
+
+async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user_id: str, original_ts: str = None,
+                            selected_table: str = None):
+    """Final SQL execution without retry - clean execution only"""
+
+    print(f"🚀 Final SQL execution...")
+    start_time = time.time()
+
+    try:
+        df = run_query(sql)
+        execution_time = time.time() - start_time
+
+        if isinstance(df, str):
+            # Execution failed
+            print(f"❌ SQL execution failed: {df}")
+            print(f"⏱️ Execution time: {execution_time:.2f}s")
+
+            # Return error info for retry logic
+            return {
+                'success': False,
+                'error': df,
+                'result_count': 0,
+                'execution_time': execution_time
+            }
+
+        else:
+            # Success
+            result_count = len(df) if hasattr(df, '__len__') else 0
+            column_count = len(df.columns) if hasattr(df, 'columns') else 0
+
+            print(f"✅ SQL execution successful")
+            print(f"✅ Returned {result_count} rows, {column_count} columns")
+            print(f"⏱️ Execution time: {execution_time:.2f}s")
+
+            # Extract table info if needed
+            if not selected_table and 'FROM' in sql.upper():
+                from_match = re.search(r'FROM\s+([^\s\n]+)', sql, re.IGNORECASE)
+                if from_match:
+                    selected_table = from_match.group(1).strip()
+
+            # Update cache (respects ENABLE_CACHE flag)
+            await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
+
+            # Summarize results
+            if USE_ASSISTANT_API and ASSISTANT_ID:
+                result_message = await summarize_with_assistant(
+                    clean_question,
+                    format_result_for_slack(df),
+                    user_id,
+                    channel_id,
+                    ASSISTANT_ID
+                )
+            else:
+                result_message = summarize_results_with_llm(
+                    clean_question,
+                    format_result_for_slack(df)
+                )
+
+            await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
+                                              selected_table)
+
+            # Send result
+            response = await send_slack_message(channel_id, result_message, include_feedback_hint=True)
+
+            # Store for feedback tracking only if successful
+            if response and selected_table and result_count > 0:
+                msg_ts = response.get("ts")
+                if msg_ts:
+                    channel_ts = f"{channel_id}_{msg_ts}"
+                    message_to_question_map[channel_ts] = {
+                        'question': clean_question,
+                        'sql': sql,
+                        'table': selected_table,
+                        'timestamp': time.time()
+                    }
+
+            return {
+                'success': True,
+                'error': None,
+                'result_count': result_count,
+                'execution_time': execution_time
+            }
+
+    except Exception as e:
+        execution_time = time.time() - start_time
+        print(f"💥 Exception during execution: {str(e)}")
+        print(f"⏱️ Execution time: {execution_time:.2f}s")
+
+        return {
+            'success': False,
+            'error': str(e),
+            'result_count': 0,
+            'execution_time': execution_time
+        }
 
 async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: str):
     """Fallback handler using embeddings"""
