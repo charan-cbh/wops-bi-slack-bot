@@ -889,13 +889,14 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
     """Final SQL execution without retry - clean execution only"""
 
     print(f"🚀 Final SQL execution...")
+    print(f"SQL: {sql}")
     start_time = time.time()
 
     try:
         df = run_query(sql)
         execution_time = time.time() - start_time
 
-        if isinstance(df, str):
+        if isinstance(df, str) or len(df) == 0:
             # Execution failed
             print(f"❌ SQL execution failed: {df}")
             print(f"⏱️ Execution time: {execution_time:.2f}s")
