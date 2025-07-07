@@ -9,359 +9,359 @@ class PatternMatcher:
     def __init__(self):
         self.patterns = self._load_patterns()
 
-        def _load_patterns(self) -> List[Dict]:
-            """Load query patterns with their configurations based on the comprehensive pattern.md"""
-            return [
-                {
-                    "id": "wops_tickets_response_time",
-                    "name": "WOPS Tickets Comprehensive Analysis ⭐ RESPONSE TIME LEADER",
-                    "table": "ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS",
-                    "description": "EXCLUSIVE pattern for response time analysis and general ticket metrics. Pre-calculated response times, business-ready data.",
-                    "priority": "HIGH",
-                    "exclusive_for": ["response time", "reply time", "resolution time", "SLA compliance", "SLA",
-                                      "turnaround time"],
-                    "keywords": [
-                        "response time", "reply time", "resolution time", "SLA compliance", "SLA",
-                        "turnaround time", "time to respond", "time to resolve", "average response",
-                        "response distribution", "response trends", "response speed", "response performance",
-                        "time metrics", "resolution speed", "reply speed", "first response time",
-                        "resolution analysis", "response benchmarks", "response rates", "how long does it take",
-                        "time between", "response window", "ticket volume", "ticket count", "how many tickets",
-                        "ticket trends", "ticket distribution", "ticket analysis", "ticket breakdown",
-                        "tickets created", "tickets solved", "ticket metrics", "ticket patterns",
-                        "volume analysis", "daily tickets", "weekly tickets", "monthly tickets",
-                        "ticket statistics", "workload", "case volume", "issue volume", "contact channel"
-                    ],
-                    "questions": [
-                        "response time", "reply time", "resolution time", "SLA compliance", "turnaround time",
-                        "how long does it take", "time to respond", "time to resolve", "average response",
-                        "response distribution", "response speed", "response trends", "response benchmarks",
-                        "how many tickets", "ticket volume", "tickets created", "ticket distribution",
-                        "tickets by", "show tickets", "ticket trends", "contact channel", "daily tickets",
-                        "tickets today", "tickets yesterday", "tickets this week", "tickets last month",
-                        "ticket count", "ticket metrics", "ticket statistics", "volume analysis"
-                    ],
-                    "business_context": """This is the EXCLUSIVE table for response time questions and primary table for ticket analysis.
+    def _load_patterns(self) -> List[Dict]:
+        """Load query patterns with their configurations based on the comprehensive pattern.md"""
+        return [
+            {
+                "id": "wops_tickets_response_time",
+                "name": "WOPS Tickets Comprehensive Analysis ⭐ RESPONSE TIME LEADER",
+                "table": "ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS",
+                "description": "EXCLUSIVE pattern for response time analysis and general ticket metrics. Pre-calculated response times, business-ready data.",
+                "priority": "HIGH",
+                "exclusive_for": ["response time", "reply time", "resolution time", "SLA compliance", "SLA",
+                                  "turnaround time"],
+                "keywords": [
+                    "response time", "reply time", "resolution time", "SLA compliance", "SLA",
+                    "turnaround time", "time to respond", "time to resolve", "average response",
+                    "response distribution", "response trends", "response speed", "response performance",
+                    "time metrics", "resolution speed", "reply speed", "first response time",
+                    "resolution analysis", "response benchmarks", "response rates", "how long does it take",
+                    "time between", "response window", "ticket volume", "ticket count", "how many tickets",
+                    "ticket trends", "ticket distribution", "ticket analysis", "ticket breakdown",
+                    "tickets created", "tickets solved", "ticket metrics", "ticket patterns",
+                    "volume analysis", "daily tickets", "weekly tickets", "monthly tickets",
+                    "ticket statistics", "workload", "case volume", "issue volume", "contact channel"
+                ],
+                "questions": [
+                    "response time", "reply time", "resolution time", "SLA compliance", "turnaround time",
+                    "how long does it take", "time to respond", "time to resolve", "average response",
+                    "response distribution", "response speed", "response trends", "response benchmarks",
+                    "how many tickets", "ticket volume", "tickets created", "ticket distribution",
+                    "tickets by", "show tickets", "ticket trends", "contact channel", "daily tickets",
+                    "tickets today", "tickets yesterday", "tickets this week", "tickets last month",
+                    "ticket count", "ticket metrics", "ticket statistics", "volume analysis"
+                ],
+                "business_context": """This is the EXCLUSIVE table for response time questions and primary table for ticket analysis.
 
-    Key Business Rules:
-    - EXCLUSIVE for response time questions - NEVER use other tables for response time
-    - Pre-calculated response time metrics: REPLY_TIME_IN_MINUTES, FIRST_RESOLUTION_TIME_IN_MINUTES, FULL_RESOLUTION_TIME_IN_MINUTES
-    - Pre-filtered business-ready data - no complex WHERE clauses needed
-    - Direct Contact_Channel field (Web, Chat, Voice, Other)
-    - All standard business filters already applied
-    - Simply add date filtering and specific criteria""",
-                    "standard_filters": """-- No standard filters needed - data is pre-filtered
-    -- Simply add specific criteria like:
-    -- WHERE CREATED_AT_PST >= CURRENT_DATE - 7    -- Date filtering
-    -- AND AGENT_NAME = 'John Smith'             -- Agent filtering  
-    -- AND CONTACT_CHANNEL = 'Chat'              -- Channel filtering""",
-                    "key_columns": {
-                        "identifiers": ["TICKET_ID", "ASSIGNEE_ID", "WORKER_ID"],
-                        "people": ["WORKER_NAME", "WORKER_EMAIL", "AGENT_NAME", "AGENT_EMAIL", "TEAM_LEAD"],
-                        "dimensions": ["GROUP_ID", "NATIVE_ZENDESK_CHANNEL", "CONTACT_CHANNEL", "TICKET_STATUS",
-                                       "TICKET_TYPE", "TICKET_SUB_TYPE"],
-                        "timestamps": ["CREATED_AT_PST", "INITIALLY_ASSIGNED_AT_PST", "ASSIGNED_AT_PST",
-                                       "SOLVED_AT_PST"],
-                        "response_time_metrics": ["REPLY_TIME_IN_MINUTES", "FIRST_RESOLUTION_TIME_IN_MINUTES",
-                                                  "FULL_RESOLUTION_TIME_IN_MINUTES"],
-                        "other_metrics": ["HANDLE_TIME", "LAST_TOUCH_HANDLE_TIME", "CONNECT_HANDLE_TIME_TOTAL_MIN",
-                                          "REOPENS", "REPLIES", "PROVIDED_SCORE"],
-                        "categories": ["WAIVER_REQUEST_DRIVER", "PRODUCT_HELP_CATEGORY", "PAYMENTS_CATEGORY",
-                                       "URGENT_SHIFTS_TYPE", "ESCALATION_TEAM"]
-                    },
-                    "derived_fields": {
-                        "SLA_Response_Compliance": """CASE WHEN REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END""",
-                        "SLA_Resolution_Compliance": """CASE WHEN FIRST_RESOLUTION_TIME_IN_MINUTES <= 1440 THEN 1 ELSE 0 END""",
-                        "Response_Time_Bucket": """CASE 
-      WHEN REPLY_TIME_IN_MINUTES <= 15 THEN '0-15 min (Excellent)'
-      WHEN REPLY_TIME_IN_MINUTES <= 60 THEN '15-60 min (Good)'
-      WHEN REPLY_TIME_IN_MINUTES <= 240 THEN '1-4 hours (Needs Improvement)'
-      ELSE '4+ hours (Critical)'
-    END"""
-                    },
-                    "confidence_boost": 150  # Extra points for exclusive patterns
+Key Business Rules:
+- EXCLUSIVE for response time questions - NEVER use other tables for response time
+- Pre-calculated response time metrics: REPLY_TIME_IN_MINUTES, FIRST_RESOLUTION_TIME_IN_MINUTES, FULL_RESOLUTION_TIME_IN_MINUTES
+- Pre-filtered business-ready data - no complex WHERE clauses needed
+- Direct Contact_Channel field (Web, Chat, Voice, Other)
+- All standard business filters already applied
+- Simply add date filtering and specific criteria""",
+                "standard_filters": """-- No standard filters needed - data is pre-filtered
+-- Simply add specific criteria like:
+-- WHERE CREATED_AT_PST >= CURRENT_DATE - 7    -- Date filtering
+-- AND AGENT_NAME = 'John Smith'             -- Agent filtering  
+-- AND CONTACT_CHANNEL = 'Chat'              -- Channel filtering""",
+                "key_columns": {
+                    "identifiers": ["TICKET_ID", "ASSIGNEE_ID", "WORKER_ID"],
+                    "people": ["WORKER_NAME", "WORKER_EMAIL", "AGENT_NAME", "AGENT_EMAIL", "TEAM_LEAD"],
+                    "dimensions": ["GROUP_ID", "NATIVE_ZENDESK_CHANNEL", "CONTACT_CHANNEL", "TICKET_STATUS",
+                                   "TICKET_TYPE", "TICKET_SUB_TYPE"],
+                    "timestamps": ["CREATED_AT_PST", "INITIALLY_ASSIGNED_AT_PST", "ASSIGNED_AT_PST",
+                                   "SOLVED_AT_PST"],
+                    "response_time_metrics": ["REPLY_TIME_IN_MINUTES", "FIRST_RESOLUTION_TIME_IN_MINUTES",
+                                              "FULL_RESOLUTION_TIME_IN_MINUTES"],
+                    "other_metrics": ["HANDLE_TIME", "LAST_TOUCH_HANDLE_TIME", "CONNECT_HANDLE_TIME_TOTAL_MIN",
+                                      "REOPENS", "REPLIES", "PROVIDED_SCORE"],
+                    "categories": ["WAIVER_REQUEST_DRIVER", "PRODUCT_HELP_CATEGORY", "PAYMENTS_CATEGORY",
+                                   "URGENT_SHIFTS_TYPE", "ESCALATION_TEAM"]
                 },
-                {
-                    "id": "agent_handle_time",
-                    "name": "Agent Handle Time Analysis ⭐ HANDLE TIME LEADER",
-                    "table": "ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME",
-                    "description": "PRIORITY pattern for handle time, AHT, efficiency analysis. Pre-calculated metrics with voice channel details.",
-                    "priority": "HIGH",
-                    "keywords": [
-                        "handle time", "AHT", "average handle time", "handling time", "efficiency",
-                        "agent efficiency", "time per ticket", "call duration", "talk time",
-                        "hold time", "efficiency metrics", "productivity metrics", "speed metrics",
-                        "time analysis", "duration analysis", "how long agents take", "agent speed",
-                        "ticket processing time", "work efficiency", "time management", "agent velocity",
-                        "voice metrics", "amazon connect", "call time", "call handling", "voice handling"
-                    ],
-                    "questions": [
-                        "average handle time", "aht", "handle time by agent", "aht by agent",
-                        "longest handle time", "handle time trend", "call duration", "voice metrics",
-                        "agent efficiency", "talk time", "hold time", "aht by channel", "aht by team",
-                        "handle time distribution", "efficiency rankings", "call analytics",
-                        "voice channel metrics", "agent time analysis", "handling time", "agent speed"
-                    ],
-                    "business_context": """PRIORITY table for handle time and agent efficiency analysis.
-
-    Key Business Rules:
-    - Pre-calculated handle time in both seconds and minutes
-    - Voice channel has Amazon Connect metrics (call duration, talk time, hold time)
-    - Agent-level granularity for detailed efficiency analysis
-    - No complex calculations needed - all metrics pre-calculated
-    - Consider excluding outliers (>120 minutes) for averages""",
-                    "standard_filters": """USER_NAME IS NOT NULL 
-      AND USER_NAME != ''
-      AND HANDLE_TIME_IN_MINUTES IS NOT NULL""",
-                    "key_columns": {
-                        "identifiers": ["TICKET_ID", "USER_ID", "TICKET_USER_ID"],
-                        "agent_info": ["USER_NAME", "USER_EMAIL", "SUPERVISOR"],
-                        "dimensions": ["GROUP_NAME", "CONTACT_CHANNEL"],
-                        "timestamps": ["CREATED_AT", "CREATED_AT_PST", "SOLVED_AT", "SOLVED_AT_PST"],
-                        "handle_time_metrics": ["HANDLE_TIME_IN_MINUTES", "HANDLE_TIME_IN_SECONDS"],
-                        "voice_metrics": ["AMAZON_CONNECT_CALL_DURATION_IN_MINUTES",
-                                          "AMAZON_CONNECT_HOLD_TIME_IN_MINUTES", "AMAZON_CONNECT_TALK_TIME_IN_MINUTES"],
-                        "categories": ["WOPS_TICKET_TYPE_A", "ESCALATION_TEAM"]
-                    },
-                    "derived_fields": {
-                        "Handle_Time_Bucket": """CASE 
-      WHEN HANDLE_TIME_IN_MINUTES < 5 THEN '0-5 min'
-      WHEN HANDLE_TIME_IN_MINUTES < 10 THEN '5-10 min'
-      WHEN HANDLE_TIME_IN_MINUTES < 20 THEN '10-20 min'
-      WHEN HANDLE_TIME_IN_MINUTES < 30 THEN '20-30 min'
-      ELSE '30+ min'
-    END""",
-                        "Voice_Efficiency_Ratio": """CASE 
-      WHEN AMAZON_CONNECT_CALL_DURATION_IN_MINUTES > 0 
-      THEN AMAZON_CONNECT_TALK_TIME_IN_MINUTES / AMAZON_CONNECT_CALL_DURATION_IN_MINUTES 
-      ELSE NULL 
-    END"""
-                    },
-                    "confidence_boost": 125
+                "derived_fields": {
+                    "SLA_Response_Compliance": """CASE WHEN REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END""",
+                    "SLA_Resolution_Compliance": """CASE WHEN FIRST_RESOLUTION_TIME_IN_MINUTES <= 1440 THEN 1 ELSE 0 END""",
+                    "Response_Time_Bucket": """CASE 
+  WHEN REPLY_TIME_IN_MINUTES <= 15 THEN '0-15 min (Excellent)'
+  WHEN REPLY_TIME_IN_MINUTES <= 60 THEN '15-60 min (Good)'
+  WHEN REPLY_TIME_IN_MINUTES <= 240 THEN '1-4 hours (Needs Improvement)'
+  ELSE '4+ hours (Critical)'
+END"""
                 },
-                {
-                    "id": "fcr_analysis",
-                    "name": "First Contact Resolution (FCR) Analysis ⭐ FCR LEADER",
-                    "table": "ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS",
-                    "description": "PRIORITY pattern for FCR rates, repeat contact analysis, channel switching. Requires window functions.",
-                    "priority": "HIGH",
-                    "keywords": [
-                        "FCR", "first contact resolution", "repeat contact", "channel switching",
-                        "callback", "call back", "same issue", "resolved first time",
-                        "multiple contacts", "customer contacted again", "repeat ticket",
-                        "followup ticket", "follow up", "one call resolution", "contact again",
-                        "resolution effectiveness", "repeat analysis", "channel switching patterns",
-                        "customer calling back", "multiple touch", "contact multiple times"
-                    ],
-                    "questions": [
-                        "fcr rate", "first contact resolution", "repeat contacts", "channel switching",
-                        "resolved first time", "fcr by agent", "callback rate", "repeat customers",
-                        "follow up contacts", "fcr by channel", "fcr trends", "resolution effectiveness",
-                        "which agents best fcr", "fcr by team", "contact patterns", "same issue repeat"
-                    ],
-                    "business_context": """PRIORITY table for FCR analysis using 24-hour repeat contact definition.
+                "confidence_boost": 150  # Extra points for exclusive patterns
+            },
+            {
+                "id": "agent_handle_time",
+                "name": "Agent Handle Time Analysis ⭐ HANDLE TIME LEADER",
+                "table": "ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME",
+                "description": "PRIORITY pattern for handle time, AHT, efficiency analysis. Pre-calculated metrics with voice channel details.",
+                "priority": "HIGH",
+                "keywords": [
+                    "handle time", "AHT", "average handle time", "handling time", "efficiency",
+                    "agent efficiency", "time per ticket", "call duration", "talk time",
+                    "hold time", "efficiency metrics", "productivity metrics", "speed metrics",
+                    "time analysis", "duration analysis", "how long agents take", "agent speed",
+                    "ticket processing time", "work efficiency", "time management", "agent velocity",
+                    "voice metrics", "amazon connect", "call time", "call handling", "voice handling"
+                ],
+                "questions": [
+                    "average handle time", "aht", "handle time by agent", "aht by agent",
+                    "longest handle time", "handle time trend", "call duration", "voice metrics",
+                    "agent efficiency", "talk time", "hold time", "aht by channel", "aht by team",
+                    "handle time distribution", "efficiency rankings", "call analytics",
+                    "voice channel metrics", "agent time analysis", "handling time", "agent speed"
+                ],
+                "business_context": """PRIORITY table for handle time and agent efficiency analysis.
 
-    Key Business Rules:
-    - FCR = customer does not create another ticket within 24 hours
-    - Requires LEAD() window functions for customer tracking
-    - Pre-applied filters for solved/closed, native_messaging, Chat/Voice groups
-    - Complex but necessary for accurate FCR calculation
-    - Time range: typically last 6 weeks including current week""",
-                    "standard_filters": """status IN ('solved', 'closed')
-      AND brand_id IN ('360002340693', '29186504989207')
-      AND channel = 'native_messaging'
-      AND group_id IN ('17837476387479', '28949203098007')
-      AND (NOT LOWER(ticket_tags) LIKE '%email_blocked%' OR ticket_tags IS NULL)
-      AND (assignee_name <> 'TechOps Bot' OR assignee_name IS NULL)""",
-                    "key_columns": {
-                        "identifiers": ["TICKET_ID", "REQUESTER_ID"],
-                        "dimensions": ["ASSIGNEE_NAME", "CHANNEL", "GROUP_ID"],
-                        "timestamps": ["CREATED_AT_PST", "SOLVED_AT_PST"],
-                        "categories": ["ISSUE_TYPE", "SHIFT_ID_S"]
-                    },
-                    "window_functions": {
-                        "next_ticket_detection": "LEAD(ticket_id) OVER (PARTITION BY requester_id ORDER BY created_at_pst)",
-                        "next_ticket_date": "LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst)",
-                        "fcr_calculation": "CASE WHEN created_at_pst + INTERVAL '24 HOUR' >= LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) THEN 0 ELSE 1 END"
-                    },
-                    "derived_fields": {
-                        "Contact_Channel": """CASE
-      WHEN group_id = '17837476387479' THEN 'Chat'
-      WHEN group_id = '28949203098007' THEN 'Voice'
-      ELSE 'Other'
-    END""",
-                        "Is_FCR_Success": """CASE
-      WHEN created_at_pst + INTERVAL '24 HOUR' >= LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) THEN 0
-      ELSE 1
-    END"""
-                    },
-                    "requires_window_functions": True,
-                    "confidence_boost": 125
+Key Business Rules:
+- Pre-calculated handle time in both seconds and minutes
+- Voice channel has Amazon Connect metrics (call duration, talk time, hold time)
+- Agent-level granularity for detailed efficiency analysis
+- No complex calculations needed - all metrics pre-calculated
+- Consider excluding outliers (>120 minutes) for averages""",
+                "standard_filters": """USER_NAME IS NOT NULL 
+  AND USER_NAME != ''
+  AND HANDLE_TIME_IN_MINUTES IS NOT NULL""",
+                "key_columns": {
+                    "identifiers": ["TICKET_ID", "USER_ID", "TICKET_USER_ID"],
+                    "agent_info": ["USER_NAME", "USER_EMAIL", "SUPERVISOR"],
+                    "dimensions": ["GROUP_NAME", "CONTACT_CHANNEL"],
+                    "timestamps": ["CREATED_AT", "CREATED_AT_PST", "SOLVED_AT", "SOLVED_AT_PST"],
+                    "handle_time_metrics": ["HANDLE_TIME_IN_MINUTES", "HANDLE_TIME_IN_SECONDS"],
+                    "voice_metrics": ["AMAZON_CONNECT_CALL_DURATION_IN_MINUTES",
+                                      "AMAZON_CONNECT_HOLD_TIME_IN_MINUTES", "AMAZON_CONNECT_TALK_TIME_IN_MINUTES"],
+                    "categories": ["WOPS_TICKET_TYPE_A", "ESCALATION_TEAM"]
                 },
-                {
-                    "id": "wops_agent_performance",
-                    "name": "WOPS Agent Performance (Weekly Aggregated) ⭐ AGENT PERFORMANCE LEADER",
-                    "table": "ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE",
-                    "description": "PRIORITY pattern for agent performance dashboards, rankings, KPIs. Pre-aggregated weekly metrics.",
-                    "priority": "HIGH",
-                    "keywords": [
-                        "agent performance", "agent metrics", "agent productivity", "agent efficiency",
-                        "agent statistics", "agent dashboard", "agent comparison", "agent ranking",
-                        "which agent", "best agent", "top agent", "agent analysis", "individual agent",
-                        "agent scores", "agent evaluation", "agent effectiveness", "weekly agent performance",
-                        "agent trends", "agent quality", "agent KPIs", "agent benchmarks", "agent leaderboard",
-                        "performance dashboard", "top performers", "performance trends", "performance summary",
-                        "weekly stats", "performance metrics", "agent scorecard", "performance comparison"
-                    ],
-                    "questions": [
-                        "agent performance", "top performing agents", "weekly performance", "performance trends",
-                        "agent rankings", "performance dashboard", "who are the best agents", "agent stats",
-                        "weekly stats", "performance comparison", "week over week", "agent scorecard",
-                        "individual agent performance", "performance metrics", "agent kpi", "agent qa scores",
-                        "agent quality", "individual agent", "agent leaderboard", "performance summary"
-                    ],
-                    "business_context": """PRIORITY table for agent performance analysis with pre-aggregated weekly KPIs.
-
-    Key Business Rules:
-    - All KPIs pre-calculated: volume (NUM_TICKETS), efficiency (AHT_MINUTES), quality (QA_SCORE), effectiveness (FCR_PERCENTAGE)
-    - Weekly aggregated data - no complex calculations needed
-    - Filter out null/empty agent names and system accounts
-    - Current week = MAX(SOLVED_WEEK)
-    - Prioritize agents with complete data for rankings""",
-                    "standard_filters": """ASSIGNEE_NAME IS NOT NULL 
-      AND ASSIGNEE_NAME != '' 
-      AND ASSIGNEE_NAME != 'None'
-      AND LOWER(ASSIGNEE_NAME) != 'null'""",
-                    "key_columns": {
-                        "identifiers": ["SOLVED_WEEK_ASSIGNEE_ID"],
-                        "dimensions": ["ASSIGNEE_NAME", "SOLVED_WEEK"],
-                        "kpi_metrics": ["NUM_TICKETS", "AHT_MINUTES", "FCR_PERCENTAGE", "QA_SCORE"],
-                        "csat_metrics": ["POSITIVE_RES_CSAT", "NEGATIVE_RES_CSAT"],
-                        "timestamps": ["SOLVED_WEEK"]
-                    },
-                    "derived_fields": {
-                        "CSAT_Rate": """CASE 
-      WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
-      ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
-    END""",
-                        "Performance_Score": """(FCR_PERCENTAGE * 0.3 + QA_SCORE * 0.3 + 
-       CASE WHEN AHT_MINUTES <= 10 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 10) * 5) END * 0.2 +
-       CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN 50 
-            ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 END * 0.2)""",
-                        "Data_Completeness_Priority": """CASE WHEN QA_SCORE IS NOT NULL AND FCR_PERCENTAGE IS NOT NULL THEN 0 ELSE 1 END"""
-                    },
-                    "confidence_boost": 125
+                "derived_fields": {
+                    "Handle_Time_Bucket": """CASE 
+  WHEN HANDLE_TIME_IN_MINUTES < 5 THEN '0-5 min'
+  WHEN HANDLE_TIME_IN_MINUTES < 10 THEN '5-10 min'
+  WHEN HANDLE_TIME_IN_MINUTES < 20 THEN '10-20 min'
+  WHEN HANDLE_TIME_IN_MINUTES < 30 THEN '20-30 min'
+  ELSE '30+ min'
+END""",
+                    "Voice_Efficiency_Ratio": """CASE 
+  WHEN AMAZON_CONNECT_CALL_DURATION_IN_MINUTES > 0 
+  THEN AMAZON_CONNECT_TALK_TIME_IN_MINUTES / AMAZON_CONNECT_CALL_DURATION_IN_MINUTES 
+  ELSE NULL 
+END"""
                 },
-                {
-                    "id": "wops_tl_performance",
-                    "name": "WOPS Team Lead Performance (Weekly Aggregated) ⭐ TEAM LEAD LEADER",
-                    "table": "ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE",
-                    "description": "PRIORITY pattern for team lead/supervisor performance, team-level metrics, leadership analysis.",
-                    "priority": "HIGH",
-                    "keywords": [
-                        "team lead performance", "supervisor metrics", "manager performance", "team leader analysis",
-                        "supervisor analysis", "manager analysis", "leadership metrics", "team lead dashboard",
-                        "team performance", "supervisor performance", "team lead ranking", "team lead comparison",
-                        "team lead trends", "team lead evaluation", "team lead effectiveness",
-                        "weekly team performance",
-                        "supervisor dashboard", "manager dashboard", "team metrics", "leadership analysis",
-                        "team stats", "team rankings", "team capacity", "team volume", "cross team", "multi team"
-                    ],
-                    "questions": [
-                        "team performance", "team lead performance", "supervisor performance", "team rankings",
-                        "team stats", "team dashboard", "team metrics", "top performing teams", "team comparison",
-                        "team benchmarking", "team capacity", "team volume", "workload distribution",
-                        "cross team analysis", "multi team", "team qa scores", "team fcr", "team aht",
-                        "team satisfaction", "supervisor rankings", "team lead rankings", "team weekly performance"
-                    ],
-                    "business_context": """PRIORITY table for team lead performance with pre-aggregated team-level weekly KPIs.
+                "confidence_boost": 125
+            },
+            {
+                "id": "fcr_analysis",
+                "name": "First Contact Resolution (FCR) Analysis ⭐ FCR LEADER",
+                "table": "ANALYTICS.DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS",
+                "description": "PRIORITY pattern for FCR rates, repeat contact analysis, channel switching. Requires window functions.",
+                "priority": "HIGH",
+                "keywords": [
+                    "FCR", "first contact resolution", "repeat contact", "channel switching",
+                    "callback", "call back", "same issue", "resolved first time",
+                    "multiple contacts", "customer contacted again", "repeat ticket",
+                    "followup ticket", "follow up", "one call resolution", "contact again",
+                    "resolution effectiveness", "repeat analysis", "channel switching patterns",
+                    "customer calling back", "multiple touch", "contact multiple times"
+                ],
+                "questions": [
+                    "fcr rate", "first contact resolution", "repeat contacts", "channel switching",
+                    "resolved first time", "fcr by agent", "callback rate", "repeat customers",
+                    "follow up contacts", "fcr by channel", "fcr trends", "resolution effectiveness",
+                    "which agents best fcr", "fcr by team", "contact patterns", "same issue repeat"
+                ],
+                "business_context": """PRIORITY table for FCR analysis using 24-hour repeat contact definition.
 
-    Key Business Rules:
-    - Team-level aggregated metrics from all agents under each supervisor
-    - Pre-calculated team KPIs: volume, efficiency, quality, effectiveness
-    - Filter out null/empty supervisor names
-    - Use for supervisor effectiveness and team comparisons
-    - Current week = MAX(SOLVED_WEEK)""",
-                    "standard_filters": """SUPERVISOR IS NOT NULL 
-      AND SUPERVISOR != '' 
-      AND SUPERVISOR != 'None'
-      AND LOWER(SUPERVISOR) != 'null'""",
-                    "key_columns": {
-                        "identifiers": ["SOLVED_WEEK_SUPERVISOR_ID"],
-                        "dimensions": ["SUPERVISOR", "SOLVED_WEEK"],
-                        "team_kpi_metrics": ["NUM_TICKETS", "AHT_MINUTES", "FCR_PERCENTAGE", "QA_SCORE"],
-                        "team_csat_metrics": ["POSITIVE_RES_CSAT", "NEGATIVE_RES_CSAT"],
-                        "timestamps": ["SOLVED_WEEK"]
-                    },
-                    "derived_fields": {
-                        "Team_CSAT_Rate": """CASE 
-      WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
-      ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
-    END""",
-                        "Estimated_Tickets_Per_Agent": """CASE WHEN NUM_TICKETS = 0 THEN 0 ELSE NUM_TICKETS / 8.0 END""",
-                        "Team_Performance_Score": """(FCR_PERCENTAGE * 0.3 + QA_SCORE * 0.3 + 
-       CASE WHEN AHT_MINUTES <= 10 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 10) * 5) END * 0.4)"""
-                    },
-                    "confidence_boost": 125
+Key Business Rules:
+- FCR = customer does not create another ticket within 24 hours
+- Requires LEAD() window functions for customer tracking
+- Pre-applied filters for solved/closed, native_messaging, Chat/Voice groups
+- Complex but necessary for accurate FCR calculation
+- Time range: typically last 6 weeks including current week""",
+                "standard_filters": """status IN ('solved', 'closed')
+  AND brand_id IN ('360002340693', '29186504989207')
+  AND channel = 'native_messaging'
+  AND group_id IN ('17837476387479', '28949203098007')
+  AND (NOT LOWER(ticket_tags) LIKE '%email_blocked%' OR ticket_tags IS NULL)
+  AND (assignee_name <> 'TechOps Bot' OR assignee_name IS NULL)""",
+                "key_columns": {
+                    "identifiers": ["TICKET_ID", "REQUESTER_ID"],
+                    "dimensions": ["ASSIGNEE_NAME", "CHANNEL", "GROUP_ID"],
+                    "timestamps": ["CREATED_AT_PST", "SOLVED_AT_PST"],
+                    "categories": ["ISSUE_TYPE", "SHIFT_ID_S"]
                 },
-                {
-                    "id": "schedule_adherence",
-                    "name": "Agent Schedule Adherence Analysis ⭐ ADHERENCE LEADER",
-                    "table": "ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE",
-                    "description": "EXCLUSIVE pattern for schedule adherence, compliance, time tracking analysis. Pre-calculated adherence metrics.",
-                    "priority": "HIGH",
-                    "exclusive_for": ["schedule adherence", "adherence rate", "schedule compliance"],
-                    "keywords": [
-                        "schedule adherence", "adherence rate", "schedule compliance", "schedule variance",
-                        "offline time", "break adherence", "schedule patterns", "adherence trends",
-                        "schedule analysis", "schedule performance", "adherence metrics", "schedule monitoring",
-                        "schedule effectiveness", "adherence dashboard", "adherence comparison", "schedule following",
-                        "time tracking", "work schedule", "attendance patterns", "schedule variance",
-                        "non adherent", "adherent minutes", "scheduled minutes"
-                    ],
-                    "questions": [
-                        "schedule adherence", "adherence rate", "schedule compliance", "schedule variance",
-                        "offline time", "break adherence", "schedule patterns", "adherence trends",
-                        "schedule analysis", "schedule performance", "adherence metrics", "which agents poor adherence",
-                        "schedule monitoring", "adherence dashboard", "adherence comparison", "time tracking",
-                        "attendance patterns", "schedule following", "adherence by team", "adherence by agent"
-                    ],
-                    "business_context": """EXCLUSIVE table for schedule adherence analysis with pre-calculated metrics.
+                "window_functions": {
+                    "next_ticket_detection": "LEAD(ticket_id) OVER (PARTITION BY requester_id ORDER BY created_at_pst)",
+                    "next_ticket_date": "LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst)",
+                    "fcr_calculation": "CASE WHEN created_at_pst + INTERVAL '24 HOUR' >= LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) THEN 0 ELSE 1 END"
+                },
+                "derived_fields": {
+                    "Contact_Channel": """CASE
+  WHEN group_id = '17837476387479' THEN 'Chat'
+  WHEN group_id = '28949203098007' THEN 'Voice'
+  ELSE 'Other'
+END""",
+                    "Is_FCR_Success": """CASE
+  WHEN created_at_pst + INTERVAL '24 HOUR' >= LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) THEN 0
+  ELSE 1
+END"""
+                },
+                "requires_window_functions": True,
+                "confidence_boost": 125
+            },
+            {
+                "id": "wops_agent_performance",
+                "name": "WOPS Agent Performance (Weekly Aggregated) ⭐ AGENT PERFORMANCE LEADER",
+                "table": "ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE",
+                "description": "PRIORITY pattern for agent performance dashboards, rankings, KPIs. Pre-aggregated weekly metrics.",
+                "priority": "HIGH",
+                "keywords": [
+                    "agent performance", "agent metrics", "agent productivity", "agent efficiency",
+                    "agent statistics", "agent dashboard", "agent comparison", "agent ranking",
+                    "which agent", "best agent", "top agent", "agent analysis", "individual agent",
+                    "agent scores", "agent evaluation", "agent effectiveness", "weekly agent performance",
+                    "agent trends", "agent quality", "agent KPIs", "agent benchmarks", "agent leaderboard",
+                    "performance dashboard", "top performers", "performance trends", "performance summary",
+                    "weekly stats", "performance metrics", "agent scorecard", "performance comparison"
+                ],
+                "questions": [
+                    "agent performance", "top performing agents", "weekly performance", "performance trends",
+                    "agent rankings", "performance dashboard", "who are the best agents", "agent stats",
+                    "weekly stats", "performance comparison", "week over week", "agent scorecard",
+                    "individual agent performance", "performance metrics", "agent kpi", "agent qa scores",
+                    "agent quality", "individual agent", "agent leaderboard", "performance summary"
+                ],
+                "business_context": """PRIORITY table for agent performance analysis with pre-aggregated weekly KPIs.
 
-    Key Business Rules:
-    - Pre-calculated ADHERENCE_PERCENTAGE (0-100)
-    - Time metrics: SCHEDULED_MINUTES, ADHERENT_MINUTES, OFFLINE_MINUTES
-    - Agent-level daily adherence data
-    - No complex calculations needed - all metrics ready to use
-    - Use for time tracking and compliance monitoring""",
-                    "standard_filters": """AGENT_NAME IS NOT NULL 
-      AND AGENT_NAME != ''
-      AND ADHERENCE_DATE IS NOT NULL""",
-                    "key_columns": {
-                        "identifiers": ["AGENT_NAME", "ADHERENCE_DATE"],
-                        "dimensions": ["AGENT_NAME", "SUPERVISOR", "TEAM"],
-                        "adherence_metrics": ["ADHERENCE_PERCENTAGE", "SCHEDULED_MINUTES", "ADHERENT_MINUTES",
-                                              "OFFLINE_MINUTES", "NON_ADHERENT_LOGGED_MINUTES",
-                                              "TOTAL_NON_ADHERENT_MINUTES"],
-                        "timestamps": ["ADHERENCE_DATE", "ADHERENCE_DATETIME"],
-                        "categories": ["SCHEDULED_TASK_TYPE", "NON_ADHERENT_ACTIVITY"]
-                    },
-                    "derived_fields": {
-                        "Adherence_Grade": """CASE 
-      WHEN ADHERENCE_PERCENTAGE >= 95 THEN 'Excellent'
-      WHEN ADHERENCE_PERCENTAGE >= 90 THEN 'Good'
-      WHEN ADHERENCE_PERCENTAGE >= 85 THEN 'Needs Improvement'
-      ELSE 'Critical'
-    END""",
-                        "Non_Adherence_Rate": """100 - ADHERENCE_PERCENTAGE""",
-                        "Offline_Percentage": """CASE 
-      WHEN SCHEDULED_MINUTES > 0 THEN (OFFLINE_MINUTES / SCHEDULED_MINUTES) * 100 
-      ELSE 0 
-    END"""
-                    },
-                    "confidence_boost": 150  # Extra points for exclusive patterns
-                }
-            ]
+Key Business Rules:
+- All KPIs pre-calculated: volume (NUM_TICKETS), efficiency (AHT_MINUTES), quality (QA_SCORE), effectiveness (FCR_PERCENTAGE)
+- Weekly aggregated data - no complex calculations needed
+- Filter out null/empty agent names and system accounts
+- Current week = MAX(SOLVED_WEEK)
+- Prioritize agents with complete data for rankings""",
+                "standard_filters": """ASSIGNEE_NAME IS NOT NULL 
+  AND ASSIGNEE_NAME != '' 
+  AND ASSIGNEE_NAME != 'None'
+  AND LOWER(ASSIGNEE_NAME) != 'null'""",
+                "key_columns": {
+                    "identifiers": ["SOLVED_WEEK_ASSIGNEE_ID"],
+                    "dimensions": ["ASSIGNEE_NAME", "SOLVED_WEEK"],
+                    "kpi_metrics": ["NUM_TICKETS", "AHT_MINUTES", "FCR_PERCENTAGE", "QA_SCORE"],
+                    "csat_metrics": ["POSITIVE_RES_CSAT", "NEGATIVE_RES_CSAT"],
+                    "timestamps": ["SOLVED_WEEK"]
+                },
+                "derived_fields": {
+                    "CSAT_Rate": """CASE 
+  WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
+  ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
+END""",
+                    "Performance_Score": """(FCR_PERCENTAGE * 0.3 + QA_SCORE * 0.3 + 
+   CASE WHEN AHT_MINUTES <= 10 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 10) * 5) END * 0.2 +
+   CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN 50 
+        ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 END * 0.2)""",
+                    "Data_Completeness_Priority": """CASE WHEN QA_SCORE IS NOT NULL AND FCR_PERCENTAGE IS NOT NULL THEN 0 ELSE 1 END"""
+                },
+                "confidence_boost": 125
+            },
+            {
+                "id": "wops_tl_performance",
+                "name": "WOPS Team Lead Performance (Weekly Aggregated) ⭐ TEAM LEAD LEADER",
+                "table": "ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE",
+                "description": "PRIORITY pattern for team lead/supervisor performance, team-level metrics, leadership analysis.",
+                "priority": "HIGH",
+                "keywords": [
+                    "team lead performance", "supervisor metrics", "manager performance", "team leader analysis",
+                    "supervisor analysis", "manager analysis", "leadership metrics", "team lead dashboard",
+                    "team performance", "supervisor performance", "team lead ranking", "team lead comparison",
+                    "team lead trends", "team lead evaluation", "team lead effectiveness",
+                    "weekly team performance",
+                    "supervisor dashboard", "manager dashboard", "team metrics", "leadership analysis",
+                    "team stats", "team rankings", "team capacity", "team volume", "cross team", "multi team"
+                ],
+                "questions": [
+                    "team performance", "team lead performance", "supervisor performance", "team rankings",
+                    "team stats", "team dashboard", "team metrics", "top performing teams", "team comparison",
+                    "team benchmarking", "team capacity", "team volume", "workload distribution",
+                    "cross team analysis", "multi team", "team qa scores", "team fcr", "team aht",
+                    "team satisfaction", "supervisor rankings", "team lead rankings", "team weekly performance"
+                ],
+                "business_context": """PRIORITY table for team lead performance with pre-aggregated team-level weekly KPIs.
+
+Key Business Rules:
+- Team-level aggregated metrics from all agents under each supervisor
+- Pre-calculated team KPIs: volume, efficiency, quality, effectiveness
+- Filter out null/empty supervisor names
+- Use for supervisor effectiveness and team comparisons
+- Current week = MAX(SOLVED_WEEK)""",
+                "standard_filters": """SUPERVISOR IS NOT NULL 
+  AND SUPERVISOR != '' 
+  AND SUPERVISOR != 'None'
+  AND LOWER(SUPERVISOR) != 'null'""",
+                "key_columns": {
+                    "identifiers": ["SOLVED_WEEK_SUPERVISOR_ID"],
+                    "dimensions": ["SUPERVISOR", "SOLVED_WEEK"],
+                    "team_kpi_metrics": ["NUM_TICKETS", "AHT_MINUTES", "FCR_PERCENTAGE", "QA_SCORE"],
+                    "team_csat_metrics": ["POSITIVE_RES_CSAT", "NEGATIVE_RES_CSAT"],
+                    "timestamps": ["SOLVED_WEEK"]
+                },
+                "derived_fields": {
+                    "Team_CSAT_Rate": """CASE 
+  WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN NULL
+  ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100
+END""",
+                    "Estimated_Tickets_Per_Agent": """CASE WHEN NUM_TICKETS = 0 THEN 0 ELSE NUM_TICKETS / 8.0 END""",
+                    "Team_Performance_Score": """(FCR_PERCENTAGE * 0.3 + QA_SCORE * 0.3 + 
+   CASE WHEN AHT_MINUTES <= 10 THEN 100 ELSE GREATEST(0, 100 - (AHT_MINUTES - 10) * 5) END * 0.4)"""
+                },
+                "confidence_boost": 125
+            },
+            {
+                "id": "schedule_adherence",
+                "name": "Agent Schedule Adherence Analysis ⭐ ADHERENCE LEADER",
+                "table": "ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE",
+                "description": "EXCLUSIVE pattern for schedule adherence, compliance, time tracking analysis. Pre-calculated adherence metrics.",
+                "priority": "HIGH",
+                "exclusive_for": ["schedule adherence", "adherence rate", "schedule compliance"],
+                "keywords": [
+                    "schedule adherence", "adherence rate", "schedule compliance", "schedule variance",
+                    "offline time", "break adherence", "schedule patterns", "adherence trends",
+                    "schedule analysis", "schedule performance", "adherence metrics", "schedule monitoring",
+                    "schedule effectiveness", "adherence dashboard", "adherence comparison", "schedule following",
+                    "time tracking", "work schedule", "attendance patterns", "schedule variance",
+                    "non adherent", "adherent minutes", "scheduled minutes"
+                ],
+                "questions": [
+                    "schedule adherence", "adherence rate", "schedule compliance", "schedule variance",
+                    "offline time", "break adherence", "schedule patterns", "adherence trends",
+                    "schedule analysis", "schedule performance", "adherence metrics", "which agents poor adherence",
+                    "schedule monitoring", "adherence dashboard", "adherence comparison", "time tracking",
+                    "attendance patterns", "schedule following", "adherence by team", "adherence by agent"
+                ],
+                "business_context": """EXCLUSIVE table for schedule adherence analysis with pre-calculated metrics.
+
+Key Business Rules:
+- Pre-calculated ADHERENCE_PERCENTAGE (0-100)
+- Time metrics: SCHEDULED_MINUTES, ADHERENT_MINUTES, OFFLINE_MINUTES
+- Agent-level daily adherence data
+- No complex calculations needed - all metrics ready to use
+- Use for time tracking and compliance monitoring""",
+                "standard_filters": """AGENT_NAME IS NOT NULL 
+  AND AGENT_NAME != ''
+  AND ADHERENCE_DATE IS NOT NULL""",
+                "key_columns": {
+                    "identifiers": ["AGENT_NAME", "ADHERENCE_DATE"],
+                    "dimensions": ["AGENT_NAME", "SUPERVISOR", "TEAM"],
+                    "adherence_metrics": ["ADHERENCE_PERCENTAGE", "SCHEDULED_MINUTES", "ADHERENT_MINUTES",
+                                          "OFFLINE_MINUTES", "NON_ADHERENT_LOGGED_MINUTES",
+                                          "TOTAL_NON_ADHERENT_MINUTES"],
+                    "timestamps": ["ADHERENCE_DATE", "ADHERENCE_DATETIME"],
+                    "categories": ["SCHEDULED_TASK_TYPE", "NON_ADHERENT_ACTIVITY"]
+                },
+                "derived_fields": {
+                    "Adherence_Grade": """CASE 
+  WHEN ADHERENCE_PERCENTAGE >= 95 THEN 'Excellent'
+  WHEN ADHERENCE_PERCENTAGE >= 90 THEN 'Good'
+  WHEN ADHERENCE_PERCENTAGE >= 85 THEN 'Needs Improvement'
+  ELSE 'Critical'
+END""",
+                    "Non_Adherence_Rate": """100 - ADHERENCE_PERCENTAGE""",
+                    "Offline_Percentage": """CASE 
+  WHEN SCHEDULED_MINUTES > 0 THEN (OFFLINE_MINUTES / SCHEDULED_MINUTES) * 100 
+  ELSE 0 
+END"""
+                },
+                "confidence_boost": 150  # Extra points for exclusive patterns
+            }
+        ]
 
     def match_pattern(self, question: str) -> Optional[Dict]:
         """Find the best matching pattern for a question"""
