@@ -49,10 +49,10 @@ Key Business Rules:
 - Pre-filtered business-ready data - no complex WHERE clauses needed
 - Direct Contact_Channel field (Web, Chat, Voice, Other)
 - All standard business filters already applied
-- Simply add date filtering and specific criteria""",
+- Simply add date filtering and specific criteria with PST timezone conversion""",
                 "standard_filters": """-- No standard filters needed - data is pre-filtered
 -- Simply add specific criteria like:
--- WHERE CREATED_AT_PST >= CURRENT_DATE - 7    -- Date filtering
+-- WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7    -- Date filtering
 -- AND AGENT_NAME = 'John Smith'             -- Agent filtering  
 -- AND CONTACT_CHANNEL = 'Chat'              -- Channel filtering""",
                 "key_columns": {
@@ -109,7 +109,8 @@ Key Business Rules:
 - Voice channel has Amazon Connect metrics (call duration, talk time, hold time)
 - Agent-level granularity for detailed efficiency analysis
 - No complex calculations needed - all metrics pre-calculated
-- Consider excluding outliers (>120 minutes) for averages""",
+- Consider excluding outliers (>120 minutes) for averages
+- Use PST timezone conversion for date filtering""",
                 "standard_filters": """USER_NAME IS NOT NULL 
   AND USER_NAME != ''
   AND HANDLE_TIME_IN_MINUTES IS NOT NULL""",
@@ -166,13 +167,14 @@ Key Business Rules:
 - Requires LEAD() window functions for customer tracking
 - Pre-applied filters for solved/closed, native_messaging, Chat/Voice groups
 - Complex but necessary for accurate FCR calculation
-- Time range: typically last 6 weeks including current week""",
-                "standard_filters": """status IN ('solved', 'closed')
-  AND brand_id IN ('360002340693', '29186504989207')
-  AND channel = 'native_messaging'
-  AND group_id IN ('17837476387479', '28949203098007')
-  AND (NOT LOWER(ticket_tags) LIKE '%email_blocked%' OR ticket_tags IS NULL)
-  AND (assignee_name <> 'TechOps Bot' OR assignee_name IS NULL)""",
+- Time range: typically last 6 weeks including current week
+- Use PST timezone conversion for date filtering""",
+                "standard_filters": """STATUS IN ('solved', 'closed')
+  AND BRAND_ID IN ('360002340693', '29186504989207')
+  AND CHANNEL = 'native_messaging'
+  AND GROUP_ID IN ('17837476387479', '28949203098007')
+  AND (NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL)
+  AND (ASSIGNEE_NAME <> 'TechOps Bot' OR ASSIGNEE_NAME IS NULL)""",
                 "key_columns": {
                     "identifiers": ["TICKET_ID", "REQUESTER_ID"],
                     "dimensions": ["ASSIGNEE_NAME", "CHANNEL", "GROUP_ID"],
@@ -180,18 +182,18 @@ Key Business Rules:
                     "categories": ["ISSUE_TYPE", "SHIFT_ID_S"]
                 },
                 "window_functions": {
-                    "next_ticket_detection": "LEAD(ticket_id) OVER (PARTITION BY requester_id ORDER BY created_at_pst)",
-                    "next_ticket_date": "LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst)",
-                    "fcr_calculation": "CASE WHEN created_at_pst + INTERVAL '24 HOUR' >= LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) THEN 0 ELSE 1 END"
+                    "next_ticket_detection": "LEAD(TICKET_ID) OVER (PARTITION BY REQUESTER_ID ORDER BY CREATED_AT_PST)",
+                    "next_ticket_date": "LEAD(CREATED_AT_PST) OVER (PARTITION BY REQUESTER_ID ORDER BY CREATED_AT_PST)",
+                    "fcr_calculation": "CASE WHEN CREATED_AT_PST + INTERVAL '24 HOUR' >= LEAD(CREATED_AT_PST) OVER (PARTITION BY REQUESTER_ID ORDER BY CREATED_AT_PST) THEN 0 ELSE 1 END"
                 },
                 "derived_fields": {
                     "Contact_Channel": """CASE
-  WHEN group_id = '17837476387479' THEN 'Chat'
-  WHEN group_id = '28949203098007' THEN 'Voice'
+  WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+  WHEN GROUP_ID = '28949203098007' THEN 'Voice'
   ELSE 'Other'
 END""",
                     "Is_FCR_Success": """CASE
-  WHEN created_at_pst + INTERVAL '24 HOUR' >= LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst) THEN 0
+  WHEN CREATED_AT_PST + INTERVAL '24 HOUR' >= LEAD(CREATED_AT_PST) OVER (PARTITION BY REQUESTER_ID ORDER BY CREATED_AT_PST) THEN 0
   ELSE 1
 END"""
                 },
@@ -333,7 +335,8 @@ Key Business Rules:
 - Time metrics: SCHEDULED_MINUTES, ADHERENT_MINUTES, OFFLINE_MINUTES
 - Agent-level daily adherence data
 - No complex calculations needed - all metrics ready to use
-- Use for time tracking and compliance monitoring""",
+- Use for time tracking and compliance monitoring
+- Use PST timezone conversion for date filtering""",
                 "standard_filters": """AGENT_NAME IS NOT NULL 
   AND AGENT_NAME != ''
   AND ADHERENCE_DATE IS NOT NULL""",
@@ -374,17 +377,24 @@ END"""
             score = 0
             matched_items = []
 
+            # Check for exclusive pattern keywords first (highest priority)
+            if pattern.get("exclusive_for"):
+                for exclusive_term in pattern["exclusive_for"]:
+                    if exclusive_term in question_lower:
+                        score += 20  # High bonus for exclusive matches
+                        matched_items.append(f"EXCLUSIVE:'{exclusive_term}'(+20)")
+
             # Check exact question matches
             for q in pattern["questions"]:
                 if q in question_lower:
                     score += 10
-                    matched_items.append(f"question:'{q}'")
+                    matched_items.append(f"question:'{q}'(+10)")
 
             # Check keyword matches
             for keyword in pattern["keywords"]:
                 if keyword in question_lower:
                     score += 3
-                    matched_items.append(f"keyword:'{keyword}'")
+                    matched_items.append(f"keyword:'{keyword}'(+3)")
 
             # Enhanced bonuses for specific patterns
             if pattern["id"] == "wops_agent_performance":
@@ -395,12 +405,12 @@ END"""
                     ("trends", 6), ("scorecard", 6), ("kpi", 6), ("individual", 5)
                 ]
 
-                # Exclude team-related terms
-                if not any(term in question_lower for term in ["team", "supervisor", "lead"]):
+                # Exclude team-related terms to avoid confusion with team lead performance
+                if not any(term in question_lower for term in ["team", "supervisor", "lead", "manager"]):
                     for indicator, points in performance_indicators:
                         if indicator in question_lower:
                             score += points
-                            matched_items.append(f"agent_performance:'{indicator}'({points})")
+                            matched_items.append(f"agent_performance:'{indicator}'(+{points})")
 
             elif pattern["id"] == "wops_tl_performance":
                 team_indicators = [
@@ -408,47 +418,67 @@ END"""
                     ("team performance", 15), ("supervisor performance", 15),
                     ("team stats", 12), ("team metrics", 12), ("team rankings", 12),
                     ("cross team", 10), ("multi team", 10), ("team comparison", 12),
-                    ("team capacity", 10), ("workload", 8)
+                    ("team capacity", 10), ("workload", 8), ("manager", 8)
                 ]
 
                 for indicator, points in team_indicators:
                     if indicator in question_lower:
                         score += points
-                        matched_items.append(f"team_performance:'{indicator}'({points})")
+                        matched_items.append(f"team_performance:'{indicator}'(+{points})")
 
-            elif pattern["id"] == "wops_klaus_qa_ata":
-                qa_detail_indicators = [
-                    ("qa component", 15), ("qa breakdown", 15), ("qa details", 12),
-                    ("auto fail", 15), ("auto-fail", 15), ("qa review", 10),
-                    ("component", 8), ("resolution score", 12), ("communication score", 12),
-                    ("reviewer", 10), ("scorecard", 8), ("ata", 10),
-                    ("individual qa", 12), ("detailed qa", 12)
+            elif pattern["id"] == "wops_tickets_response_time":
+                # High priority for response time and ticket volume
+                response_indicators = [
+                    ("response time", 15), ("reply time", 15), ("resolution time", 15),
+                    ("sla", 12), ("turnaround", 10), ("how long", 8),
+                    ("ticket", 5), ("volume", 5), ("created", 5), ("how many", 8),
+                    ("today", 6), ("yesterday", 6), ("daily", 6), ("count", 5)
                 ]
 
-                for indicator, points in qa_detail_indicators:
+                for indicator, points in response_indicators:
                     if indicator in question_lower:
                         score += points
-                        matched_items.append(f"qa_detail:'{indicator}'({points})")
+                        matched_items.append(f"tickets_response:'{indicator}'(+{points})")
 
-            elif pattern["id"] == "wops_tickets":
-                if any(term in question_lower for term in ["ticket", "volume", "created", "how many"]):
-                    # Boost for daily/operational queries
-                    if any(term in question_lower for term in ["today", "yesterday", "daily", "count"]):
-                        score += 8
-                        matched_items.append("daily_tickets_bonus")
-                    else:
-                        score += 5
-                        matched_items.append("tickets_bonus")
+            elif pattern["id"] == "agent_handle_time":
+                handle_time_indicators = [
+                    ("handle time", 15), ("aht", 15), ("average handle time", 18),
+                    ("efficiency", 8), ("call duration", 10), ("talk time", 10),
+                    ("hold time", 10), ("voice metrics", 12)
+                ]
 
-            elif pattern["id"] == "handle_time":
-                if any(term in question_lower for term in ["handle time", "aht", "duration"]):
-                    score += 5
-                    matched_items.append("aht_bonus")
+                for indicator, points in handle_time_indicators:
+                    if indicator in question_lower:
+                        score += points
+                        matched_items.append(f"handle_time:'{indicator}'(+{points})")
 
-            elif pattern["id"] == "fcr":
-                if any(term in question_lower for term in ["fcr", "first contact", "resolution rate"]):
-                    score += 5
-                    matched_items.append("fcr_bonus")
+            elif pattern["id"] == "fcr_analysis":
+                fcr_indicators = [
+                    ("fcr", 15), ("first contact resolution", 18), ("repeat contact", 12),
+                    ("callback", 10), ("resolved first time", 15), ("channel switching", 12)
+                ]
+
+                for indicator, points in fcr_indicators:
+                    if indicator in question_lower:
+                        score += points
+                        matched_items.append(f"fcr:'{indicator}'(+{points})")
+
+            elif pattern["id"] == "schedule_adherence":
+                adherence_indicators = [
+                    ("schedule adherence", 18), ("adherence rate", 15), ("schedule compliance", 15),
+                    ("offline time", 10), ("schedule", 8), ("adherence", 12)
+                ]
+
+                for indicator, points in adherence_indicators:
+                    if indicator in question_lower:
+                        score += points
+                        matched_items.append(f"adherence:'{indicator}'(+{points})")
+
+            # Apply confidence boost from pattern configuration
+            if score > 0 and pattern.get("confidence_boost"):
+                boost = pattern["confidence_boost"]
+                score += boost
+                matched_items.append(f"confidence_boost(+{boost})")
 
             # Log scoring details
             if score > 0:
@@ -461,11 +491,11 @@ END"""
 
         print(f"🎯 Best match: {best_match[0]['id']} with {best_match[1]} points")
 
-        if best_match[1] >= 3:
+        if best_match[1] >= 5:  # Slightly higher threshold due to confidence boosts
             print(f"✅ Pattern matched: {best_match[0]['name']}")
             return best_match[0]
         else:
-            print(f"❌ No pattern match (highest score: {best_match[1]}, need ≥3)")
+            print(f"❌ No pattern match (highest score: {best_match[1]}, need ≥5)")
             return None
 
 
@@ -499,14 +529,14 @@ class PatternBasedQueryHelper:
             sql = self._build_wops_performance_helper(question_lower, pattern, intent, sql_parts)
         elif pattern["id"] == "wops_tl_performance":
             sql = self._build_wops_tl_performance_helper(question_lower, pattern, intent, sql_parts)
-        elif pattern["id"] == "wops_klaus_qa_ata":
-            sql = self._build_wops_klaus_qa_ata_helper(question_lower, pattern, intent, sql_parts)
-        elif pattern["id"] == "wops_tickets":
+        elif pattern["id"] == "wops_tickets_response_time":
             sql = self._build_wops_tickets_helper(question_lower, pattern, intent, sql_parts)
-        elif pattern["id"] == "handle_time":
+        elif pattern["id"] == "agent_handle_time":
             sql = self._build_handle_time_helper(question_lower, pattern, intent, sql_parts)
-        elif pattern["id"] == "fcr":
+        elif pattern["id"] == "fcr_analysis":
             sql = self._build_fcr_helper(question_lower, pattern, intent, sql_parts)
+        elif pattern["id"] == "schedule_adherence":
+            sql = self._build_schedule_adherence_helper(question_lower, pattern, intent, sql_parts)
         else:
             sql = self._build_generic_helper(question_lower, pattern, intent, sql_parts)
 
@@ -547,8 +577,8 @@ class PatternBasedQueryHelper:
                 "FCR_PERCENTAGE",
                 "QA_SCORE"
             ]
+            sql_parts["where"].append("SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'")
             sql_parts["order_by"] = ["SOLVED_WEEK DESC"]
-            sql_parts["limit"] = "LIMIT 12"
 
         # Performance rankings
         elif "ranking" in question or "rankings" in question:
@@ -561,7 +591,7 @@ class PatternBasedQueryHelper:
                 "COUNT(*) as weeks_active",
                 "ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as overall_rank"
             ]
-            sql_parts["where"].append("SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'")
+            sql_parts["where"].append("SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'")
             sql_parts["where"].append("QA_SCORE IS NOT NULL")
             sql_parts["group_by"] = ["ASSIGNEE_NAME"]
             sql_parts["order_by"] = ["overall_rank"]
@@ -628,8 +658,8 @@ class PatternBasedQueryHelper:
                 "FCR_PERCENTAGE",
                 "QA_SCORE"
             ]
+            sql_parts["where"].append("SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'")
             sql_parts["order_by"] = ["SOLVED_WEEK DESC"]
-            sql_parts["limit"] = "LIMIT 12"
 
         # Team capacity analysis
         elif "capacity" in question or "workload" in question:
@@ -640,7 +670,7 @@ class PatternBasedQueryHelper:
                 "MIN(NUM_TICKETS) as min_weekly_volume",
                 "AVG(NUM_TICKETS) / 8.0 as estimated_tickets_per_agent"
             ]
-            sql_parts["where"].append("SOLVED_WEEK >= CURRENT_DATE - INTERVAL '8 weeks'")
+            sql_parts["where"].append("SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '8 weeks'")
             sql_parts["group_by"] = ["SUPERVISOR"]
             sql_parts["order_by"] = ["avg_weekly_volume DESC"]
 
@@ -659,91 +689,21 @@ class PatternBasedQueryHelper:
 
         return self._assemble_sql(sql_parts)
 
-    def _build_wops_klaus_qa_ata_helper(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
-        """Build HELPER SQL for WOPS Klaus QA & ATA detailed reviews"""
-
-        # QA component breakdown
-        if any(phrase in question for phrase in ["component breakdown", "qa components", "component analysis"]):
-            sql_parts["select"] = [
-                "REVIEWEE_NAME",
-                "COUNT(*) as total_reviews",
-                "AVG(OVERALL_SCORE) as avg_overall_score",
-                "AVG(CASE WHEN RESOLUTION_BASE > 0 THEN (RESOLUTION_RATING_SCORE / RESOLUTION_BASE) * 100 END) as avg_resolution_pct",
-                "AVG(CASE WHEN COMMUNICATION_BASE > 0 THEN (COMMUNICATION_RATING_SCORE / COMMUNICATION_BASE) * 100 END) as avg_communication_pct",
-                "AVG(CASE WHEN HANDLING_BASE > 0 THEN (HANDLING_RATING_SCORE / HANDLING_BASE) * 100 END) as avg_handling_pct",
-                "SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) as auto_fail_count"
-            ]
-            sql_parts["where"].append("REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'")
-            sql_parts["group_by"] = ["REVIEWEE_NAME"]
-            sql_parts["order_by"] = ["avg_overall_score DESC"]
-
-        # Auto-fail analysis
-        elif "auto fail" in question or "auto-fail" in question:
-            sql_parts["select"] = [
-                "REVIEWEE_NAME",
-                "REVIEWER_NAME",
-                "TICKET_ID",
-                "OVERALL_SCORE",
-                "SCORECARD_NAME",
-                "REVIEW_CREATED_AT",
-                "REVIEW_COMMENT"
-            ]
-            sql_parts["where"].append("NO_AUTO_FAIL_RATING_SCORE < 100")
-            sql_parts["where"].append("REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'")
-            sql_parts["order_by"] = ["REVIEW_CREATED_AT DESC"]
-
-        # Reviewer performance
-        elif "reviewer" in question:
-            sql_parts["select"] = [
-                "REVIEWER_NAME",
-                "COUNT(*) as reviews_conducted",
-                "AVG(OVERALL_SCORE) as avg_score_given",
-                "STDDEV(OVERALL_SCORE) as score_std_dev",
-                "SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate"
-            ]
-            sql_parts["where"].append("REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'")
-            sql_parts["group_by"] = ["REVIEWER_NAME"]
-            sql_parts["order_by"] = ["score_std_dev ASC"]
-
-        # QA by channel
-        elif "by channel" in question or "channel" in question:
-            sql_parts["select"] = [
-                "CONTACT_CHANNEL",
-                "COUNT(*) as review_count",
-                "AVG(OVERALL_SCORE) as avg_overall_score",
-                "SUM(CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 1 ELSE 0 END) / COUNT(*) * 100 as auto_fail_rate"
-            ]
-            sql_parts["where"].append("REVIEW_CREATED_AT >= CURRENT_DATE - INTERVAL '30 days'")
-            sql_parts["where"].append("CONTACT_CHANNEL IS NOT NULL")
-            sql_parts["group_by"] = ["CONTACT_CHANNEL"]
-            sql_parts["order_by"] = ["avg_overall_score DESC"]
-
-        # Default: recent reviews
-        else:
-            sql_parts["select"] = [
-                "REVIEWEE_NAME",
-                "REVIEWER_NAME",
-                "OVERALL_SCORE",
-                "SCORECARD_NAME",
-                "CASE WHEN NO_AUTO_FAIL_RATING_SCORE < 100 THEN 'Yes' ELSE 'No' END as auto_fail",
-                "REVIEW_CREATED_AT"
-            ]
-            sql_parts["order_by"] = ["REVIEW_CREATED_AT DESC"]
-            sql_parts["limit"] = "LIMIT 50"
-
-        return self._assemble_sql(sql_parts)
-
     def _build_wops_tickets_helper(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
         """Build HELPER SQL for WOPS tickets queries"""
 
-        # Ticket count queries
-        if any(phrase in question for phrase in ["how many tickets", "ticket count", "tickets created"]):
-            sql_parts["select"] = ["COUNT(*) as ticket_count"]
+        # Response time analysis
+        if any(phrase in question for phrase in ["response time", "reply time", "resolution time", "sla"]):
+            sql_parts["select"] = [
+                "AVG(REPLY_TIME_IN_MINUTES) as avg_response_time",
+                "AVG(FIRST_RESOLUTION_TIME_IN_MINUTES) as avg_resolution_time",
+                "COUNT(*) as total_tickets",
+                "SUM(CASE WHEN REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as response_sla_compliance"
+            ]
 
-            # Add time filter
-            time_filter = self._get_time_filter(question, "CREATED_AT")
-            if time_filter:
-                sql_parts["where"].append(time_filter)
+        # Ticket count queries
+        elif any(phrase in question for phrase in ["how many tickets", "ticket count", "tickets created"]):
+            sql_parts["select"] = ["COUNT(*) as ticket_count"]
 
         # Volume by dimension
         elif "by" in question or "per" in question:
@@ -751,15 +711,14 @@ class PatternBasedQueryHelper:
 
             # Determine grouping
             if "channel" in question:
-                contact_channel = pattern["derived_fields"]["Contact_Channel"]
-                sql_parts["select"].insert(0, f"({contact_channel}) AS Contact_Channel")
-                sql_parts["group_by"] = ["Contact_Channel"]
-            elif "group" in question:
-                sql_parts["select"].insert(0, "GROUP_NAME")
-                sql_parts["group_by"] = ["GROUP_NAME"]
+                sql_parts["select"].insert(0, "CONTACT_CHANNEL")
+                sql_parts["group_by"] = ["CONTACT_CHANNEL"]
             elif "agent" in question:
-                sql_parts["select"].insert(0, "ASSIGNEE_NAME")
-                sql_parts["group_by"] = ["ASSIGNEE_NAME"]
+                sql_parts["select"].insert(0, "AGENT_NAME")
+                sql_parts["group_by"] = ["AGENT_NAME"]
+            elif "team" in question:
+                sql_parts["select"].insert(0, "TEAM_LEAD")
+                sql_parts["group_by"] = ["TEAM_LEAD"]
 
             sql_parts["order_by"] = ["ticket_count DESC"]
 
@@ -767,13 +726,18 @@ class PatternBasedQueryHelper:
         else:
             sql_parts["select"] = [
                 "TICKET_ID",
-                "ASSIGNEE_NAME",
-                "GROUP_NAME",
-                "STATUS",
-                "CREATED_AT"
+                "AGENT_NAME",
+                "CONTACT_CHANNEL",
+                "TICKET_STATUS",
+                "CREATED_AT_PST"
             ]
-            sql_parts["order_by"] = ["CREATED_AT DESC"]
+            sql_parts["order_by"] = ["CREATED_AT_PST DESC"]
             sql_parts["limit"] = "LIMIT 100"
+
+        # Add time filter if present
+        time_filter = self._get_time_filter_pst(question, "CREATED_AT_PST")
+        if time_filter:
+            sql_parts["where"].append(time_filter)
 
         return self._assemble_sql(sql_parts)
 
@@ -788,6 +752,11 @@ class PatternBasedQueryHelper:
                 sql_parts["group_by"] = ["USER_NAME"]
                 sql_parts["select"].append("COUNT(*) as tickets_handled")
 
+            if "by supervisor" in question or "by team" in question:
+                sql_parts["select"].insert(0, "SUPERVISOR")
+                sql_parts["group_by"] = ["SUPERVISOR"]
+                sql_parts["select"].append("COUNT(*) as tickets_handled")
+
             sql_parts["order_by"] = ["avg_handle_time_minutes"]
         else:
             # Default: recent handle times
@@ -796,10 +765,15 @@ class PatternBasedQueryHelper:
                 "USER_NAME",
                 "HANDLE_TIME_IN_MINUTES",
                 "CONTACT_CHANNEL",
-                "CREATED_AT"
+                "CREATED_AT_PST"
             ]
-            sql_parts["order_by"] = ["CREATED_AT DESC"]
+            sql_parts["order_by"] = ["CREATED_AT_PST DESC"]
             sql_parts["limit"] = "LIMIT 100"
+
+        # Add time filter if present
+        time_filter = self._get_time_filter_pst(question, "CREATED_AT_PST")
+        if time_filter:
+            sql_parts["where"].append(time_filter)
 
         return self._assemble_sql(sql_parts)
 
@@ -815,11 +789,54 @@ class PatternBasedQueryHelper:
         sql_parts["order_by"] = ["total_tickets DESC"]
         sql_parts["limit"] = "LIMIT 20"
 
+        # Add time filter if present
+        time_filter = self._get_time_filter_pst(question, "CREATED_AT_PST")
+        if time_filter:
+            sql_parts["where"].append(time_filter)
+
         # Add comment for OpenAI
         sql = self._assemble_sql(sql_parts)
         sql = f"-- FCR requires window functions - this is basic structure\n{sql}"
 
         return sql
+
+    def _build_schedule_adherence_helper(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
+        """Build HELPER SQL for schedule adherence queries"""
+
+        if "average" in question or "rate" in question:
+            sql_parts["select"] = [
+                "AVG(ADHERENCE_PERCENTAGE) as avg_adherence_rate",
+                "COUNT(*) as schedule_periods"
+            ]
+
+            if "by agent" in question:
+                sql_parts["select"].insert(0, "AGENT_NAME")
+                sql_parts["group_by"] = ["AGENT_NAME"]
+
+            if "by team" in question or "by supervisor" in question:
+                sql_parts["select"].insert(0, "SUPERVISOR")
+                sql_parts["group_by"] = ["SUPERVISOR"]
+
+            sql_parts["order_by"] = ["avg_adherence_rate DESC"]
+        else:
+            # Default: recent adherence data
+            sql_parts["select"] = [
+                "AGENT_NAME",
+                "ADHERENCE_DATE",
+                "ADHERENCE_PERCENTAGE",
+                "SCHEDULED_MINUTES",
+                "ADHERENT_MINUTES",
+                "OFFLINE_MINUTES"
+            ]
+            sql_parts["order_by"] = ["ADHERENCE_DATE DESC"]
+            sql_parts["limit"] = "LIMIT 100"
+
+        # Add time filter if present
+        time_filter = self._get_time_filter_pst(question, "ADHERENCE_DATE")
+        if time_filter:
+            sql_parts["where"].append(time_filter)
+
+        return self._assemble_sql(sql_parts)
 
     def _build_generic_helper(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
         """Build generic helper query"""
@@ -827,20 +844,20 @@ class PatternBasedQueryHelper:
         sql_parts["limit"] = "LIMIT 10"
         return self._assemble_sql(sql_parts)
 
-    def _get_time_filter(self, question: str, date_column: str) -> Optional[str]:
-        """Extract time filter from question"""
+    def _get_time_filter_pst(self, question: str, date_column: str) -> Optional[str]:
+        """Extract time filter from question with PST timezone conversion"""
         if "today" in question:
-            return f"DATE({date_column}) = CURRENT_DATE()"
+            return f"DATE({date_column}) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))"
         elif "yesterday" in question:
-            return f"DATE({date_column}) = DATEADD(day, -1, CURRENT_DATE())"
+            return f"DATE({date_column}) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 1"
         elif "last week" in question:
-            return f"{date_column} >= DATEADD(week, -1, CURRENT_DATE())"
+            return f"{date_column} >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7"
         elif "this week" in question:
-            return f"WEEK({date_column}) = WEEK(CURRENT_DATE()) AND YEAR({date_column}) = YEAR(CURRENT_DATE())"
+            return f"{date_column} >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))"
         elif "last month" in question:
-            return f"{date_column} >= DATEADD(month, -1, CURRENT_DATE())"
+            return f"{date_column} >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '1 month' AND {date_column} < DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))"
         elif "this month" in question:
-            return f"MONTH({date_column}) = MONTH(CURRENT_DATE()) AND YEAR({date_column}) = YEAR(CURRENT_DATE())"
+            return f"{date_column} >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))"
         return None
 
     def _assemble_sql(self, parts: Dict) -> str:

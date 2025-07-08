@@ -2,6 +2,8 @@
 
 This document contains proven SQL query patterns optimized for vector search and comprehensive business intelligence questions.
 
+**⚠️ CRITICAL TIMEZONE FIX: All PST column filtering now uses proper PST timezone conversion**
+
 ---
 
 ## 🔍 SEARCH KEYWORDS MASTER INDEX
@@ -52,6 +54,40 @@ This document contains proven SQL query patterns optimized for vector search and
 
 ---
 
+## 🕐 PST TIMEZONE HELPER FUNCTIONS
+
+### Critical PST Date Functions
+```sql
+-- Current PST Date
+DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))
+
+-- PST Date Range Examples
+-- Today in PST
+WHERE DATE(CREATED_AT_PST) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))
+
+-- Yesterday in PST  
+WHERE DATE(CREATED_AT_PST) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 1
+
+-- Last 7 days in PST
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7
+
+-- This week in PST (Monday start)
+WHERE CREATED_AT_PST >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))
+
+-- Last week in PST
+WHERE CREATED_AT_PST >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - 7
+  AND CREATED_AT_PST < DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))
+
+-- This month in PST
+WHERE CREATED_AT_PST >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))
+
+-- Last month in PST
+WHERE CREATED_AT_PST >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '1 month'
+  AND CREATED_AT_PST < DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))
+```
+
+---
+
 ## Pattern 1: WOPS Tickets Comprehensive Analysis ⭐ RESPONSE TIME LEADER
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS`
@@ -69,7 +105,7 @@ This pattern is the **DEFINITIVE SOURCE** for response time questions because:
 - **FIRST_RESOLUTION_TIME_IN_MINUTES**: Time from creation to first resolution  
 - **FULL_RESOLUTION_TIME_IN_MINUTES**: Total time from creation to final resolution
 
-### Standard Response Time Query Pattern
+### Standard Response Time Query Pattern (PST CORRECTED)
 ```sql
 SELECT 
   AVG(REPLY_TIME_IN_MINUTES) as avg_response_time,
@@ -79,10 +115,10 @@ SELECT
   SUM(CASE WHEN REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as response_sla_compliance,
   SUM(CASE WHEN FIRST_RESOLUTION_TIME_IN_MINUTES <= 1440 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as resolution_sla_compliance
 FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
-WHERE CREATED_AT_PST >= CURRENT_DATE - 7  -- Last 7 days
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
 ```
 
-### Response Time by Priority
+### Response Time by Priority (PST CORRECTED)
 ```sql
 SELECT 
   TICKET_PRIORITY,
@@ -90,12 +126,12 @@ SELECT
   AVG(FIRST_RESOLUTION_TIME_IN_MINUTES) as avg_resolution_time,
   COUNT(*) as ticket_count
 FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
-WHERE CREATED_AT_PST >= CURRENT_DATE - 30
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 30  -- Last 30 days in PST
 GROUP BY TICKET_PRIORITY
 ORDER BY avg_response_time
 ```
 
-### Response Time Trends
+### Response Time Trends (PST CORRECTED)
 ```sql
 SELECT 
   DATE(CREATED_AT_PST) as ticket_date,
@@ -103,12 +139,12 @@ SELECT
   AVG(FIRST_RESOLUTION_TIME_IN_MINUTES) as avg_resolution_time,
   COUNT(*) as daily_tickets
 FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
-WHERE CREATED_AT_PST >= CURRENT_DATE - 30
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 30  -- Last 30 days in PST
 GROUP BY DATE(CREATED_AT_PST)
 ORDER BY ticket_date
 ```
 
-### Response Time Distribution
+### Response Time Distribution (PST CORRECTED)
 ```sql
 SELECT 
   CASE 
@@ -120,9 +156,16 @@ SELECT
   COUNT(*) as ticket_count,
   COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() as percentage
 FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
-WHERE CREATED_AT_PST >= CURRENT_DATE - 7
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
 GROUP BY response_time_bucket
 ORDER BY MIN(REPLY_TIME_IN_MINUTES)
+```
+
+### Today's Tickets (PST CORRECTED)
+```sql
+SELECT COUNT(*) as tickets_today
+FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS
+WHERE DATE(CREATED_AT_PST) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))
 ```
 
 ### Questions This Pattern Answers
@@ -149,9 +192,9 @@ ORDER BY MIN(REPLY_TIME_IN_MINUTES)
 - Only standard channels (api, email, native_messaging, web)
 - Correct brand IDs (29186504989207, 360002340693)
 
-**Simply add your specific criteria:**
+**Simply add your specific criteria with PST timezone handling:**
 ```sql
-WHERE CREATED_AT_PST >= CURRENT_DATE - 7    -- Date filtering
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7    -- Date filtering
   AND AGENT_NAME = 'John Smith'             -- Agent filtering  
   AND CONTACT_CHANNEL = 'Chat'              -- Channel filtering
   AND TICKET_TYPE = 'General Assistance'   -- Type filtering
@@ -226,7 +269,7 @@ This pattern is the **DEFINITIVE SOURCE** for handle time and agent efficiency q
 - **Escalation**: ESCALATION_TEAM, ESCALATION_TYPE
 - **Timestamps**: CREATED_AT, CREATED_AT_PST, SOLVED_AT, SOLVED_AT_PST
 
-### Sample Queries
+### Sample Queries (PST CORRECTED)
 
 **Average AHT by agent**:
 ```sql
@@ -238,12 +281,12 @@ SELECT
   MIN(HANDLE_TIME_IN_MINUTES) as min_handle_time,
   MAX(HANDLE_TIME_IN_MINUTES) as max_handle_time
 FROM ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
-WHERE CREATED_AT >= CURRENT_DATE - 7
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
 GROUP BY USER_NAME, SUPERVISOR
 ORDER BY avg_aht_minutes
 ```
 
-**Voice channel efficiency**:
+**Voice channel efficiency (PST CORRECTED)**:
 ```sql
 SELECT 
   USER_NAME,
@@ -253,12 +296,12 @@ SELECT
   AVG(HANDLE_TIME_IN_MINUTES) as avg_total_handle_time
 FROM ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
 WHERE CONTACT_CHANNEL = 'Voice'
-  AND CREATED_AT >= CURRENT_DATE - 7
+  AND CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
 GROUP BY USER_NAME
 ORDER BY avg_call_duration DESC
 ```
 
-**Handle time distribution**:
+**Handle time distribution (PST CORRECTED)**:
 ```sql
 SELECT 
   CASE 
@@ -271,12 +314,12 @@ SELECT
   COUNT(*) as ticket_count,
   COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() as percentage
 FROM ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
-WHERE CREATED_AT >= CURRENT_DATE - 7
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
 GROUP BY time_bucket
 ORDER BY MIN(HANDLE_TIME_IN_MINUTES)
 ```
 
-**Supervisor team efficiency**:
+**Supervisor team efficiency (PST CORRECTED)**:
 ```sql
 SELECT 
   SUPERVISOR,
@@ -285,7 +328,7 @@ SELECT
   COUNT(*) as total_tickets_handled,
   SUM(HANDLE_TIME_IN_MINUTES) as total_handle_time_minutes
 FROM ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
-WHERE CREATED_AT >= CURRENT_DATE - 7
+WHERE CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
   AND SUPERVISOR IS NOT NULL
 GROUP BY SUPERVISOR
 ORDER BY team_avg_aht
@@ -311,7 +354,7 @@ ORDER BY team_avg_aht
 ### FCR Definition
 A ticket is considered "resolved first time" if the customer does not create another ticket within 24 hours.
 
-### FCR Window Function Pattern (COMPLETE TEMPLATE)
+### FCR Window Function Pattern (COMPLETE TEMPLATE - PST CORRECTED)
 ```sql
 WITH FCR_ANALYSIS AS (
   SELECT
@@ -338,7 +381,7 @@ WITH FCR_ANALYSIS AS (
   WHERE STATUS IN ('closed', 'solved') 
     AND CHANNEL IN ('api', 'email', 'native_messaging', 'web')
     AND BRAND_ID IN ('29186504989207', '360002340693')
-    AND CREATED_AT_PST >= CURRENT_DATE - 30
+    AND CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 30  -- Last 30 days in PST
 )
 SELECT 
   AVG(is_fcr_success) * 100 as fcr_rate,
@@ -348,7 +391,7 @@ SELECT
 FROM FCR_ANALYSIS;
 ```
 
-### FCR by Agent
+### FCR by Agent (PST CORRECTED)
 ```sql
 -- Use the FCR_ANALYSIS CTE from above, then:
 SELECT 
@@ -361,7 +404,7 @@ GROUP BY ASSIGNEE_NAME
 ORDER BY agent_fcr_rate DESC
 ```
 
-### FCR by Channel
+### FCR by Channel (PST CORRECTED)
 ```sql
 -- Use the FCR_ANALYSIS CTE from above, then:
 SELECT 
@@ -373,7 +416,7 @@ GROUP BY CONTACT_CHANNEL
 ORDER BY channel_fcr_rate DESC
 ```
 
-### Channel Switching Analysis
+### Channel Switching Analysis (PST CORRECTED)
 ```sql
 -- Use the FCR_ANALYSIS CTE from above, then:
 SELECT 
@@ -425,7 +468,7 @@ This pattern is the **DEFINITIVE SOURCE** for agent performance questions becaus
 - **Effectiveness**: `FCR_PERCENTAGE` (first contact resolution rate 0-100)
 - **Customer Satisfaction**: `POSITIVE_RES_CSAT`, `NEGATIVE_RES_CSAT`
 
-### Agent Performance Dashboard Query
+### Agent Performance Dashboard Query (PST CORRECTED)
 ```sql
 SELECT 
   ASSIGNEE_NAME,
@@ -449,7 +492,7 @@ WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_
 ORDER BY performance_score DESC
 ```
 
-### Top Performers Query
+### Top Performers Query (PST CORRECTED)
 ```sql
 SELECT 
   ASSIGNEE_NAME,
@@ -459,7 +502,7 @@ SELECT
   AVG(AHT_MINUTES) as avg_aht,
   COUNT(*) as weeks_active
 FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
-WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+WHERE SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'  -- Last 12 weeks
 GROUP BY ASSIGNEE_NAME
 HAVING COUNT(*) >= 8  -- At least 8 weeks of data
 ORDER BY avg_qa_score DESC, avg_fcr DESC
@@ -506,7 +549,7 @@ This pattern is the **DEFINITIVE SOURCE** for team lead performance questions be
 - **Team Effectiveness**: `FCR_PERCENTAGE` (team FCR rate 0-100)
 - **Team Satisfaction**: `POSITIVE_RES_CSAT`, `NEGATIVE_RES_CSAT`
 
-### Team Lead Performance Dashboard Query
+### Team Lead Performance Dashboard Query (PST CORRECTED)
 ```sql
 SELECT 
   SUPERVISOR,
@@ -521,7 +564,7 @@ WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_
 ORDER BY QA_SCORE DESC, FCR_PERCENTAGE DESC
 ```
 
-### Team Lead Rankings Query
+### Team Lead Rankings Query (PST CORRECTED)
 ```sql
 SELECT 
   SUPERVISOR,
@@ -532,7 +575,7 @@ SELECT
   COUNT(*) as weeks_active,
   ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as team_rank
 FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
-WHERE SOLVED_WEEK >= CURRENT_DATE - INTERVAL '12 weeks'
+WHERE SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'  -- Last 12 weeks
 GROUP BY SUPERVISOR
 HAVING COUNT(*) >= 8  -- At least 8 weeks of data
 ORDER BY team_rank
@@ -574,7 +617,7 @@ ORDER BY team_rank
   - SCHEDULED_MINUTES, ADHERENT_MINUTES, OFFLINE_MINUTES
   - NON_ADHERENT_LOGGED_MINUTES, TOTAL_NON_ADHERENT_MINUTES
 
-### Schedule Adherence Dashboard Query
+### Schedule Adherence Dashboard Query (PST CORRECTED)
 ```sql
 SELECT 
   AGENT_NAME,
@@ -584,7 +627,7 @@ SELECT
   SUM(OFFLINE_MINUTES) as total_offline_minutes,
   COUNT(*) as schedule_periods
 FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
-WHERE ADHERENCE_DATE >= CURRENT_DATE - 7
+WHERE ADHERENCE_DATE >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7  -- Last 7 days in PST
 GROUP BY AGENT_NAME
 ORDER BY avg_adherence_rate DESC
 ```
@@ -642,8 +685,6 @@ Each pattern should score based on keyword matches:
 - **Pre-calculated metric available** = 125 points
 
 ---
-
-## BUSINESS RULES FOR BOT DECISION MAKING
 
 ## BUSINESS RULES FOR BOT DECISION MAKING
 
@@ -747,7 +788,7 @@ Combine patterns for comprehensive insights:
 - Compare metrics across Chat, Voice, and Web channels
 
 ### For Time-Based Analysis
-- All patterns have PST timestamp columns
+- **ALL PST columns must use PST timezone conversion for filtering**
 - Use DATE_TRUNC for hourly/daily/weekly aggregations
 - Consider business hours filtering when relevant
 
@@ -757,9 +798,31 @@ Combine patterns for comprehensive insights:
 - Consider schedule adherence as a leading indicator
 
 ## Important Notes
-1. **RPT tables are pre-filtered** - no complex WHERE clauses needed
-2. **WOPS tables are pre-aggregated** - no complex GROUP BY needed
-3. **Direct field access** for CONTACT_CHANNEL, TICKET_SUB_TYPE in Pattern 1
-4. Handle time metrics are pre-calculated - no need for complex calculations
-5. Schedule adherence percentages are pre-calculated and ready to use
-6. Consider joining patterns on AGENT_NAME/USER_NAME for comprehensive analysis
+1. **PST TIMEZONE CRITICAL**: Always use `DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))` when filtering PST columns
+2. **RPT tables are pre-filtered** - no complex WHERE clauses needed
+3. **WOPS tables are pre-aggregated** - no complex GROUP BY needed
+4. **Direct field access** for CONTACT_CHANNEL, TICKET_SUB_TYPE in Pattern 1
+5. Handle time metrics are pre-calculated - no need for complex calculations
+6. Schedule adherence percentages are pre-calculated and ready to use
+7. Consider joining patterns on AGENT_NAME/USER_NAME for comprehensive analysis
+
+## PST Timezone Examples Summary
+
+### Common PST Date Filters
+```sql
+-- Today
+DATE(CREATED_AT_PST) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))
+
+-- Yesterday  
+DATE(CREATED_AT_PST) = DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 1
+
+-- Last 7 days
+CREATED_AT_PST >= DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())) - 7
+
+-- This week (Monday start)
+CREATED_AT_PST >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))
+
+-- Last month
+CREATED_AT_PST >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '1 month'
+  AND CREATED_AT_PST < DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP())))
+```
