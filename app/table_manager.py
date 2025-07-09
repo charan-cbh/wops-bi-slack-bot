@@ -119,7 +119,7 @@ class TableManager:
             """
             
             print(f"🔍 Sampling {sample_size} rows from {table_name}")
-            result = await self.run_query(sample_query)
+            result = self.run_query(sample_query)
             
             if result.get("success") and result.get("data"):
                 # Convert to more readable format
@@ -342,7 +342,7 @@ class TableManager:
             """
             
             print(f"🔍 Discovering schema for table: {table_name}")
-            result = await self.run_query(schema_query)
+            result = self.run_query(schema_query)
             
             if result.get("success") and result.get("data"):
                 # Process the schema data
