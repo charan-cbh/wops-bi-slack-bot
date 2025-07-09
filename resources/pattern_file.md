@@ -24,14 +24,14 @@ This document contains proven SQL query patterns optimized for vector search and
 ### AGENT PERFORMANCE QUESTIONS
 **Keywords**: agent performance, agent metrics, agent productivity, agent efficiency, agent statistics, agent dashboard, agent comparison, agent ranking, which agent, best agent, top agent, agent analysis, individual agent, agent scores, agent evaluation, agent effectiveness, weekly agent performance, agent trends, agent quality, agent KPIs, agent benchmarks, agent leaderboard
 
-**PRIMARY TABLE**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE` (weekly aggregated)
+**PRIMARY TABLE**: `ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE` (weekly aggregated)
 **ALTERNATIVE**: `ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME` (detailed)
 **KEY COLUMNS**: ASSIGNEE_NAME, NUM_TICKETS, AHT_MINUTES, QA_SCORE, FCR_PERCENTAGE
 
 ### TEAM LEAD PERFORMANCE QUESTIONS
 **Keywords**: team lead performance, supervisor metrics, manager performance, team leader analysis, supervisor analysis, manager analysis, leadership metrics, team lead dashboard, team performance, supervisor performance, team lead ranking, team lead comparison, team lead trends, team lead evaluation, team lead effectiveness, weekly team performance, supervisor dashboard, manager dashboard, team metrics, leadership analysis
 
-**PRIMARY TABLE**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE` (weekly aggregated)
+**PRIMARY TABLE**: `ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE` (weekly aggregated)
 **KEY COLUMNS**: SUPERVISOR, NUM_TICKETS, AHT_MINUTES, QA_SCORE, FCR_PERCENTAGE
 
 ### HANDLE TIME AND EFFICIENCY QUESTIONS
@@ -88,18 +88,17 @@ WHERE CREATED_AT_PST >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'Americ
 
 ---
 
-## Pattern 1: WOPS Tickets Comprehensive Analysis ⭐ GENERAL TICKET DATA LEADER
+## Pattern 1: WOPS Tickets Comprehensive Analysis ⭐ RESPONSE TIME LEADER
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS`
 
-### 🎯 GENERAL TICKET ANALYSIS - PRIORITY PATTERN
-**SEARCH TERMS**: ticket volume, ticket count, how many tickets, ticket trends, ticket distribution, ticket analysis, ticket breakdown, tickets created, tickets solved, ticket metrics, ticket patterns, volume analysis, daily tickets, weekly tickets, monthly tickets, ticket statistics, workload, case volume, issue volume, response time, reply time, resolution time, SLA compliance, SLA, turnaround time, time to respond, time to resolve, average response, response distribution, response speed
+### 🎯 RESPONSE TIME ANALYSIS - PRIORITY PATTERN
+**SEARCH TERMS**: response time, reply time, resolution time, SLA compliance, SLA, turnaround time, time to respond, time to resolve, average response, response distribution, response speed
 
-This pattern is the **COMPREHENSIVE SOURCE** for ticket-related questions because:
-✅ **Complete ticket data** - all WOPS ticket information in one place
-✅ **Pre-calculated response time metrics** - reply, first resolution, full resolution times available
+This pattern is the **DEFINITIVE SOURCE** for response time questions because:
+✅ **Pre-calculated response time metrics** - no complex calculations needed
 ✅ **Business-ready data** - all filters already applied
-✅ **Multiple analysis dimensions** - volume, trends, response times, agent performance
+✅ **Multiple time metrics available** - reply, first resolution, full resolution
 
 ### Response Time Columns (Pre-Calculated)
 - **REPLY_TIME_IN_MINUTES**: Time from ticket creation to first agent reply
@@ -452,7 +451,7 @@ ORDER BY switches DESC
 
 ## Pattern 4: WOPS Agent Performance (Weekly Aggregated) ⭐ AGENT PERFORMANCE LEADER
 
-**Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE`
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE`
 
 ### 🎯 AGENT PERFORMANCE ANALYSIS - PRIORITY PATTERN
 **SEARCH TERMS**: agent performance, agent metrics, agent productivity, agent efficiency, agent statistics, agent dashboard, agent comparison, agent ranking, which agent, best agent, top agent, weekly agent performance, agent quality, agent scores, agent KPIs
@@ -488,8 +487,8 @@ SELECT
    CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) = 0 THEN 50 
         ELSE POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 END * 0.2
   ) AS performance_score
-FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE
-WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE)
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
+WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)
 ORDER BY performance_score DESC
 ```
 
@@ -502,7 +501,7 @@ SELECT
   AVG(NUM_TICKETS) as avg_weekly_tickets,
   AVG(AHT_MINUTES) as avg_aht,
   COUNT(*) as weeks_active
-FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE
 WHERE SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'  -- Last 12 weeks
 GROUP BY ASSIGNEE_NAME
 HAVING COUNT(*) >= 8  -- At least 8 weeks of data
@@ -533,7 +532,7 @@ LIMIT 10
 
 ## Pattern 5: WOPS Team Lead Performance (Weekly Aggregated) ⭐ TEAM LEAD LEADER
 
-**Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE`
+**Primary Table**: `ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE`
 
 ### 🎯 TEAM LEAD PERFORMANCE ANALYSIS - PRIORITY PATTERN
 **SEARCH TERMS**: team lead performance, supervisor metrics, manager performance, team leader analysis, supervisor analysis, team performance, team lead dashboard, team lead ranking, team metrics, supervisor performance, leadership metrics, manager dashboard
@@ -560,8 +559,8 @@ SELECT
   QA_SCORE as team_qa_score,
   POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 as team_csat_rate,
   NUM_TICKETS / 8.0 as estimated_tickets_per_agent  -- Assuming 8 agents per team
-FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE
-WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE)
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
+WHERE SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE)
 ORDER BY QA_SCORE DESC, FCR_PERCENTAGE DESC
 ```
 
@@ -575,7 +574,7 @@ SELECT
   AVG(QA_SCORE) as avg_team_qa_score,
   COUNT(*) as weeks_active,
   ROW_NUMBER() OVER (ORDER BY AVG(QA_SCORE) DESC, AVG(FCR_PERCENTAGE) DESC) as team_rank
-FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE
+FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE
 WHERE SOLVED_WEEK >= DATE_TRUNC('week', DATE(CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', CURRENT_TIMESTAMP()))) - INTERVAL '12 weeks'  -- Last 12 weeks
 GROUP BY SUPERVISOR
 HAVING COUNT(*) >= 8  -- At least 8 weeks of data
@@ -655,14 +654,13 @@ ORDER BY avg_adherence_rate DESC
 
 | Question Type | Priority 1 ⭐ | Priority 2 | Priority 3 |
 |---------------|------------|------------|------------|
-| **Response Time** | RPT_WOPS_TICKETS | - | - |
-| **Ticket Volume** | RPT_WOPS_TICKETS | FCT_ZENDESK__MQR_TICKETS | - |
-| **General Tickets** | RPT_WOPS_TICKETS | FCT_ZENDESK__MQR_TICKETS | - |
+| **Response Time** | RPT_WOPS_TICKETS (ONLY) | - | - |
 | **FCR Questions** | FCT_ZENDESK__MQR_TICKETS | RPT_WOPS_TICKETS | - |
-| **Agent Performance** | RPT_WOPS_AGENT_PERFORMANCE | ZENDESK_TICKET_AGENT__HANDLE_TIME | RPT_WOPS_TICKETS |
-| **Team Lead Performance** | RPT_WOPS_TL_PERFORMANCE | RPT_WOPS_AGENT_PERFORMANCE | ZENDESK_TICKET_AGENT__HANDLE_TIME |
-| **Handle Time/Efficiency** | ZENDESK_TICKET_AGENT__HANDLE_TIME | RPT_WOPS_AGENT_PERFORMANCE | RPT_WOPS_TICKETS |
+| **Agent Performance** | WOPS_AGENT_PERFORMANCE | ZENDESK_TICKET_AGENT__HANDLE_TIME | RPT_WOPS_TICKETS |
+| **Team Lead Performance** | WOPS_TL_PERFORMANCE | WOPS_AGENT_PERFORMANCE | ZENDESK_TICKET_AGENT__HANDLE_TIME |
+| **Handle Time/Efficiency** | ZENDESK_TICKET_AGENT__HANDLE_TIME | WOPS_AGENT_PERFORMANCE | RPT_WOPS_TICKETS |
 | **Schedule Adherence** | RPT_AGENT_SCHEDULE_ADHERENCE | - | - |
+| **Ticket Volume** | RPT_WOPS_TICKETS | FCT_ZENDESK__MQR_TICKETS | - |
 
 ---
 
@@ -670,8 +668,8 @@ ORDER BY avg_adherence_rate DESC
 
 ### HIGH CONFIDENCE INDICATORS (Use These Tables First) ⭐
 - **RPT_WOPS_TICKETS** → Response time (EXCLUSIVE), ticket volume, general analysis
-- **RPT_WOPS_AGENT_PERFORMANCE** → Agent performance, weekly metrics  
-- **RPT_WOPS_TL_PERFORMANCE** → Team lead performance, supervisor metrics
+- **WOPS_AGENT_PERFORMANCE** → Agent performance, weekly metrics  
+- **WOPS_TL_PERFORMANCE** → Team lead performance, supervisor metrics
 - **ZENDESK_TICKET_AGENT__HANDLE_TIME** → Handle time, agent efficiency
 - **RPT_AGENT_SCHEDULE_ADHERENCE** → Schedule adherence, compliance
 
@@ -690,24 +688,18 @@ Each pattern should score based on keyword matches:
 
 ## BUSINESS RULES FOR BOT DECISION MAKING
 
-### Response Time Questions → ALWAYS use RPT_WOPS_TICKETS ⭐
+### Response Time Questions → ALWAYS use RPT_WOPS_TICKETS ONLY ⭐
 - Contains REPLY_TIME_IN_MINUTES, FIRST_RESOLUTION_TIME_IN_MINUTES, FULL_RESOLUTION_TIME_IN_MINUTES
 - Pre-filtered and business ready - no other table needed
 - No complex calculations needed
 - **NEVER use FCT_ZENDESK__MQR_TICKETS or ZENDESK_TICKET_AGENT__HANDLE_TIME for response time**
-
-### Ticket Volume Questions → ALWAYS use RPT_WOPS_TICKETS ⭐
-- Contains all WOPS ticket data with pre-calculated metrics
-- Pre-filtered and business ready - includes response time data too
-- Comprehensive ticket analysis capabilities
-- Use for general ticket inquiries, volume analysis, and response time questions
 
 ### FCR Questions → ALWAYS use FCT_ZENDESK__MQR_TICKETS with window functions ⭐
 - Requires REQUESTER_ID for customer tracking
 - Must use LEAD() function for 24-hour analysis  
 - Complex but necessary for accurate FCR
 
-### Agent Performance → ALWAYS prefer RPT_WOPS_AGENT_PERFORMANCE ⭐
+### Agent Performance → ALWAYS prefer WOPS_AGENT_PERFORMANCE ⭐
 - Weekly aggregated data
 - All KPIs pre-calculated (volume, efficiency, quality, effectiveness)
 - No aggregation needed
@@ -717,7 +709,7 @@ Each pattern should score based on keyword matches:
 - Agent-level granularity
 - Voice channel specifics available
 
-### Team Lead Performance → ALWAYS prefer RPT_WOPS_TL_PERFORMANCE ⭐  
+### Team Lead Performance → ALWAYS prefer WOPS_TL_PERFORMANCE ⭐  
 - Team-level aggregated data
 - Supervisor/manager focused metrics
 - Pre-calculated team performance scores
@@ -747,24 +739,24 @@ Each pattern should score based on keyword matches:
 | "Channel switching analysis" | FCT_ZENDESK__MQR_TICKETS | 3 ⭐ | - |
 | "First contact resolution by agent" | FCT_ZENDESK__MQR_TICKETS | 3 ⭐ | - |
 | **AGENT PERFORMANCE** |
-| "Show me agent performance metrics" | RPT_WOPS_AGENT_PERFORMANCE | 4 ⭐ | ZENDESK_TICKET_AGENT__HANDLE_TIME |
-| "Which agents are top performers?" | RPT_WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
-| "Agent performance dashboard" | RPT_WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
-| "Weekly agent metrics" | RPT_WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
-| "Agent quality scores" | RPT_WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
+| "Show me agent performance metrics" | WOPS_AGENT_PERFORMANCE | 4 ⭐ | ZENDESK_TICKET_AGENT__HANDLE_TIME |
+| "Which agents are top performers?" | WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
+| "Agent performance dashboard" | WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
+| "Weekly agent metrics" | WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
+| "Agent quality scores" | WOPS_AGENT_PERFORMANCE | 4 ⭐ | - |
 | **HANDLE TIME & EFFICIENCY** |
-| "What is our average handle time?" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
-| "AHT by agent" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
-| "Which agents are most efficient?" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
+| "What is our average handle time?" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | WOPS_AGENT_PERFORMANCE |
+| "AHT by agent" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | WOPS_AGENT_PERFORMANCE |
+| "Which agents are most efficient?" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | WOPS_AGENT_PERFORMANCE |
 | "Handle time distribution" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | - |
 | "Voice channel call duration" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | - |
-| "Agent efficiency ranking" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
+| "Agent efficiency ranking" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | WOPS_AGENT_PERFORMANCE |
 | **TEAM LEAD PERFORMANCE** |
-| "Team lead performance dashboard" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
-| "Which supervisors have the best teams?" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | - |
-| "Manager performance metrics" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | - |
-| "Team performance by supervisor" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | ZENDESK_TICKET_AGENT__HANDLE_TIME |
-| "Leadership metrics" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | - |
+| "Team lead performance dashboard" | WOPS_TL_PERFORMANCE | 5 ⭐ | WOPS_AGENT_PERFORMANCE |
+| "Which supervisors have the best teams?" | WOPS_TL_PERFORMANCE | 5 ⭐ | - |
+| "Manager performance metrics" | WOPS_TL_PERFORMANCE | 5 ⭐ | - |
+| "Team performance by supervisor" | WOPS_TL_PERFORMANCE | 5 ⭐ | ZENDESK_TICKET_AGENT__HANDLE_TIME |
+| "Leadership metrics" | WOPS_TL_PERFORMANCE | 5 ⭐ | - |
 | **SCHEDULE ADHERENCE** |
 | "What is our schedule adherence rate?" | RPT_AGENT_SCHEDULE_ADHERENCE | 6 ⭐ | - |
 | "Which agents have poor adherence?" | RPT_AGENT_SCHEDULE_ADHERENCE | 6 ⭐ | - |
