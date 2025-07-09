@@ -88,18 +88,17 @@ WHERE CREATED_AT_PST >= DATE_TRUNC('month', DATE(CONVERT_TIMEZONE('UTC', 'Americ
 
 ---
 
-## Pattern 1: WOPS Tickets Comprehensive Analysis ⭐ GENERAL TICKET DATA LEADER
+## Pattern 1: WOPS Tickets Comprehensive Analysis ⭐ RESPONSE TIME LEADER
 
 **Primary Table**: `ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS`
 
-### 🎯 GENERAL TICKET ANALYSIS - PRIORITY PATTERN
-**SEARCH TERMS**: ticket volume, ticket count, how many tickets, ticket trends, ticket distribution, ticket analysis, ticket breakdown, tickets created, tickets solved, ticket metrics, ticket patterns, volume analysis, daily tickets, weekly tickets, monthly tickets, ticket statistics, workload, case volume, issue volume, response time, reply time, resolution time, SLA compliance, SLA, turnaround time, time to respond, time to resolve, average response, response distribution, response speed
+### 🎯 RESPONSE TIME ANALYSIS - PRIORITY PATTERN
+**SEARCH TERMS**: response time, reply time, resolution time, SLA compliance, SLA, turnaround time, time to respond, time to resolve, average response, response distribution, response speed
 
-This pattern is the **COMPREHENSIVE SOURCE** for ticket-related questions because:
-✅ **Complete ticket data** - all WOPS ticket information in one place
-✅ **Pre-calculated response time metrics** - reply, first resolution, full resolution times available
+This pattern is the **DEFINITIVE SOURCE** for response time questions because:
+✅ **Pre-calculated response time metrics** - no complex calculations needed
 ✅ **Business-ready data** - all filters already applied
-✅ **Multiple analysis dimensions** - volume, trends, response times, agent performance
+✅ **Multiple time metrics available** - reply, first resolution, full resolution
 
 ### Response Time Columns (Pre-Calculated)
 - **REPLY_TIME_IN_MINUTES**: Time from ticket creation to first agent reply
@@ -655,14 +654,13 @@ ORDER BY avg_adherence_rate DESC
 
 | Question Type | Priority 1 ⭐ | Priority 2 | Priority 3 |
 |---------------|------------|------------|------------|
-| **Response Time** | RPT_WOPS_TICKETS | - | - |
-| **Ticket Volume** | RPT_WOPS_TICKETS | FCT_ZENDESK__MQR_TICKETS | - |
-| **General Tickets** | RPT_WOPS_TICKETS | FCT_ZENDESK__MQR_TICKETS | - |
+| **Response Time** | RPT_WOPS_TICKETS (ONLY) | - | - |
 | **FCR Questions** | FCT_ZENDESK__MQR_TICKETS | RPT_WOPS_TICKETS | - |
 | **Agent Performance** | RPT_WOPS_AGENT_PERFORMANCE | ZENDESK_TICKET_AGENT__HANDLE_TIME | RPT_WOPS_TICKETS |
 | **Team Lead Performance** | RPT_WOPS_TL_PERFORMANCE | RPT_WOPS_AGENT_PERFORMANCE | ZENDESK_TICKET_AGENT__HANDLE_TIME |
 | **Handle Time/Efficiency** | ZENDESK_TICKET_AGENT__HANDLE_TIME | RPT_WOPS_AGENT_PERFORMANCE | RPT_WOPS_TICKETS |
 | **Schedule Adherence** | RPT_AGENT_SCHEDULE_ADHERENCE | - | - |
+| **Ticket Volume** | RPT_WOPS_TICKETS | FCT_ZENDESK__MQR_TICKETS | - |
 
 ---
 
@@ -690,17 +688,11 @@ Each pattern should score based on keyword matches:
 
 ## BUSINESS RULES FOR BOT DECISION MAKING
 
-### Response Time Questions → ALWAYS use RPT_WOPS_TICKETS ⭐
+### Response Time Questions → ALWAYS use RPT_WOPS_TICKETS ONLY ⭐
 - Contains REPLY_TIME_IN_MINUTES, FIRST_RESOLUTION_TIME_IN_MINUTES, FULL_RESOLUTION_TIME_IN_MINUTES
 - Pre-filtered and business ready - no other table needed
 - No complex calculations needed
 - **NEVER use FCT_ZENDESK__MQR_TICKETS or ZENDESK_TICKET_AGENT__HANDLE_TIME for response time**
-
-### Ticket Volume Questions → ALWAYS use RPT_WOPS_TICKETS ⭐
-- Contains all WOPS ticket data with pre-calculated metrics
-- Pre-filtered and business ready - includes response time data too
-- Comprehensive ticket analysis capabilities
-- Use for general ticket inquiries, volume analysis, and response time questions
 
 ### FCR Questions → ALWAYS use FCT_ZENDESK__MQR_TICKETS with window functions ⭐
 - Requires REQUESTER_ID for customer tracking
@@ -760,7 +752,7 @@ Each pattern should score based on keyword matches:
 | "Voice channel call duration" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | - |
 | "Agent efficiency ranking" | ZENDESK_TICKET_AGENT__HANDLE_TIME | 2 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
 | **TEAM LEAD PERFORMANCE** |
-| "Team lead performance dashboard" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | RPT_WOPS_AGENT_PERFORMANCE |
+| "Team lead performance dashboard" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | RPT_RPT_RPT_WOPS_AGENT_PERFORMANCE |
 | "Which supervisors have the best teams?" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | - |
 | "Manager performance metrics" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | - |
 | "Team performance by supervisor" | RPT_WOPS_TL_PERFORMANCE | 5 ⭐ | ZENDESK_TICKET_AGENT__HANDLE_TIME |

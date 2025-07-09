@@ -201,7 +201,7 @@ END"""
                 "confidence_boost": 125
             },
             {
-                "id": "wops_agent_performance",
+                "id": "rpt_wops_agent_performance",
                 "name": "WOPS Agent Performance (Weekly Aggregated) ⭐ AGENT PERFORMANCE LEADER",
                 "table": "ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE",
                 "description": "PRIORITY pattern for agent performance dashboards, rankings, KPIs. Pre-aggregated weekly metrics.",
@@ -255,7 +255,7 @@ END""",
                 "confidence_boost": 125
             },
             {
-                "id": "wops_tl_performance",
+                "id": "rpt_wops_tl_performance",
                 "name": "WOPS Team Lead Performance (Weekly Aggregated) ⭐ TEAM LEAD LEADER",
                 "table": "ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE",
                 "description": "PRIORITY pattern for team lead/supervisor performance, team-level metrics, leadership analysis.",
@@ -397,7 +397,7 @@ END"""
                     matched_items.append(f"keyword:'{keyword}'(+3)")
 
             # Enhanced bonuses for specific patterns
-            if pattern["id"] == "wops_agent_performance":
+            if pattern["id"] == "rpt_wops_agent_performance":
                 performance_indicators = [
                     ("best", 8), ("top", 8), ("performing", 8), ("performance", 8),
                     ("agent", 5), ("weekly", 6), ("last week", 8), ("this week", 6),
@@ -412,7 +412,7 @@ END"""
                             score += points
                             matched_items.append(f"agent_performance:'{indicator}'(+{points})")
 
-            elif pattern["id"] == "wops_tl_performance":
+            elif pattern["id"] == "rpt_wops_tl_performance":
                 team_indicators = [
                     ("team", 10), ("supervisor", 10), ("team lead", 12), ("team leader", 12),
                     ("team performance", 15), ("supervisor performance", 15),
@@ -525,10 +525,10 @@ class PatternBasedQueryHelper:
             sql_parts["where"].append(pattern["standard_filters"].strip())
 
         # Build helper query based on intent and pattern
-        if pattern["id"] == "wops_agent_performance":
+        if pattern["id"] == "rpt_wops_agent_performance":
             sql = self._build_wops_performance_helper(question_lower, pattern, intent, sql_parts)
-        elif pattern["id"] == "wops_tl_performance":
-            sql = self._build_wops_tl_performance_helper(question_lower, pattern, intent, sql_parts)
+        elif pattern["id"] == "rpt_wops_tl_performance":
+            sql = self._build_rpt_wops_tl_performance_helper(question_lower, pattern, intent, sql_parts)
         elif pattern["id"] == "wops_tickets_response_time":
             sql = self._build_wops_tickets_helper(question_lower, pattern, intent, sql_parts)
         elif pattern["id"] == "agent_handle_time":
@@ -629,7 +629,7 @@ class PatternBasedQueryHelper:
 
         return self._assemble_sql(sql_parts)
 
-    def _build_wops_tl_performance_helper(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
+    def _build_rpt_wops_tl_performance_helper(self, question: str, pattern: Dict, intent: Dict, sql_parts: Dict) -> str:
         """Build HELPER SQL for WOPS team lead performance queries"""
 
         # Current week top performing teams

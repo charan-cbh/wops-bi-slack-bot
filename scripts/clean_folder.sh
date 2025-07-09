@@ -9,8 +9,6 @@ sudo find "$TARGET" -mindepth 1 \
   ! -name ".env" \
   ! -name ".git" \
   ! -name "rsa_key.p8" \
-  ! -name "$TARGET/valkey/*" \
-  ! -name "$TARGET/valkey" \
   ! -path "$TARGET/venv/*" \
   ! -path "$TARGET/.git/*" \
   ! -name "." \
