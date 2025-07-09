@@ -244,7 +244,7 @@ async def process_app_mention(event):
             print(f"🤖 Using Assistant API with intelligent table selection")
 
             # Smart routing - determines if SQL is needed or conversational response
-            response, response_type = await handle_question(clean_question, user_id, channel_id)
+            response, response_type = await handle_question(clean_question, user_id, channel_id, ASSISTANT_ID)
 
             print(f"📊 Response type: {response_type}")
 
