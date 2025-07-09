@@ -203,7 +203,7 @@ END"""
             {
                 "id": "wops_agent_performance",
                 "name": "WOPS Agent Performance (Weekly Aggregated) ⭐ AGENT PERFORMANCE LEADER",
-                "table": "ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE",
+                "table": "ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE",
                 "description": "PRIORITY pattern for agent performance dashboards, rankings, KPIs. Pre-aggregated weekly metrics.",
                 "priority": "HIGH",
                 "keywords": [
@@ -257,7 +257,7 @@ END""",
             {
                 "id": "wops_tl_performance",
                 "name": "WOPS Team Lead Performance (Weekly Aggregated) ⭐ TEAM LEAD LEADER",
-                "table": "ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE",
+                "table": "ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE",
                 "description": "PRIORITY pattern for team lead/supervisor performance, team-level metrics, leadership analysis.",
                 "priority": "HIGH",
                 "keywords": [
@@ -556,7 +556,7 @@ class PatternBasedQueryHelper:
                 "CASE WHEN (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) > 0 THEN POSITIVE_RES_CSAT / (POSITIVE_RES_CSAT + NEGATIVE_RES_CSAT) * 100 ELSE NULL END as csat_rate"
             ]
             sql_parts["where"].append(
-                "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)")
+                "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE)")
 
             # Smart ordering: prioritize agents with complete data
             sql_parts["order_by"] = [
@@ -607,10 +607,10 @@ class PatternBasedQueryHelper:
             ]
             if "last week" in question:
                 sql_parts["where"].append(
-                    "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE) - INTERVAL '7 days'")
+                    "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE) - INTERVAL '7 days'")
             else:
                 sql_parts["where"].append(
-                    "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE)")
+                    "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE)")
             sql_parts["order_by"] = ["QA_SCORE DESC"]
 
         # Default: recent performance data
@@ -644,7 +644,7 @@ class PatternBasedQueryHelper:
                 "NUM_TICKETS / 8.0 as estimated_tickets_per_agent"
             ]
             sql_parts["where"].append(
-                "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE)")
+                "SOLVED_WEEK = (SELECT MAX(SOLVED_WEEK) FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE)")
             sql_parts["order_by"] = ["QA_SCORE DESC", "FCR_PERCENTAGE DESC"]
             sql_parts["limit"] = "LIMIT 10"
 
