@@ -1,12 +1,12 @@
 from fastapi import FastAPI, Request, HTTPException
 from app.slack_handler import handle_slack_event, get_status
 from app.llm_prompter import check_valkey_health, init_valkey_client
+from app.logging_config import setup_logging, get_bot_logger
 import os
-import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+setup_logging()
+logger = get_bot_logger(__name__)
 
 app = FastAPI(title="BI Slack Bot")
 
