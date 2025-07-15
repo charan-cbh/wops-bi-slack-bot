@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from app.slack_handler import handle_slack_event, get_status
-from app.llm_prompter import check_valkey_health, init_valkey_client
+from app.cache_manager import check_valkey_health, init_valkey_client
 import os
 import logging
 

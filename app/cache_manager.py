@@ -4,8 +4,13 @@ import asyncio
 import time
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
-from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
-    GlideClusterClientConfiguration
+try:
+    from glide import GlideClient, GlideClientConfiguration, NodeAddress, GlideClusterClient, \
+        GlideClusterClientConfiguration
+    GLIDE_AVAILABLE = True
+except ImportError:
+    print("⚠️ Glide not available, using local cache only")
+    GLIDE_AVAILABLE = False
 
 load_dotenv()
 
@@ -58,8 +63,11 @@ class CacheManager:
     
     async def init_valkey_client(self):
         """Initialize Valkey client - must be called in async context"""
-        if IS_LOCAL_DEV:
-            print("🏠 Local development mode - skipping Valkey connection")
+        if IS_LOCAL_DEV or not GLIDE_AVAILABLE:
+            if not GLIDE_AVAILABLE:
+                print("🏠 Glide not available - using local cache only")
+            else:
+                print("🏠 Local development mode - skipping Valkey connection")
             self.valkey_client = None
             return
 
