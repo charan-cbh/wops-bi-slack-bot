@@ -11,43 +11,49 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
 
-from app.llm_prompter import (
-    ask_llm_for_sql,
-    summarize_results_with_llm,
-    summarize_with_assistant,
-    update_sql_cache_with_results,
+from app.llm_orchestrator import (
+    handle_question,
+    generate_sql_intelligently,
     get_cache_stats,
     get_learning_insights,
-    handle_question,
-    test_question_classification,
-    generate_sql_intelligently,
     clear_sql_cache,
     clear_schema_cache,
     clear_thread_cache,
     clear_conversation_cache,
     clear_table_selection_cache,
     clear_feedback_cache,
+    clear_token_usage_cache,
     rediscover_table_schema,
-    update_conversation_context,
-    get_conversation_context,
-    test_conversation_flow,
+    ask_llm_for_sql,
+    summarize_results_with_llm,
+    summarize_with_assistant,
+    handle_conversational_question,
+    generate_sql_with_retry_logic
+)
+from app.sql_generator import update_sql_cache_with_results, record_feedback, cache_table_selection
+from app.table_discovery import (
     debug_table_selection,
     sample_table_data,
     find_relevant_tables_from_vector_store,
     select_best_table_using_samples,
-    cache_table_selection,
     get_table_descriptions_from_manifest,
-    record_feedback,
+    discover_table_schema
+)
+from app.conversation_manager import (
+    update_conversation_context,
+    get_conversation_context,
+    test_conversation_flow,
     update_conversation_context_with_sql,
     check_rate_limits,
     get_user_token_usage,
     track_actual_usage,
     estimate_request_tokens,
-    clear_token_usage_cache,
-    MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD, MAX_SQL_ATTEMPTS,
-    handle_conversational_question, discover_table_schema, classify_question_with_openai,
-    classify_question_type_fallback, ENABLE_CACHE, generate_sql_with_retry_logic
+    classify_question_with_openai,
+    MAX_TOKENS_PER_USER_PER_DAY, MAX_TOKENS_PER_USER_PER_HOUR, MAX_TOKENS_PER_THREAD
 )
+from app.question_analyzer import classify_question_type_fallback, test_question_classification
+from app.cache_manager import ENABLE_CACHE
+from app.sql_generator import MAX_SQL_ATTEMPTS
 from app.manifest_index import search_relevant_models
 from app.snowflake_runner import run_query, format_result_for_slack
 
@@ -987,7 +993,7 @@ async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: 
     print(f"📊 Found {len(relevant_models)} relevant models")
 
     model_context = relevant_models[0]["context"] if relevant_models else ""
-    sql = ask_llm_for_sql(clean_question, model_context)
+    sql = await ask_llm_for_sql(clean_question, model_context)
 
     await execute_sql_and_respond(clean_question, sql, channel_id, user_id)
 
