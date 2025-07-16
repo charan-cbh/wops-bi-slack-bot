@@ -895,11 +895,21 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
     """Final SQL execution without retry - clean execution only"""
 
     print(f"🚀 Final SQL execution...")
-    print(f"SQL: {sql}")
+    print(f"Raw SQL input: {sql}")
+    
+    # Extract actual SQL from potential markdown response
+    from app.sql_generator import extract_sql_from_response
+    extracted_sql = extract_sql_from_response(sql)
+    
+    # If extraction failed, use the original SQL
+    if not extracted_sql or extracted_sql.strip().startswith("--"):
+        extracted_sql = sql
+    
+    print(f"Extracted SQL: {extracted_sql}")
     start_time = time.time()
 
     try:
-        df = run_query(sql)
+        df = run_query(extracted_sql)
         execution_time = time.time() - start_time
 
         if isinstance(df, str) or len(df) == 0:
@@ -925,13 +935,13 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
             print(f"⏱️ Execution time: {execution_time:.2f}s")
 
             # Extract table info if needed
-            if not selected_table and 'FROM' in sql.upper():
-                from_match = re.search(r'FROM\s+([^\s\n]+)', sql, re.IGNORECASE)
+            if not selected_table and 'FROM' in extracted_sql.upper():
+                from_match = re.search(r'FROM\s+([^\s\n]+)', extracted_sql, re.IGNORECASE)
                 if from_match:
                     selected_table = from_match.group(1).strip()
 
             # Update cache (respects ENABLE_CACHE flag)
-            await update_sql_cache_with_results(clean_question, sql, result_count, selected_table)
+            await update_sql_cache_with_results(clean_question, extracted_sql, result_count, selected_table)
 
             # Summarize results
             if USE_ASSISTANT_API and ASSISTANT_ID:
@@ -940,7 +950,8 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
                     format_result_for_slack(df),
                     user_id,
                     channel_id,
-                    ASSISTANT_ID
+                    ASSISTANT_ID,
+                    extracted_sql
                 )
             else:
                 result_message = summarize_results_with_llm(
@@ -961,7 +972,7 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
                     channel_ts = f"{channel_id}_{msg_ts}"
                     message_to_question_map[channel_ts] = {
                         'question': clean_question,
-                        'sql': sql,
+                        'sql': extracted_sql,
                         'table': selected_table,
                         'timestamp': time.time()
                     }
