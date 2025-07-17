@@ -99,6 +99,8 @@ class ResultProcessor:
 
             instructions = """You are a BI expert summarizing query results for business users.
 
+CRITICAL: You are ONLY summarizing provided results. Do NOT execute any SQL queries or run any tools.
+
 CRITICAL FORMATTING REQUIREMENTS:
 - Use *text* for bold (NOT **text** - this is Slack, not Markdown)
 - Use _text_ for italic
@@ -115,23 +117,32 @@ SUMMARY REQUIREMENTS:
 
 TONE: Professional but conversational, like a helpful data analyst explaining findings to a business stakeholder."""
 
+            # Include SQL query in message for context but make it clear not to execute
+            sql_context = ""
+            if sql_query:
+                sql_context = f"""
+
+**SQL Query Used (for reference only - DO NOT EXECUTE):**
+```sql
+{sql_query}
+```"""
+            
             message = f"""Please summarize these query results to answer the user's question:
 
 **User Question:** {user_question}
 
 **Query Results:**
-{result_table}
+{result_table}{sql_context}
 
-Provide a clear, business-focused summary that directly answers their question."""
+IMPORTANT: Only summarize the provided results. Do not execute any SQL queries. Provide a clear, business-focused summary that directly answers their question."""
 
             response = await conversation_manager.send_message_and_run(thread_id, message, instructions)
             
             # Ensure proper Slack formatting
             response = response.replace("**", "*")
             
-            # Add SQL query visibility if available
-            if sql_query:
-                response += f"\n\n📊 *Generated SQL Query:*\n```sql\n{sql_query}\n```"
+            # SQL query is already included in the response via the message context
+            # No need to add it again
             
             return response
 

@@ -448,9 +448,9 @@ async def summarize_results_with_llm(user_question: str, result_table: str) -> s
     """Summarize results - backward compatibility"""
     return result_processor.summarize_results_with_llm(user_question, result_table)
 
-async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str, assistant_id: str) -> str:
+async def summarize_with_assistant(user_question: str, result_table: str, user_id: str, channel_id: str, assistant_id: str, sql_query: str = None) -> str:
     """Summarize with assistant - backward compatibility"""
-    return await result_processor.summarize_with_assistant(user_question, result_table, user_id, channel_id, assistant_id)
+    return await result_processor.summarize_with_assistant(user_question, result_table, user_id, channel_id, assistant_id, sql_query)
 
 async def handle_conversational_question(user_question: str, user_id: str, channel_id: str) -> str:
     """Handle conversational question - backward compatibility"""
