@@ -213,9 +213,27 @@ class LLMOrchestrator:
                 except Exception as e:
                     print(f"⚠️ Error with intelligent analyst: {e}")
             
-            # Try enhanced intelligent data analyst for non-personal questions too
+            # Try generic intelligent system for all questions
+            print("🧠 Trying generic intelligent system")
+            try:
+                from app.generic_query_orchestrator import generic_orchestrator
+                
+                sql, explanation = await generic_orchestrator.generate_intelligent_sql(question, user_id, channel_id)
+                
+                if sql and not sql.startswith('--'):
+                    print(f"✅ Generated generic intelligent SQL: {sql[:100]}...")
+                    print(f"📊 Generic Intelligence Applied: {explanation[:200]}...")
+                    return sql
+                else:
+                    print("⚠️ Generic intelligent system couldn't generate SQL, falling back to Assistant")
+                    
+            except Exception as e:
+                print(f"⚠️ Error with generic intelligent system: {e}")
+                print("⚠️ Falling back to Assistant API...")
+            
+            # Fallback to original intelligent data analyst for compatibility
             if not is_truly_personal:
-                print("🧠 Trying enhanced intelligent data analyst for non-personal question")
+                print("🧠 Trying original intelligent data analyst for non-personal question")
                 try:
                     from app.intelligent_data_analyst import intelligent_data_analyst
                     
@@ -228,35 +246,19 @@ class LLMOrchestrator:
                         'personal_context': None
                     }
                     
-                    # Try enhanced intelligent SQL generation first
-                    try:
-                        sql, explanation = await intelligent_data_analyst.generate_enhanced_intelligent_sql(
-                            question, intelligent_intent, schema, user_id
-                        )
-                        
-                        if not sql.startswith('--'):
-                            print(f"✅ Generated enhanced intelligent SQL: {sql[:100]}...")
-                            print(f"📊 Business Intelligence Applied: {explanation[:200]}...")
-                            return sql
-                        else:
-                            print("⚠️ Enhanced analyst couldn't generate SQL, trying standard method")
-                    except Exception as enhanced_error:
-                        print(f"⚠️ Enhanced intelligent analyst error: {enhanced_error}")
-                        print("⚠️ Falling back to standard intelligent analyst...")
-                    
-                    # Fallback to standard intelligent analyst
+                    # Use original intelligent analyst as fallback
                     sql, explanation = await intelligent_data_analyst.generate_intelligent_sql(
                         question, intelligent_intent, schema, user_id
                     )
                     
                     if not sql.startswith('--'):
-                        print(f"✅ Generated standard intelligent SQL: {sql[:100]}...")
+                        print(f"✅ Generated fallback intelligent SQL: {sql[:100]}...")
                         return sql
                     else:
-                        print("⚠️ Standard intelligent analyst couldn't generate SQL, falling back to Assistant")
+                        print("⚠️ Fallback intelligent analyst couldn't generate SQL, using Assistant")
                         
                 except Exception as e:
-                    print(f"⚠️ Error with intelligent analyst: {e}")
+                    print(f"⚠️ Error with fallback intelligent analyst: {e}")
             
             # Fallback to model provider for SQL generation
             try:

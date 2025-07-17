@@ -433,6 +433,11 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 • `debug flow` - Test conversation flow
 • `debug context` - Show current conversation context
 
+**Generic Intelligence:**
+• `debug generic QUESTION` - Test generic intelligence system
+• `debug database` - Analyze database structure
+• `debug system` - Show system information
+
 **General:**
 • `debug QUERY` - Search for tables/columns related to query
 
@@ -698,6 +703,73 @@ React with ✅ or ❌ to any bot response to provide feedback!"""
                     debug_result += f"\n- ... and {len(schema['columns']) - 15} more columns"
         else:
             debug_result = "❌ **Usage:** `debug rediscover TABLE_NAME`"
+    
+    elif debug_query.lower().startswith("generic"):
+        # Test generic intelligence system
+        question = debug_query.replace("generic", "").strip()
+        if question:
+            try:
+                from app.generic_query_orchestrator import generic_orchestrator
+                
+                sql, explanation = await generic_orchestrator.generate_intelligent_sql(question, user_id, channel_id)
+                
+                if sql:
+                    debug_result = f"🧠 **Generic Intelligence Test**\n\n"
+                    debug_result += f"**Question:** {question}\n\n"
+                    debug_result += f"**Generated SQL:**\n```sql\n{sql}\n```\n\n"
+                    debug_result += f"**Intelligence Analysis:**\n{explanation[:1000]}..."
+                else:
+                    debug_result = f"❌ **Generic intelligence couldn't generate SQL for:** {question}"
+                    
+            except Exception as e:
+                debug_result = f"❌ **Generic intelligence error:** {str(e)}"
+        else:
+            debug_result = "❌ **Usage:** `debug generic YOUR QUESTION HERE`"
+    
+    elif debug_query.lower().startswith("database"):
+        # Analyze database structure
+        try:
+            from app.generic_query_orchestrator import generic_orchestrator
+            
+            db_analysis = await generic_orchestrator.analyze_database_structure(user_id, channel_id)
+            
+            if db_analysis.get('error'):
+                debug_result = f"❌ **Database analysis error:** {db_analysis['error']}"
+            else:
+                debug_result = f"🗄️ **Database Structure Analysis**\n\n"
+                debug_result += f"**Total Tables:** {db_analysis['total_tables']}\n\n"
+                debug_result += f"**Table Patterns:**\n"
+                for pattern, tables in db_analysis['patterns'].items():
+                    debug_result += f"- {pattern}: {len(tables)} tables\n"
+                
+                debug_result += f"\n**Common Metrics:** {', '.join(db_analysis['common_metrics'][:10])}\n"
+                debug_result += f"**Common Dimensions:** {', '.join(db_analysis['common_dimensions'][:10])}\n"
+                
+                debug_result += f"\n**Sample Tables:**\n"
+                for table, info in list(db_analysis['tables'].items())[:5]:
+                    debug_result += f"- {table}: {info['purpose']}, {info['grain']}\n"
+                    
+        except Exception as e:
+            debug_result = f"❌ **Database analysis error:** {str(e)}"
+    
+    elif debug_query.lower().startswith("system"):
+        # Show system information
+        try:
+            from app.generic_query_orchestrator import generic_orchestrator
+            
+            system_info = generic_orchestrator.get_system_info()
+            
+            debug_result = f"🤖 **System Information**\n\n"
+            debug_result += f"**System:** {system_info['system_name']} v{system_info['version']}\n\n"
+            debug_result += f"**Capabilities:**\n"
+            for capability in system_info['capabilities']:
+                debug_result += f"- {capability}\n"
+            
+            debug_result += f"\n**Supported Databases:** {', '.join(system_info['supported_databases'])}\n"
+            debug_result += f"**Cache Status:** {system_info['cache_status']['tables_cached']} tables, {system_info['cache_status']['schemas_cached']} schemas\n"
+            
+        except Exception as e:
+            debug_result = f"❌ **System info error:** {str(e)}"
 
     else:
         # Default: search for tables/columns

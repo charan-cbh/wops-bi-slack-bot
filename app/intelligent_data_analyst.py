@@ -17,17 +17,10 @@ class IntelligentDataAnalyst:
     """
     
     def __init__(self):
-        # Import enhanced intelligence systems
-        try:
-            from app.business_metrics_intelligence import business_metrics_intelligence
-            from app.pre_query_data_analyzer import pre_query_analyzer
-            self.business_metrics = business_metrics_intelligence
-            self.data_analyzer = pre_query_analyzer
-            self.enhanced_intelligence = True
-            print("✅ Enhanced intelligence systems loaded successfully")
-        except ImportError as e:
-            print(f"⚠️ Enhanced intelligence systems not available: {e}")
-            self.enhanced_intelligence = False
+        # Temporarily disable enhanced intelligence systems to fix production issue
+        # TODO: Make this generic and configurable
+        print("⚠️ Enhanced intelligence systems temporarily disabled for production stability")
+        self.enhanced_intelligence = False
         # Table relationships and purposes based on schema analysis
         self.table_intelligence = {
             'RPT_WOPS_AGENT_PERFORMANCE': {
