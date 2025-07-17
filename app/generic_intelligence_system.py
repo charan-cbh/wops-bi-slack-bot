@@ -65,7 +65,8 @@ class GenericIntelligenceSystem:
                 r'uuid', r'guid', r'external_id'
             ],
             'name': [
-                r'.*_name$', r'name_.*', r'title', r'label', r'description'
+                r'.*_name$', r'name_.*', r'title', r'label', r'description',
+                r'.*supervisor.*', r'.*manager.*', r'.*lead.*'
             ],
             'email': [
                 r'.*email.*', r'.*mail.*'
@@ -131,24 +132,31 @@ class GenericIntelligenceSystem:
         """
         column_lower = column_name.lower()
         
-        # Determine likely purpose
-        likely_purpose = 'text'  # default
-        
-        # Check patterns
-        for purpose, patterns in self.column_patterns.items():
-            if any(re.search(pattern, column_lower) for pattern in patterns):
-                likely_purpose = purpose
-                break
-        
-        # Refine based on data type
+        # Start with data type-based classification (more reliable)
         if data_type.upper() in ['TIMESTAMP_NTZ', 'TIMESTAMP_TZ', 'DATE', 'DATETIME']:
             likely_purpose = 'timestamp'
         elif data_type.upper() in ['NUMBER', 'FLOAT', 'DECIMAL']:
-            if likely_purpose == 'text':  # No specific pattern matched
-                likely_purpose = 'metric'
+            likely_purpose = 'metric'  # Default for numbers
         elif data_type.upper() in ['TEXT', 'VARCHAR', 'STRING']:
-            if likely_purpose == 'text' and any(word in column_lower for word in ['name', 'title', 'description']):
-                likely_purpose = 'dimension'
+            likely_purpose = 'text'  # Default for text
+        else:
+            likely_purpose = 'text'  # fallback
+        
+        # Refine with pattern matching (but respect data type constraints)
+        for purpose, patterns in self.column_patterns.items():
+            if any(re.search(pattern, column_lower) for pattern in patterns):
+                # Only override if it makes sense with the data type
+                if purpose == 'timestamp' and data_type.upper() in ['TIMESTAMP_NTZ', 'TIMESTAMP_TZ', 'DATE', 'DATETIME']:
+                    likely_purpose = 'timestamp'
+                elif purpose == 'identifier' and data_type.upper() in ['TEXT', 'VARCHAR', 'STRING', 'NUMBER']:
+                    likely_purpose = 'identifier'
+                elif purpose in ['rate', 'score', 'count', 'time_measure'] and data_type.upper() in ['NUMBER', 'FLOAT', 'DECIMAL']:
+                    likely_purpose = purpose
+                elif purpose in ['name', 'email', 'phone'] and data_type.upper() in ['TEXT', 'VARCHAR', 'STRING']:
+                    likely_purpose = 'dimension'
+                elif purpose == 'amount' and data_type.upper() in ['NUMBER', 'FLOAT', 'DECIMAL']:
+                    likely_purpose = 'metric'
+                break
         
         # Determine if it's a performance metric
         metric_type = None
@@ -259,8 +267,12 @@ class GenericIntelligenceSystem:
         aggregation_indicators = ['average', 'total', 'sum', 'count', 'max', 'min', 'avg']
         intent['requires_aggregation'] = any(word in question_lower for word in aggregation_indicators)
         
+        # Also detect if we need aggregation based on temporal context
+        if any(word in question_lower for word in ['month', 'week', 'day', 'year', 'period']):
+            intent['requires_aggregation'] = True
+        
         # Detect filtering needs
-        filtering_indicators = ['where', 'for', 'in', 'from', 'during', 'between']
+        filtering_indicators = ['where', 'for', 'in', 'from', 'during', 'between', 'team', 'supervisor']
         intent['requires_filtering'] = any(word in question_lower for word in filtering_indicators)
         
         # Detect ranking needs
@@ -280,10 +292,46 @@ class GenericIntelligenceSystem:
                 intent['time_context'] = indicator
                 break
         
+        # Extract specific time mentions (months)
+        months = ['january', 'february', 'march', 'april', 'may', 'june',
+                 'july', 'august', 'september', 'october', 'november', 'december']
+        for month in months:
+            if month in question_lower:
+                intent['time_context'] = month
+                break
+        
+        # Extract entity context (team names, supervisor names)
+        entity_patterns = [
+            r'team\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
+            r'from\s+team\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
+            r'in\s+team\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
+            r'supervisor\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)',
+            r'manager\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)'
+        ]
+        
+        for pattern in entity_patterns:
+            match = re.search(pattern, question)
+            if match:
+                intent['entity_context'] = match.group(1)
+                intent['requires_filtering'] = True
+                break
+        
         # Extract limit
         limit_match = re.search(r'(\d+)', question)
         if limit_match and intent['requires_ranking']:
             intent['limit'] = int(limit_match.group(1))
+        
+        # Extract specific metrics mentioned
+        metric_keywords = {
+            'aht': ['aht', 'handle time', 'average handle time'],
+            'qa': ['qa', 'quality', 'qa score', 'quality score'],
+            'csat': ['csat', 'customer satisfaction', 'satisfaction'],
+            'fcr': ['fcr', 'first call resolution', 'resolution']
+        }
+        
+        for metric_name, keywords in metric_keywords.items():
+            if any(keyword in question_lower for keyword in keywords):
+                intent['metrics_mentioned'].append(metric_name)
         
         return intent
     
@@ -310,7 +358,11 @@ class GenericIntelligenceSystem:
         # Add metrics with appropriate aggregation
         for metric_col in table_intelligence.metric_columns:
             if question_intent['requires_aggregation']:
-                select_parts.append(f"AVG({metric_col}) as avg_{metric_col.lower()}")
+                # Use proper aggregation based on metric type
+                if 'count' in metric_col.lower() or 'num_' in metric_col.lower():
+                    select_parts.append(f"SUM({metric_col}) as total_{metric_col.lower()}")
+                else:
+                    select_parts.append(f"AVG({metric_col}) as avg_{metric_col.lower()}")
             else:
                 select_parts.append(metric_col)
         
@@ -318,23 +370,61 @@ class GenericIntelligenceSystem:
         if question_intent['requires_aggregation'] and primary_entity:
             group_by_parts.append(primary_entity)
         
+        # Add WHERE conditions for filtering
+        if question_intent['requires_filtering']:
+            # Handle entity context (team, supervisor)
+            if question_intent['entity_context']:
+                entity = question_intent['entity_context']
+                # Find supervisor column
+                supervisor_columns = [col for col in table_intelligence.dimension_columns 
+                                    if 'supervisor' in col.lower() or 'manager' in col.lower()]
+                if supervisor_columns:
+                    where_parts.append(f"{supervisor_columns[0]} ILIKE '%{entity}%'")
+            
+            # Handle time context (months)
+            if question_intent['time_context']:
+                time_context = question_intent['time_context']
+                if time_context in ['january', 'february', 'march', 'april', 'may', 'june',
+                                   'july', 'august', 'september', 'october', 'november', 'december']:
+                    month_number = {
+                        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+                        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+                    }.get(time_context.lower(), 6)
+                    
+                    # Find actual time column (not identifier columns that contain time info)
+                    if table_intelligence.time_columns:
+                        # Use the actual timestamp column, not identifier columns
+                        time_col = table_intelligence.time_columns[0]
+                        # Make sure we're using a timestamp column, not a text identifier
+                        where_parts.append(f"EXTRACT(MONTH FROM {time_col}) = {month_number}")
+                        where_parts.append(f"EXTRACT(YEAR FROM {time_col}) = 2025")
+        
         # Add ORDER BY for ranking
         if question_intent['requires_ranking']:
             for metric_col in table_intelligence.metric_columns:
+                # Use aggregated column names if aggregation is enabled
+                if question_intent['requires_aggregation']:
+                    if 'count' in metric_col.lower() or 'num_' in metric_col.lower():
+                        col_name = f"total_{metric_col.lower()}"
+                    else:
+                        col_name = f"avg_{metric_col.lower()}"
+                else:
+                    col_name = metric_col
+                
                 # Generic performance logic
                 col_lower = metric_col.lower()
-                if any(word in col_lower for word in ['time', 'duration', 'wait', 'handle']):
+                if any(word in col_lower for word in ['time', 'duration', 'wait', 'handle', 'aht']):
                     # Time metrics: lower is better
                     if question_intent['performance_context'] == 'poor':
-                        order_by_parts.append(f"{metric_col} DESC")  # High time = poor performance
+                        order_by_parts.append(f"{col_name} DESC")  # High time = poor performance
                     else:
-                        order_by_parts.append(f"{metric_col} ASC")   # Low time = good performance
+                        order_by_parts.append(f"{col_name} ASC")   # Low time = good performance
                 else:
                     # Other metrics: higher is usually better
                     if question_intent['performance_context'] == 'poor':
-                        order_by_parts.append(f"{metric_col} ASC")   # Low score = poor performance
+                        order_by_parts.append(f"{col_name} ASC")   # Low score = poor performance
                     else:
-                        order_by_parts.append(f"{metric_col} DESC")  # High score = good performance
+                        order_by_parts.append(f"{col_name} DESC")  # High score = good performance
         
         # Build final SQL
         sql_parts = [f"SELECT {', '.join(select_parts)}"]

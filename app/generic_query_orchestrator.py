@@ -71,10 +71,17 @@ class GenericQueryOrchestrator:
             # Convert to generic format
             columns = []
             for col_name in schema_info.get('columns', []):
-                # Get column type if available
+                # Get column type from column_descriptions
                 col_type = 'TEXT'  # default
+                
+                # Try different ways to get column type
                 if 'column_types' in schema_info:
                     col_type = schema_info['column_types'].get(col_name, 'TEXT')
+                elif 'column_descriptions' in schema_info:
+                    # Look in column_descriptions (case-insensitive)
+                    col_desc = schema_info['column_descriptions'].get(col_name.lower(), {})
+                    if isinstance(col_desc, dict) and 'type' in col_desc:
+                        col_type = col_desc['type']
                 
                 columns.append({
                     'name': col_name,
