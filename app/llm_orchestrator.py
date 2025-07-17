@@ -192,9 +192,17 @@ class LLMOrchestrator:
                         'personal_context': intent.get('personal_context', 'team_or_personal')
                     }
                     
-                    sql, explanation = await intelligent_data_analyst.generate_intelligent_sql(
-                        question, intelligent_intent, schema, user_id
-                    )
+                    # Try enhanced intelligent SQL generation first for personal questions too
+                    try:
+                        sql, explanation = await intelligent_data_analyst.generate_enhanced_intelligent_sql(
+                            question, intelligent_intent, schema, user_id
+                        )
+                    except Exception as enhanced_error:
+                        print(f"⚠️ Enhanced analyst error for personal question: {enhanced_error}")
+                        print("⚠️ Falling back to standard intelligent analyst for personal question...")
+                        sql, explanation = await intelligent_data_analyst.generate_intelligent_sql(
+                            question, intelligent_intent, schema, user_id
+                        )
                     
                     if not sql.startswith('--'):
                         print(f"✅ Generated personal SQL: {sql[:100]}...")
@@ -205,9 +213,9 @@ class LLMOrchestrator:
                 except Exception as e:
                     print(f"⚠️ Error with intelligent analyst: {e}")
             
-            # Try intelligent data analyst for non-personal questions too
+            # Try enhanced intelligent data analyst for non-personal questions too
             if not is_truly_personal:
-                print("🧠 Trying intelligent data analyst for non-personal question")
+                print("🧠 Trying enhanced intelligent data analyst for non-personal question")
                 try:
                     from app.intelligent_data_analyst import intelligent_data_analyst
                     
@@ -220,15 +228,32 @@ class LLMOrchestrator:
                         'personal_context': None
                     }
                     
+                    # Try enhanced intelligent SQL generation first
+                    try:
+                        sql, explanation = await intelligent_data_analyst.generate_enhanced_intelligent_sql(
+                            question, intelligent_intent, schema, user_id
+                        )
+                        
+                        if not sql.startswith('--'):
+                            print(f"✅ Generated enhanced intelligent SQL: {sql[:100]}...")
+                            print(f"📊 Business Intelligence Applied: {explanation[:200]}...")
+                            return sql
+                        else:
+                            print("⚠️ Enhanced analyst couldn't generate SQL, trying standard method")
+                    except Exception as enhanced_error:
+                        print(f"⚠️ Enhanced intelligent analyst error: {enhanced_error}")
+                        print("⚠️ Falling back to standard intelligent analyst...")
+                    
+                    # Fallback to standard intelligent analyst
                     sql, explanation = await intelligent_data_analyst.generate_intelligent_sql(
                         question, intelligent_intent, schema, user_id
                     )
                     
                     if not sql.startswith('--'):
-                        print(f"✅ Generated intelligent SQL: {sql[:100]}...")
+                        print(f"✅ Generated standard intelligent SQL: {sql[:100]}...")
                         return sql
                     else:
-                        print("⚠️ Intelligent analyst couldn't generate SQL, falling back to Assistant")
+                        print("⚠️ Standard intelligent analyst couldn't generate SQL, falling back to Assistant")
                         
                 except Exception as e:
                     print(f"⚠️ Error with intelligent analyst: {e}")

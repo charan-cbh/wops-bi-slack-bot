@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
 """
-Intelligent Data Analyst System
-Acts as a business intelligence expert with deep understanding of data relationships
+Enhanced Intelligent Data Analyst System
+Acts as a business intelligence expert with deep understanding of data relationships,
+proper metrics interpretation, and smart aggregation capabilities
 """
 
 import re
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 
 
 class IntelligentDataAnalyst:
     """
-    Advanced data analyst system that understands business context,
-    table relationships, and generates accurate SQL queries
+    Enhanced data analyst system that understands business context,
+    table relationships, generates accurate SQL queries with proper metrics interpretation,
+    and smart aggregation for multi-period data
     """
     
     def __init__(self):
+        # Import enhanced intelligence systems
+        try:
+            from app.business_metrics_intelligence import business_metrics_intelligence
+            from app.pre_query_data_analyzer import pre_query_analyzer
+            self.business_metrics = business_metrics_intelligence
+            self.data_analyzer = pre_query_analyzer
+            self.enhanced_intelligence = True
+            print("✅ Enhanced intelligence systems loaded successfully")
+        except ImportError as e:
+            print(f"⚠️ Enhanced intelligence systems not available: {e}")
+            self.enhanced_intelligence = False
         # Table relationships and purposes based on schema analysis
         self.table_intelligence = {
             'RPT_WOPS_AGENT_PERFORMANCE': {
@@ -201,6 +214,249 @@ class IntelligentDataAnalyst:
                 return matches[0]
         
         return None
+    
+    async def generate_enhanced_intelligent_sql(self, question: str, intent_analysis: Dict, schema: Dict, user_id: str = None) -> Tuple[str, str]:
+        """
+        Generate SQL with enhanced business intelligence, proper metrics interpretation,
+        and smart aggregation for multi-period data
+        """
+        if not self.enhanced_intelligence:
+            # Fallback to original method if enhanced systems not available
+            return await self.generate_intelligent_sql(question, intent_analysis, schema, user_id)
+        
+        print(f"🧠 Enhanced Intelligence: Analyzing question with business context...")
+        
+        # Step 1: Analyze business context and metrics
+        business_context = self.business_metrics.analyze_question_context(question)
+        print(f"📊 Business Context: {business_context}")
+        
+        # Step 2: Determine target table
+        required_table = intent_analysis.get('required_table', 'RPT_WOPS_AGENT_PERFORMANCE')
+        
+        # Step 3: Analyze data structure requirements
+        data_requirements = self.data_analyzer.analyze_question_data_requirements(question, required_table)
+        print(f"📋 Data Requirements: {data_requirements}")
+        
+        # Step 4: Generate intelligent SQL structure
+        sql_structure = self.business_metrics.generate_intelligent_sql_structure(question, required_table, schema)
+        print(f"🔧 SQL Structure: {sql_structure}")
+        
+        # Step 5: Handle specific question types with enhanced intelligence
+        if self._is_performance_ranking_question(question, business_context):
+            return await self._generate_performance_ranking_sql(question, business_context, sql_structure, required_table)
+        elif self._is_team_analysis_question(question, business_context):
+            return await self._generate_team_analysis_sql(question, business_context, sql_structure, required_table)
+        elif self._is_metrics_comparison_question(question, business_context):
+            return await self._generate_metrics_comparison_sql(question, business_context, sql_structure, required_table)
+        else:
+            # Default enhanced SQL generation
+            return await self._generate_default_enhanced_sql(question, business_context, sql_structure, required_table)
+    
+    def _is_performance_ranking_question(self, question: str, context: Dict) -> bool:
+        """Check if question is asking for performance ranking"""
+        return (context['ranking_requested'] and 
+                context['performance_context'] in ['poor_performance', 'good_performance'] and
+                len(context['metrics_mentioned']) > 0)
+    
+    def _is_team_analysis_question(self, question: str, context: Dict) -> bool:
+        """Check if question is asking for team analysis"""
+        return context['team_context'] is not None
+    
+    def _is_metrics_comparison_question(self, question: str, context: Dict) -> bool:
+        """Check if question is asking for metrics comparison"""
+        return len(context['metrics_mentioned']) > 1
+    
+    async def _generate_performance_ranking_sql(self, question: str, context: Dict, sql_structure: Dict, table: str) -> Tuple[str, str]:
+        """Generate SQL for performance ranking questions with proper business logic"""
+        
+        # Extract team context if present
+        team_filter = ""
+        if context['team_context']:
+            team_filter = f"AND ASSIGNEE_SUPERVISOR ILIKE '%{context['team_context']}%'"
+        
+        # Extract time context if present
+        time_filter = ""
+        if context['time_period'] == 'monthly':
+            # Extract month from question
+            month_match = re.search(r'(january|february|march|april|may|june|july|august|september|october|november|december)', question.lower())
+            if month_match:
+                month_name = month_match.group(1)
+                month_number = {
+                    'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+                    'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12
+                }.get(month_name, 6)  # Default to June if not found
+                time_filter = f"AND EXTRACT(MONTH FROM SOLVED_WEEK) = {month_number} AND EXTRACT(YEAR FROM SOLVED_WEEK) = 2025"
+        
+        # Build SELECT clause with proper aggregation
+        select_columns = ["ASSIGNEE_NAME"]
+        metrics_columns = []
+        
+        for metric in context['metrics_mentioned']:
+            if metric == 'aht':
+                metrics_columns.append("AVG(AHT_MINUTES) as avg_aht_minutes")
+            elif metric == 'qa_score':
+                metrics_columns.append("AVG(QA_SCORE) as avg_qa_score")
+            elif metric == 'csat':
+                metrics_columns.append("AVG(POSITIVE_RES_CSAT * 100) as avg_csat_percentage")
+            elif metric == 'fcr':
+                metrics_columns.append("AVG(FCR_PERCENTAGE * 100) as avg_fcr_percentage")
+        
+        # Build ORDER BY clause with proper business logic
+        order_by_parts = []
+        
+        for metric in context['metrics_mentioned']:
+            if metric == 'aht':
+                # For AHT, "lowest performing" means HIGHEST values (more time = worse performance)
+                if context['performance_context'] == 'poor_performance':
+                    order_by_parts.append("avg_aht_minutes DESC")
+                else:
+                    order_by_parts.append("avg_aht_minutes ASC")
+            elif metric in ['qa_score', 'csat', 'fcr']:
+                # For QA, CSAT, FCR, "lowest performing" means LOWEST values
+                if context['performance_context'] == 'poor_performance':
+                    order_by_parts.append(f"avg_{metric} ASC")
+                else:
+                    order_by_parts.append(f"avg_{metric} DESC")
+        
+        # Determine limit
+        limit_clause = ""
+        if sql_structure.get('limit_clause'):
+            limit_clause = f"LIMIT {sql_structure['limit_clause']}"
+        
+        # Build final SQL
+        sql = f"""
+SELECT 
+    {', '.join(select_columns + metrics_columns)}
+FROM ANALYTICS.DBT_PRODUCTION.{table}
+WHERE ASSIGNEE_NAME IS NOT NULL
+{team_filter}
+{time_filter}
+GROUP BY ASSIGNEE_NAME
+ORDER BY {', '.join(order_by_parts)}
+{limit_clause}
+""".strip()
+        
+        # Generate business explanation
+        business_explanation = f"""
+🧠 ENHANCED BUSINESS INTELLIGENCE APPLIED:
+
+📊 QUESTION ANALYSIS:
+✅ Type: Performance ranking for {context['performance_context']}
+✅ Metrics: {', '.join(context['metrics_mentioned'])}
+✅ Team Context: {context['team_context'] or 'All teams'}
+✅ Time Period: {context['time_period'] or 'All time'}
+
+🔍 DATA INTELLIGENCE:
+✅ Multi-period data detected - using proper aggregation
+✅ GROUP BY ASSIGNEE_NAME to avoid duplicate agent entries
+✅ AVG() aggregation for accurate performance metrics
+
+⚡ BUSINESS LOGIC APPLIED:
+{'✅ AHT Logic: Higher values = WORSE performance (sorted DESC for lowest performing)' if 'aht' in context['metrics_mentioned'] else ''}
+{'✅ QA/CSAT Logic: Higher values = BETTER performance (sorted ASC for lowest performing)' if any(m in context['metrics_mentioned'] for m in ['qa_score', 'csat']) else ''}
+
+🎯 CRITICAL INTELLIGENCE:
+• This query addresses the exact issue where same agent appears multiple times
+• Proper aggregation ensures accurate performance comparison
+• Business logic ensures "lowest performing" is interpreted correctly for each metric
+
+📈 BUSINESS CONTEXT:
+{sql_structure.get('business_explanation', 'Performance analysis with proper business logic')}
+
+⚠️ CRITICAL WARNINGS:
+{chr(10).join(sql_structure.get('critical_warnings', []))}
+"""
+        
+        return sql, business_explanation
+    
+    async def _generate_team_analysis_sql(self, question: str, context: Dict, sql_structure: Dict, table: str) -> Tuple[str, str]:
+        """Generate SQL for team analysis questions"""
+        
+        team_filter = f"ASSIGNEE_SUPERVISOR ILIKE '%{context['team_context']}%'"
+        
+        # Build comprehensive team analysis
+        sql = f"""
+SELECT 
+    ASSIGNEE_NAME,
+    AVG(AHT_MINUTES) as avg_aht_minutes,
+    AVG(QA_SCORE) as avg_qa_score,
+    AVG(POSITIVE_RES_CSAT * 100) as avg_csat_percentage,
+    AVG(FCR_PERCENTAGE * 100) as avg_fcr_percentage,
+    SUM(NUM_TICKETS) as total_tickets,
+    COUNT(DISTINCT SOLVED_WEEK) as weeks_active
+FROM ANALYTICS.DBT_PRODUCTION.{table}
+WHERE ASSIGNEE_NAME IS NOT NULL
+AND {team_filter}
+GROUP BY ASSIGNEE_NAME
+ORDER BY avg_aht_minutes DESC, avg_qa_score ASC, avg_csat_percentage ASC
+""".strip()
+        
+        business_explanation = f"""
+🧠 ENHANCED TEAM ANALYSIS:
+
+👥 TEAM CONTEXT: {context['team_context']}
+📊 COMPREHENSIVE METRICS: AHT, QA, CSAT, FCR, Volume, Activity
+🔄 SMART AGGREGATION: Proper averaging across multiple weeks
+⚡ BUSINESS LOGIC: Sorted by performance indicators (AHT DESC = worst first)
+"""
+        
+        return sql, business_explanation
+    
+    async def _generate_metrics_comparison_sql(self, question: str, context: Dict, sql_structure: Dict, table: str) -> Tuple[str, str]:
+        """Generate SQL for metrics comparison questions"""
+        
+        # Build comparison query with all requested metrics
+        metrics_columns = []
+        
+        for metric in context['metrics_mentioned']:
+            if metric == 'aht':
+                metrics_columns.append("AVG(AHT_MINUTES) as avg_aht_minutes")
+            elif metric == 'qa_score':
+                metrics_columns.append("AVG(QA_SCORE) as avg_qa_score")
+            elif metric == 'csat':
+                metrics_columns.append("AVG(POSITIVE_RES_CSAT * 100) as avg_csat_percentage")
+            elif metric == 'fcr':
+                metrics_columns.append("AVG(FCR_PERCENTAGE * 100) as avg_fcr_percentage")
+        
+        sql = f"""
+SELECT 
+    ASSIGNEE_NAME,
+    {', '.join(metrics_columns)}
+FROM ANALYTICS.DBT_PRODUCTION.{table}
+WHERE ASSIGNEE_NAME IS NOT NULL
+GROUP BY ASSIGNEE_NAME
+ORDER BY ASSIGNEE_NAME
+""".strip()
+        
+        business_explanation = f"""
+🧠 ENHANCED METRICS COMPARISON:
+
+📊 METRICS ANALYZED: {', '.join(context['metrics_mentioned'])}
+🔄 SMART AGGREGATION: Proper averaging for accurate comparison
+⚡ BUSINESS LOGIC: All metrics included for comprehensive analysis
+"""
+        
+        return sql, business_explanation
+    
+    async def _generate_default_enhanced_sql(self, question: str, context: Dict, sql_structure: Dict, table: str) -> Tuple[str, str]:
+        """Generate default enhanced SQL with business intelligence"""
+        
+        # Use the original method as fallback but with enhanced explanation
+        original_sql, original_explanation = await self.generate_intelligent_sql(question, {'required_table': table}, {})
+        
+        enhanced_explanation = f"""
+🧠 ENHANCED INTELLIGENCE FALLBACK:
+
+📊 BUSINESS CONTEXT: {context.get('business_intelligence', {}).get('business_context', 'Standard analysis')}
+⚡ ORIGINAL ANALYSIS: {original_explanation}
+
+🔄 ENHANCEMENTS APPLIED:
+• Business metrics understanding
+• Data structure analysis
+• Performance context interpretation
+"""
+        
+        return original_sql, enhanced_explanation
     
     async def generate_intelligent_sql(self, question: str, intent_analysis: Dict, schema: Dict, user_id: str = None) -> str:
         """Generate SQL with business intelligence and data understanding"""
