@@ -30,6 +30,11 @@ from app.llm_orchestrator import (
     handle_conversational_question,
     generate_sql_with_retry_logic
 )
+from app.bi_service import (
+    should_use_bi_service,
+    process_with_bi_service,
+    get_bi_service_status
+)
 from app.sql_generator import update_sql_cache_with_results, record_feedback, cache_table_selection
 from app.table_discovery import (
     debug_table_selection,
@@ -245,6 +250,41 @@ async def process_app_mention(event):
         except Exception as e:
             print(f"⚠️ Could not send thinking indicator: {e}")
 
+        # Check if we should use BI Service instead of SQL generation
+        if should_use_bi_service(clean_question):
+            print(f"🔧 Routing to BI Service for AI-only response")
+            
+            # Delete thinking message
+            if thinking_msg:
+                try:
+                    slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                except:
+                    pass
+            
+            # Process with BI Service
+            try:
+                bi_response, bi_response_type = await process_with_bi_service(
+                    clean_question, user_id, channel_id
+                )
+                
+                print(f"📊 BI Service response type: {bi_response_type}")
+                
+                # Handle different response types
+                if bi_response_type == 'rate_limited':
+                    await send_slack_message(channel_id, bi_response, include_feedback_hint=False)
+                    return
+                elif bi_response_type == 'error':
+                    # Fallback to normal flow on BI Service error
+                    print(f"⚠️ BI Service error, falling back to normal flow: {bi_response}")
+                else:
+                    # Send AI response
+                    await send_slack_message(channel_id, bi_response, include_feedback_hint=False)
+                    return
+                    
+            except Exception as e:
+                print(f"❌ BI Service processing failed: {e}")
+                # Continue to normal flow as fallback
+        
         # Use smart routing with assistant API
         if USE_ASSISTANT_API and ASSISTANT_ID:
             print(f"🤖 Using Assistant API with intelligent table selection")
@@ -413,6 +453,9 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 - `debug limits` - Show current rate limits
 - `debug clear tokens` - Clear token usage cache
 
+**BI Service:**
+• `debug bi` or `debug bi-service` - Show BI Service status
+
 **Cache & Stats:**
 • `debug cache` or `debug stats` - Show cache statistics
 • `debug learning` or `debug patterns` - Show learning insights
@@ -438,6 +481,26 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 
 **Feedback:**
 React with ✅ or ❌ to any bot response to provide feedback!"""
+
+    elif debug_query.lower() in ["bi", "bi-service", "biservice"]:
+        # Show BI Service status
+        bi_status = get_bi_service_status()
+        debug_result = f"""🔧 **BI Service Status:**
+
+**Configuration:**
+- Enabled: {'✅ Yes' if bi_status['enabled'] else '❌ No'}
+- Provider: {bi_status['provider']}
+- Model: {bi_status['model']}
+- Configured: {'✅ Yes' if bi_status['configured'] else '❌ No'}
+- Provider Available: {'✅ Yes' if bi_status['provider_available'] else '❌ No'}
+
+**Environment Variables:**
+- USE_BI_SERVICE: {os.getenv('USE_BI_SERVICE', 'Not set')}
+- BI_SERVICE_PROVIDER: {os.getenv('BI_SERVICE_PROVIDER', 'Not set')}
+- BI_SERVICE_MODEL: {os.getenv('BI_SERVICE_MODEL', 'Not set')}
+
+**Usage:**
+When enabled, BI Service provides AI-only responses without SQL execution, ideal for Slack usage."""
 
     elif debug_query.lower() in ["cache", "stats"]:
         # Show cache statistics
@@ -1058,9 +1121,11 @@ async def clear_assistant_cache():
 # Health check endpoint helper
 def get_status():
     """Get current bot status"""
+    bi_status = get_bi_service_status()
     return {
         "assistant_enabled": USE_ASSISTANT_API,
         "assistant_id": ASSISTANT_ID if ASSISTANT_ID else "Not configured",
+        "bi_service": bi_status,
         "slack_configured": bool(SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET),
         "smart_routing_enabled": True,
         "intelligent_table_selection": True,
