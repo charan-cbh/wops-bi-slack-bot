@@ -299,7 +299,7 @@ def should_use_bi_service(question: str) -> bool:
     sql_indicators = [
         # Strong data request patterns
         'what\'s our', 'show me', 'how many', 'what is our', 'get me',
-        'display', 'find', 'count', 'total', 'volume',
+        'display', 'find', 'count', 'total', 'volume', 'list all', 'list the',
         # Performance data requests
         'performance', 'metrics', 'trends', 'trending',
         # Time-based data requests
@@ -307,7 +307,7 @@ def should_use_bi_service(question: str) -> bool:
         'monthly', 'comparison', 'compare',
         # Channel/team specific data
         'chat volume', 'voice volume', 'web volume', 'ticket volume',
-        'team lead', 'agent performance', 'auditor performance', 'auditor productivity',
+        'team lead', 'team leads', 'tls', 'agent performance', 'auditor performance', 'auditor productivity',
         # Specific names that need data lookup
         'christine presto', 'joan mallari', 'gian gabrillo', 'erin wood',
         'kimberly gasing', 'mbali gumede', 'ricardo birck', 'sinead foley',
