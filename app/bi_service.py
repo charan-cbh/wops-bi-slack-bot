@@ -281,7 +281,20 @@ def should_use_bi_service(question: str) -> bool:
     # Convert to lowercase for pattern matching
     q_lower = question.lower().strip()
     
-    # Conversational questions should go to BI Service - check these first
+    # QA/Quality questions should go to BI Service (vector store has QA context) - check FIRST
+    qa_indicators = [
+        'qa score', 'qa scores', 'quality score', 'quality scores', 'quality metrics',
+        'quality rating', 'quality assessment', 'quality review', 'quality data',
+        'klaus', 'scorecard'
+    ]
+    
+    # Check QA patterns first (highest priority)
+    for indicator in qa_indicators:
+        if indicator in q_lower:
+            print(f"🏆 QA indicator '{indicator}' found, routing to BI Service (vector store has QA context)")
+            return True
+    
+    # Conversational questions should go to BI Service - check these second
     conversational_indicators = [
         'how do i', 'how do we', 'how can i', 'how can we', 'how to',
         'what are', 'explain', 'help me', 'tutorial', 'learn', 'understand',
@@ -289,7 +302,7 @@ def should_use_bi_service(question: str) -> bool:
         'strategy', 'approach', 'improve', 'better', 'optimize'
     ]
     
-    # Check conversational patterns first (higher priority)
+    # Check conversational patterns second
     for indicator in conversational_indicators:
         if indicator in q_lower:
             print(f"💬 Conversational indicator '{indicator}' found, routing to BI Service")
@@ -314,7 +327,7 @@ def should_use_bi_service(question: str) -> bool:
         'yiannis spanoudis', 'yolanda coughlin', 'miguel salas', 'jonathan melenson',
         'guren onal',
         # Specific data requests
-        'qa score', 'csat score', 'tickets', 'audits', 'reviews', 'surveys'
+        'csat score', 'tickets', 'audits', 'reviews', 'surveys'
     ]
     
     # If question contains SQL indicators, route to SQL generation
