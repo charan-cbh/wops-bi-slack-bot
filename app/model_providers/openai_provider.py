@@ -227,8 +227,8 @@ Provide a clear, business-friendly summary with key insights and include the SQL
         
         response = await self.generate_response(messages, system_prompt, temperature=0.3)
         
-        # If SQL query was provided and not already in response, add it
-        if sql_query and "```sql" not in response:
+        # Only show SQL if user explicitly requested it
+        if sql_query and "```sql" not in response and self._user_requested_sql(question):
             response += f"\n\n📊 *Generated SQL Query:*\n```sql\n{sql_query}\n```"
         
         return response
@@ -288,6 +288,18 @@ Be friendly, helpful, and concise. If users ask how to use the bot, guide them o
         messages = [{"role": "user", "content": user_message}]
         
         return await self.generate_response(messages, system_prompt, temperature=0.5)
+    
+    def _user_requested_sql(self, question: str) -> bool:
+        """Check if user explicitly requested to see SQL query"""
+        question_lower = question.lower()
+        sql_request_phrases = [
+            'show sql', 'show the sql', 'show me the sql', 'show me sql',
+            'what sql', 'what query', 'show query', 'show the query', 'show me the query',
+            'sql query', 'generate sql', 'what is the sql', 'sql used',
+            'let me see the sql', 'display sql', 'include sql',
+            'with sql', 'and sql', 'also show sql', 'query used'
+        ]
+        return any(phrase in question_lower for phrase in sql_request_phrases)
 
 
 # Factory function to create provider instances

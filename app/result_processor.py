@@ -117,9 +117,9 @@ SUMMARY REQUIREMENTS:
 
 TONE: Professional but conversational, like a helpful data analyst explaining findings to a business stakeholder."""
 
-            # Include SQL query in message for context but make it clear not to execute
+            # Include SQL query in message only if user explicitly requested it
             sql_context = ""
-            if sql_query:
+            if sql_query and self._user_requested_sql(user_question):
                 sql_context = f"""
 
 **SQL Query Used (for reference only - DO NOT EXECUTE):**
@@ -329,6 +329,18 @@ IMPORTANT - Use Slack formatting:
         # This would implement the full intelligent SQL generation
         # For now, returning a placeholder
         return "-- Intelligent SQL generation not fully implemented yet"
+    
+    def _user_requested_sql(self, question: str) -> bool:
+        """Check if user explicitly requested to see SQL query"""
+        question_lower = question.lower()
+        sql_request_phrases = [
+            'show sql', 'show the sql', 'show me the sql', 'show me sql',
+            'what sql', 'what query', 'show query', 'show the query', 'show me the query',
+            'sql query', 'generate sql', 'what is the sql', 'sql used',
+            'let me see the sql', 'display sql', 'include sql',
+            'with sql', 'and sql', 'also show sql', 'query used'
+        ]
+        return any(phrase in question_lower for phrase in sql_request_phrases)
 
 
 # Global result processor instance
