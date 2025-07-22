@@ -80,9 +80,15 @@ class LLMOrchestrator:
                 response = await self.result_processor.handle_conversational_question(question, user_id, channel_id)
             return response, 'conversational'
         else:
-            # SQL required - generate and return SQL
+            # SQL required - generate and execute SQL, return results
             sql_response = await self._handle_sql_question(question, user_id, channel_id, assistant_id)
-            return sql_response, 'sql'
+            # Check if response contains actual data results or just raw SQL
+            if sql_response.startswith(('--', '❌', 'Error:')):
+                # This is an error or raw SQL, needs further processing
+                return sql_response, 'sql'
+            else:
+                # This is processed data results, ready for display
+                return sql_response, 'sql_with_data'
     
     async def _handle_sql_question(self, question: str, user_id: str, channel_id: str, assistant_id: str = None) -> str:
         """Handle questions that require SQL generation"""

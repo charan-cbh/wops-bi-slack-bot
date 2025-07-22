@@ -6,6 +6,7 @@ import re
 import json
 import traceback
 import asyncio
+from datetime import datetime
 from fastapi import Request, HTTPException
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -233,6 +234,7 @@ async def process_app_mention(event):
         if clean_question.lower().startswith("debug"):
             await handle_debug_command(clean_question, channel_id, user_id)
             return
+        
 
         # Check for usage command
         if clean_question.lower() in ["usage", "my usage", "token usage", "limits"]:
@@ -345,6 +347,18 @@ async def process_app_mention(event):
                 await execute_sql_with_retry_integration(
                     clean_question, response, channel_id, user_id, ts
                 )
+            elif response_type == 'sql_with_data':
+                # Data already processed and ready for display
+                if thinking_msg:
+                    try:
+                        slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                    except:
+                        pass
+                
+                # Send the final response directly
+                await send_slack_message(channel_id, response, include_feedback_hint=True)
+                # Update conversation context
+                await update_conversation_context(user_id, channel_id, clean_question, response, 'sql_results')
             elif response_type == 'error':
                 # Handle error response
                 if thinking_msg:
@@ -455,6 +469,7 @@ async def handle_debug_command(clean_question: str, channel_id: str, user_id: st
 
 **BI Service:**
 • `debug bi` or `debug bi-service` - Show BI Service status
+
 
 **Cache & Stats:**
 • `debug cache` or `debug stats` - Show cache statistics
@@ -775,6 +790,7 @@ When enabled, BI Service provides AI-only responses without SQL execution, ideal
             debug_result += "No relevant tables found in vector search"
 
     await send_slack_message(channel_id, f"🔍 **Debug Results:**\n{debug_result}", include_feedback_hint=False)
+
 
 
 # Update the execute_sql_and_respond function in app/slack_handler.py
