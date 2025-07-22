@@ -69,7 +69,7 @@ class TableDiscovery:
             
             # Agent performance and counting questions
             'agent_performance': {
-                'keywords': ['agent performance', 'agent metrics', 'agent productivity', 'agent efficiency', 'agent statistics', 'agent dashboard', 'agent comparison', 'agent ranking', 'which agent', 'best agent', 'top agent', 'how many agents', 'agent count', 'number of agents', 'count agents', 'agent', 'agents'],
+                'keywords': ['agent performance', 'agent metrics', 'agent productivity', 'agent efficiency', 'agent statistics', 'agent dashboard', 'agent comparison', 'agent ranking', 'which agent', 'best agent', 'top agent', 'how many agents', 'agent count', 'number of agents', 'count agents', 'agent', 'agents', 'qa score', 'qa scores', 'quality score', 'quality scores', 'quality metrics', 'quality rating', 'agent quality', 'performance score'],
                 'tables': ['ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME'],
                 'priority': 200  # Increased priority for agent questions
             },
