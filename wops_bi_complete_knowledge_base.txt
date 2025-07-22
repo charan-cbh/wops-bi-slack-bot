@@ -1,0 +1,839 @@
+WOPS BI COMPLETE KNOWLEDGE BASE FOR PERFECT SQL QUERY GENERATION
+
+EXECUTIVE SUMMARY
+This knowledge base contains comprehensive business intelligence patterns and query templates for Worker Operations (WOPS) organizational-level KPIs and top-line metrics. The system is designed to generate accurate SQL queries for Metabase dashboards tracking overall ticket volume, organizational response times, and departmental performance metrics across Chat, Voice, and Web channels.
+
+PRIMARY BUSINESS OBJECTIVES - ORGANIZATIONAL LEVEL
+1. Monitor overall daily ticket volume across all contact channels for the entire Worker Operations organization
+2. Track organizational performance through departmental Average Handle Time (AHT) metrics
+3. Analyze overall response time distributions for organizational service quality standards
+4. Provide top-line KPIs for leadership reporting and organizational performance tracking
+5. Support strategic capacity planning and operational decisions at the organizational level
+
+CORE DATABASE SCHEMA
+
+PRIMARY TABLES:
+1. DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS - Main ticket facts table
+2. DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME - Agent performance metrics
+
+KEY BUSINESS DIMENSIONS:
+- Contact Channels: Chat, Voice, Web (mapped via GROUP_ID)
+- Time Periods: Daily, Weekly, Monthly trending
+- Agent Performance: Individual and team-level metrics
+- Service Quality: Response times and resolution metrics
+
+TICKET VOLUME ANALYTICS
+
+BUSINESS PURPOSE:
+Track organizational-level daily ticket volume trends across different contact channels to support strategic capacity planning, departmental performance tracking, and top-line operational KPIs for the entire Worker Operations organization.
+
+USED BY:
+- Senior Leadership: Organizational performance dashboards and executive reporting
+- Operations Directors: Departmental volume monitoring and strategic planning
+- Analytics Team: Top-line KPI reporting and organizational business insights
+- Executive Team: High-level operational metrics and organizational performance tracking
+
+PRIMARY TABLE: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+
+CRITICAL COLUMNS:
+- TICKET_ID: Unique identifier for each support ticket
+- CREATED_AT_PST: Ticket creation timestamp in Pacific Standard Time
+- GROUP_ID: Determines contact channel (17837476387479=Chat, 28949203098007=Voice, 5495272772503=Web)
+- STATUS: Ticket resolution status (must be 'closed' or 'solved')
+- ASSIGNEE_NAME: Agent assigned to handle the ticket
+- TICKET_TAGS: Comma-separated tags applied to tickets
+- CHANNEL: Communication method (api, email, native_messaging, web)
+- BRAND_ID: Brand identifier for multi-brand filtering
+- REPLY_TIME_IN_MINUTES: Time taken for first agent response
+
+CONTACT CHANNEL MAPPING:
+The GROUP_ID field maps to contact channels as follows:
+- Chat: GROUP_ID = '17837476387479'
+- Voice: GROUP_ID = '28949203098007'  
+- Web: GROUP_ID = '5495272772503'
+- Other: All other GROUP_ID values
+
+MANDATORY FILTERS FOR ALL TICKET QUERIES:
+1. Status Filter: STATUS IN ('closed', 'solved') - Only completed tickets
+2. Exclude Automated Agents: ASSIGNEE_NAME NOT IN ('Automated Update', 'TechOps Bot') OR ASSIGNEE_NAME IS NULL
+3. Exclude System Tags: NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' AND NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' AND NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%'
+4. Valid Channels: CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+5. Brand Filter: BRAND_ID IN ('29186504989207', '360002340693')
+
+TICKET VOLUME QUERY PATTERNS:
+
+PATTERN 1: Daily Ticket Volume by Single Channel
+BUSINESS QUESTIONS: "What's our overall chat volume today?", "Show me organizational voice ticket volume for last week", "Overall daily ticket counts for the department"
+SQL TEMPLATE:
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    COUNT(DISTINCT TICKET_ID) AS ticket_count
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE STATUS IN ('closed', 'solved')
+    AND (ASSIGNEE_NAME != 'Automated Update' OR ASSIGNEE_NAME IS NULL)
+    AND (ASSIGNEE_NAME != 'TechOps Bot' OR ASSIGNEE_NAME IS NULL)
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL)
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' OR TICKET_TAGS IS NULL)
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%' OR TICKET_TAGS IS NULL)
+    AND CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+    AND BRAND_ID IN ('29186504989207', '360002340693')
+    AND CASE WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+             WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+             WHEN GROUP_ID = '5495272772503' THEN 'Web'
+             ELSE 'Other' END = '{CHANNEL_NAME}'
+    AND CREATED_AT_PST >= {START_DATE}
+    AND CREATED_AT_PST < {END_DATE}
+GROUP BY TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST))
+ORDER BY date ASC
+
+PATTERN 2: Multi-Channel Volume Comparison
+BUSINESS QUESTIONS: "Compare all channels", "Which channel has most volume?", "Show ticket volume by channel"
+SQL TEMPLATE:
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    CASE WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+         WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+         WHEN GROUP_ID = '5495272772503' THEN 'Web'
+         ELSE 'Other' END AS channel,
+    COUNT(DISTINCT TICKET_ID) AS ticket_count
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE STATUS IN ('closed', 'solved')
+    AND [STANDARD_FILTERS_APPLIED]
+    AND CREATED_AT_PST >= {DATE_RANGE}
+GROUP BY date, channel
+ORDER BY date ASC, channel
+
+RESPONSE TIME ANALYSIS
+
+BUSINESS PURPOSE:
+Analyze how quickly agents respond to customer inquiries to maintain service quality standards and identify areas for improvement.
+
+RESPONSE TIME BUCKETS:
+- Excellent: Under 1 minute (REPLY_TIME_IN_MINUTES <= 1)
+- Good: 1-15 minutes (REPLY_TIME_IN_MINUTES > 1 AND REPLY_TIME_IN_MINUTES <= 15)
+- Acceptable: 15-60 minutes (REPLY_TIME_IN_MINUTES > 15 AND REPLY_TIME_IN_MINUTES <= 60)
+- Needs Improvement: Over 1 hour (REPLY_TIME_IN_MINUTES > 60)
+
+RESPONSE TIME QUERY PATTERN:
+BUSINESS QUESTIONS: "What's the response time breakdown for chat?", "How quickly do we respond?", "Response time distribution"
+SQL TEMPLATE:
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES <= 1 THEN 1 ELSE 0 END) AS under_1_min,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 1 AND REPLY_TIME_IN_MINUTES <= 15 THEN 1 ELSE 0 END) AS min_1_to_15,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 15 AND REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END) AS min_15_to_60,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 60 THEN 1 ELSE 0 END) AS over_1_hour
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE [STANDARD_FILTERS] AND [CHANNEL_FILTER] AND [DATE_FILTER]
+GROUP BY TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST))
+ORDER BY date ASC
+
+AVERAGE HANDLE TIME (AHT) ANALYTICS
+
+BUSINESS PURPOSE:
+Monitor organizational productivity and departmental performance through Average Handle Time metrics across different contact channels. AHT measures overall organizational efficiency in handling tickets and is a key top-line indicator for the entire Worker Operations department.
+
+USED BY:
+- Senior Leadership: Organizational efficiency reporting and departmental KPIs
+- Operations Directors: Department-wide performance monitoring and strategic resource planning
+- Executive Team: Top-line productivity metrics and organizational benchmarking
+- Analytics Team: Organizational performance reporting and departmental efficiency tracking
+
+PRIMARY TABLE: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+
+KEY COLUMNS:
+- HANDLE_TIME_IN_MINUTES: Total time agent spent handling the ticket
+- AHT_TYPE: Channel-specific handle time type ('AHT - Chat', 'AHT - Voice', 'AHT - Web')
+- CREATED_AT_PST: Ticket creation timestamp in Pacific Standard Time
+- GROUP_NAME: Team or group name (filter for '%wops%' for Worker Operations)
+- AGENT_NAME: Individual agent identifier for performance tracking
+- TICKET_ID: Unique ticket identifier for joining with other tables
+
+AHT TYPE CHANNEL MAPPING:
+- Chat: AHT_TYPE = 'AHT - Chat'
+- Voice: AHT_TYPE = 'AHT - Voice'
+- Web: AHT_TYPE = 'AHT - Web'
+
+MANDATORY AHT FILTERS:
+1. Minimum Handle Time: HANDLE_TIME_IN_MINUTES >= 2 (excludes system errors and very quick interactions)
+2. WOPS Team Filter: LOWER(GROUP_NAME) LIKE '%wops%' (focus on Worker Operations team)
+
+AHT PERFORMANCE BENCHMARKS:
+CHAT AHT TARGETS:
+- Excellent: Under 8 minutes
+- Target: Under 12 minutes
+- Acceptable: Under 15 minutes
+- Needs Improvement: Over 15 minutes
+
+VOICE AHT TARGETS:
+- Excellent: Under 10 minutes
+- Target: Under 15 minutes
+- Acceptable: Under 20 minutes
+- Needs Improvement: Over 20 minutes
+
+WEB AHT TARGETS:
+- Excellent: Under 5 minutes
+- Target: Under 7 minutes
+- Acceptable: Under 10 minutes
+- Needs Improvement: Over 10 minutes
+
+AHT QUERY PATTERNS:
+
+PATTERN 1: Weekly AHT Trends by Channel
+BUSINESS QUESTIONS: "What's our overall organizational chat AHT this week?", "Show me departmental weekly AHT trends", "Overall AHT week over week for the organization"
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', CREATED_AT_PST) AS week_start,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht,
+    COUNT(*) AS ticket_count
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = '{AHT_CHANNEL_TYPE}'
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND CREATED_AT_PST >= {START_DATE}
+    AND CREATED_AT_PST < {END_DATE}
+GROUP BY DATE_TRUNC('week', CREATED_AT_PST)
+ORDER BY week_start ASC
+
+PATTERN 2: Organizational Daily AHT Analysis
+BUSINESS QUESTIONS: "What's our daily organizational AHT?", "Show me departmental AHT performance", "Daily AHT trends for the organization"
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('day', CREATED_AT_PST) AS day,
+    COUNT(*) AS total_tickets,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht,
+    CASE WHEN AVG(HANDLE_TIME_IN_MINUTES) <= 12 THEN 'Excellent'
+         WHEN AVG(HANDLE_TIME_IN_MINUTES) <= 15 THEN 'Good'
+         ELSE 'Needs Improvement' END AS organizational_performance_rating
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = 'AHT - Chat'
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND CREATED_AT_PST >= {DATE_RANGE}
+GROUP BY DATE_TRUNC('day', CREATED_AT_PST)
+ORDER BY day ASC
+
+PATTERN 3: Multi-Channel AHT Comparison
+BUSINESS QUESTIONS: "Compare AHT across channels", "Which channel has lowest AHT?", "Channel performance comparison"
+SQL TEMPLATE:
+SELECT 
+    AHT_TYPE AS channel,
+    COUNT(*) AS ticket_count,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE IN ('AHT - Chat', 'AHT - Voice', 'AHT - Web')
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND CREATED_AT_PST >= {DATE_RANGE}
+GROUP BY AHT_TYPE
+ORDER BY mean_aht ASC
+
+TIME PERIOD MAPPING FOR ALL QUERIES
+
+COMMON TIME PERIOD PATTERNS:
+TODAY:
+AND CREATED_AT_PST >= CAST(CURRENT_DATE AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE + INTERVAL '1 day' AS timestamp)
+
+YESTERDAY:
+AND CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '1 day' AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+THIS WEEK (Monday to Sunday):
+AND CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '1 week'
+
+LAST WEEK:
+AND CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE)
+
+LAST 7 DAYS:
+AND CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '7 days' AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+THIS MONTH:
+AND CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+
+LAST MONTH:
+AND CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE)
+
+LAST 30 DAYS:
+AND CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '30 days' AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+BUSINESS QUESTION PATTERN MATCHING - ORGANIZATIONAL LEVEL
+
+ORGANIZATIONAL TICKET VOLUME QUESTIONS:
+Keywords: "tickets", "volume", "count", "how many", "daily", "weekly", "overall", "organizational", "departmental"
+Examples: "What's our overall chat volume today?", "Show me organizational voice volume", "Daily ticket counts for the department"
+Table: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+Metric: COUNT(DISTINCT TICKET_ID)
+
+ORGANIZATIONAL AHT QUESTIONS:
+Keywords: "AHT", "handle time", "average handle", "organizational performance", "departmental AHT", "overall AHT"
+Examples: "What's our organizational chat AHT?", "Weekly departmental handle time trends", "Overall AHT performance"
+Table: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Metrics: AVG(HANDLE_TIME_IN_MINUTES), PERCENTILE_CONT(0.5)
+
+ORGANIZATIONAL RESPONSE TIME QUESTIONS:
+Keywords: "response time", "reply time", "how quickly", "time buckets", "organizational response", "overall response time"
+Examples: "Overall response time breakdown", "How quickly does the organization respond?", "Departmental reply time distribution"
+Table: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+Metric: Bucketed REPLY_TIME_IN_MINUTES
+
+ORGANIZATIONAL QUALITY QUESTIONS:
+Keywords: "QA score", "quality score", "Klaus", "audit", "quality performance", "CSAT", "customer satisfaction", "satisfaction score", "customer feedback", "FCR", "first contact resolution", "repeat contact", "resolution rate"
+Examples: "What's our QA score this week?", "Show me quality trends", "What's our CSAT?", "Customer satisfaction trends", "What's our FCR rate?", "First contact resolution", "Repeat contact volume"
+Tables: DBT_PRODUCTION.FCT_KLAUS__REVIEWS, DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS, DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS (FCR)
+Metrics: AVG(Overall_Score), AVG(CSAT_SCORE_BINARY), FCR percentage calculations
+
+CHANNEL IDENTIFICATION:
+Chat Keywords: "chat", "messaging", "text", "live chat"
+Voice Keywords: "voice", "phone", "call", "calling", "telephone"
+Web Keywords: "web", "email", "ticket", "form", "portal"
+
+ORGANIZATIONAL PERFORMANCE QUESTIONS:
+Keywords: "organizational", "departmental", "overall performance", "top-line", "KPI"
+Examples: "How is the organization performing?", "Departmental performance metrics", "Overall KPI dashboard"
+Focus: Organization-wide aggregations and trends
+Filter: Department-wide metrics (WOPS team)
+
+COMPARISON QUESTIONS:
+Keywords: "compare", "versus", "vs", "across", "all channels", "by channel"
+Examples: "Compare chat vs voice", "Performance across channels", "All channel metrics"
+Group By: Channel/AHT_TYPE
+
+ADVANCED QUERY PATTERNS
+
+WEEK OVER WEEK ANALYSIS:
+SELECT 
+    week_start,
+    mean_aht,
+    LAG(mean_aht) OVER (ORDER BY week_start) AS prev_week_aht,
+    mean_aht - LAG(mean_aht) OVER (ORDER BY week_start) AS wow_change,
+    ROUND(((mean_aht - LAG(mean_aht) OVER (ORDER BY week_start)) / LAG(mean_aht) OVER (ORDER BY week_start)) * 100, 2) AS wow_pct_change
+FROM (
+    SELECT DATE_TRUNC('week', CREATED_AT_PST) AS week_start,
+           AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht
+    FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+    WHERE [FILTERS]
+    GROUP BY week_start
+) ORDER BY week_start
+
+AHT DISTRIBUTION ANALYSIS:
+SELECT 
+    CASE WHEN HANDLE_TIME_IN_MINUTES <= 5 THEN '0-5 min'
+         WHEN HANDLE_TIME_IN_MINUTES <= 10 THEN '5-10 min'
+         WHEN HANDLE_TIME_IN_MINUTES <= 15 THEN '10-15 min'
+         WHEN HANDLE_TIME_IN_MINUTES <= 30 THEN '15-30 min'
+         ELSE '30+ min' END AS aht_bucket,
+    COUNT(*) AS ticket_count,
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2) AS percentage
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE [FILTERS]
+GROUP BY aht_bucket
+ORDER BY MIN(HANDLE_TIME_IN_MINUTES)
+
+STATISTICAL REQUIREMENTS
+
+MINIMUM SAMPLE SIZES:
+- Agent Analysis: Minimum 10 tickets per agent for statistical significance
+- Daily Analysis: At least 5 tickets per day for meaningful averages
+- Weekly Trends: Minimum 4 weeks of data for trend analysis
+
+OUTLIER HANDLING:
+- Handle Time Outliers: Exclude HANDLE_TIME_IN_MINUTES > 120 for average calculations
+- Response Time Outliers: Cap REPLY_TIME_IN_MINUTES at 1440 (24 hours)
+
+DATA QUALITY FILTERS:
+- Always exclude null handle times
+- Always exclude negative time values
+- Always exclude tickets with HANDLE_TIME_IN_MINUTES < 2 minutes
+
+COMMON ORGANIZATIONAL BUSINESS SCENARIOS
+
+ORGANIZATIONAL PERFORMANCE MONITORING:
+SELECT 
+    DATE_TRUNC('day', created_at_pst) AS day,
+    AVG(handle_time_in_minutes) AS org_mean_aht,
+    COUNT(*) AS total_tickets
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE LOWER(group_name) LIKE '%wops%' AND aht_type = 'AHT - Chat'
+GROUP BY day ORDER BY day DESC LIMIT 30
+
+CAPACITY PLANNING:
+SELECT date, channel, ticket_count, 
+       AVG(ticket_count) OVER (PARTITION BY channel ORDER BY date ROWS 6 PRECEDING) AS rolling_7_day_avg
+FROM daily_volume_by_channel
+WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+
+PERFORMANCE TRENDING:
+SELECT week_start, mean_aht,
+       CASE WHEN mean_aht < LAG(mean_aht) OVER (ORDER BY week_start) THEN 'Improving'
+            WHEN mean_aht > LAG(mean_aht) OVER (ORDER BY week_start) THEN 'Declining'
+            ELSE 'Stable' END AS trend
+FROM weekly_aht_summary
+
+ERROR HANDLING AND EDGE CASES
+
+COMMON QUERY ISSUES:
+1. Empty Results: Always check date ranges and filters
+2. Null Values: Use COALESCE for handle time calculations
+3. Division by Zero: Use NULLIF for percentage calculations
+4. Time Zone Issues: Always use CREATED_AT_PST for consistency
+
+VALIDATION RULES:
+1. Ticket counts should never be negative
+2. Handle times should be between 2 and 120 minutes for normal analysis
+3. Date ranges should not exceed 1 year for performance
+4. Agent analysis requires minimum sample sizes
+
+QUALITY METRICS ANALYTICS
+
+BUSINESS PURPOSE:
+Monitor organizational service quality through Klaus QA reviews, customer satisfaction surveys, and first contact resolution metrics to provide comprehensive quality performance visibility for Worker Operations leadership decision-making and strategic planning.
+
+USED BY:
+- Senior Leadership: Quality performance oversight and strategic quality management
+- Operations Directors: Department-wide quality monitoring and improvement initiatives
+- Executive Team: Organizational quality metrics for strategic planning
+- Analytics Team: Quality metrics reporting for executive dashboards
+
+=== QA SCORE ANALYTICS ===
+
+PRIMARY TABLES:
+1. DBT_PRODUCTION.FCT_KLAUS__REVIEWS - Klaus QA review data
+2. DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS - Ticket data for joining
+
+KEY QA METRICS:
+- Overall_Score: Calculated QA score (0-100 scale)
+- Total_Audits: Number of QA reviews completed
+- Average_QA_Score: Mean quality score across all audits
+
+SCORECARD FILTERING:
+Valid Scorecard IDs: 53921, 54262, 59144, 60047, 56287, 60363
+Primary Scorecards for reporting: 53921, 60047
+
+QA SCORE THRESHOLDS:
+- Scorecards 53921, 54262, 60047: Pass >= 85%
+- Scorecard 59144: Pass >= 90%
+- Target Score: 85%+ for most scorecards
+
+QA SCORE QUERY PATTERN:
+BUSINESS QUESTIONS: "What's our weekly QA score?", "Show me QA trends", "How many audits this week?"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', tickets.SOLVED_AT_PST) AS week_start,
+    AVG(qa_data.Overall_Score) AS average_qa_score,
+    COUNT(*) AS total_audits
+FROM (
+    -- Klaus QA Data Processing CTE
+    WITH KlausBase AS (
+        SELECT
+            klaus.REVIEW_ID,
+            REGEXP_REPLACE(TICKET_URL, '.*/tickets/', '') as TICKET_ID,
+            SCORECARD_ID,
+            SCORECARD_NAME,
+            RATING_CATEGORY_ID,
+            RATING_SCORE,
+            RATING_WEIGHT,
+            REVIEWEE_EMAIL,
+            REVIEWEE_NAME,
+            REVIEW_CREATED_AT
+        FROM DBT_PRODUCTION.FCT_KLAUS__REVIEWS as klaus
+        WHERE SCORECARD_ID IN (53921, 54262, 59144, 60047, 56287, 60363)
+    ),
+    PivotedRatings AS (
+        SELECT
+            REVIEW_ID,
+            CASE WHEN SUM(RATING_WEIGHT) = 0 THEN NULL
+                 ELSE SUM(RATING_SCORE * RATING_WEIGHT) / SUM(100 * RATING_WEIGHT) * 100
+            END as Overall_Score
+        FROM KlausBase
+        GROUP BY REVIEW_ID
+    )
+    SELECT 
+        kb.TICKET_ID,
+        kb.SCORECARD_ID,
+        pr.Overall_Score
+    FROM KlausBase kb
+    JOIN PivotedRatings pr ON kb.REVIEW_ID = pr.REVIEW_ID
+    WHERE kb.REVIEWEE_EMAIL IS NOT NULL
+) qa_data
+LEFT JOIN DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS tickets 
+    ON qa_data.TICKET_ID = tickets.TICKET_ID
+WHERE qa_data.SCORECARD_ID IN (53921, 60047)
+    AND tickets.SOLVED_AT_PST >= {START_DATE}
+    AND tickets.SOLVED_AT_PST < {END_DATE}
+    AND tickets.STATUS IN ('closed', 'solved')
+GROUP BY DATE_TRUNC('week', tickets.SOLVED_AT_PST)
+ORDER BY week_start ASC
+
+=== CUSTOMER SATISFACTION (CSAT) ANALYTICS ===
+
+PRIMARY TABLE: DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+
+KEY CSAT METRICS:
+- CSAT_SCORE_BINARY: Binary satisfaction score (0 or 1)
+- Average CSAT: Mean customer satisfaction percentage
+- Survey Count: Total number of completed surveys
+- SOLVED_AT_PST: Ticket resolution date for trending
+
+CSAT PERFORMANCE BENCHMARKS:
+- Excellent: 95%+ satisfaction
+- Good: 90%+ satisfaction  
+- Target: 85%+ satisfaction
+- Needs Improvement: <85% satisfaction
+
+CSAT QUERY PATTERN:
+BUSINESS QUESTIONS: "What's our CSAT this week?", "Show me customer satisfaction trends", "Weekly CSAT performance"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    AVG(CSAT_SCORE_BINARY) AS average_csat_score,
+    COUNT(*) AS total_surveys
+FROM DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+WHERE SOLVED_AT_PST >= {START_DATE}
+    AND SOLVED_AT_PST < {END_DATE}
+GROUP BY DATE_TRUNC('week', SOLVED_AT_PST)
+ORDER BY week_start ASC
+
+=== FIRST CONTACT RESOLUTION (FCR) ANALYTICS ===
+
+PRIMARY TABLE: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS (with complex FCR logic)
+
+KEY FCR METRICS:
+- FCR Rate: Percentage of issues resolved on first contact
+- Repeat Contact Volume: Number of follow-up contacts within 24 hours
+- IS_RESOLVED_FIRST_TIME: Binary indicator (1 = resolved first time, 0 = repeat contact)
+- Contact Channels: Chat and Voice combined for FCR calculation
+
+FCR CALCULATION LOGIC:
+A ticket is considered "resolved first time" if:
+1. No follow-up ticket from same requester within 24 hours
+2. Only applies to Chat and Voice channels
+3. Must be from same requester (REQUESTER_ID)
+
+FCR PERFORMANCE BENCHMARKS:
+- Excellent: 90%+ FCR rate
+- Good: 85%+ FCR rate
+- Target: 80%+ FCR rate  
+- Needs Improvement: <80% FCR rate
+
+FCR QUERY PATTERN:
+BUSINESS QUESTIONS: "What's our FCR rate?", "Show me FCR trends", "Repeat contact volume"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', CREATED_AT_PST) AS week_start,
+    (CAST(SUM(CASE WHEN IS_RESOLVED_FIRST_TIME = 1 
+                    AND CONTACT_CHANNEL IN ('Chat', 'Voice') THEN 1 ELSE 0 END) AS DOUBLE) /
+     NULLIF(CAST(SUM(CASE WHEN CONTACT_CHANNEL IN ('Chat', 'Voice') THEN 1 ELSE 0 END) AS DOUBLE), 0)) * 100 AS fcr_rate,
+    SUM(CASE WHEN IS_RESOLVED_FIRST_TIME = 0 
+             AND CONTACT_CHANNEL IN ('Chat', 'Voice') THEN 1 ELSE 0 END) AS repeat_contact_volume
+FROM (
+    WITH FCR_CTE AS (
+        SELECT
+            ticket_id,
+            requester_id,
+            CASE WHEN group_id = '17837476387479' THEN 'Chat'
+                 WHEN group_id = '28949203098007' THEN 'Voice'
+                 ELSE 'Other' END AS contact_channel,
+            created_at_pst,
+            CASE WHEN created_at_pst + INTERVAL '24 HOUR' >= 
+                      LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst)
+                 THEN 0 ELSE 1 END AS is_resolved_first_time
+        FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+        WHERE STATUS IN ('solved', 'closed')
+            AND brand_id IN ('360002340693', '29186504989207')
+            AND channel IN ('native_messaging')
+            AND group_id IN ('17837476387479', '28949203098007')
+            AND ASSIGNEE_ID != '15840273336343'
+            AND TICKET_TAGS NOT LIKE '%email_blocked%'
+            AND TICKET_TAGS NOT LIKE '%bulk_email_tool%'
+            AND TICKET_TAGS NOT LIKE '%seattle_psst_monthly_email%'
+            AND created_at_pst >= {DATE_RANGE}
+    )
+    SELECT * FROM FCR_CTE
+) fcr_data
+WHERE CREATED_AT_PST >= {START_DATE}
+    AND CREATED_AT_PST < {END_DATE}
+GROUP BY DATE_TRUNC('week', CREATED_AT_PST)
+ORDER BY week_start ASC
+
+QUALITY METRICS BUSINESS QUESTION PATTERNS
+
+QA SCORE QUESTIONS:
+Keywords: "QA score", "quality score", "Klaus", "audit", "quality performance"
+Examples: "What's our QA score this week?", "Show me quality trends", "How many audits?"
+Primary Metric: AVG(Overall_Score), COUNT(*) audits
+
+CSAT QUESTIONS:  
+Keywords: "CSAT", "customer satisfaction", "satisfaction score", "customer feedback"
+Examples: "What's our CSAT?", "Customer satisfaction trends", "How satisfied are customers?"
+Primary Metric: AVG(CSAT_SCORE_BINARY), COUNT(*) surveys
+
+FCR QUESTIONS:
+Keywords: "FCR", "first contact resolution", "repeat contact", "resolution rate"
+Examples: "What's our FCR rate?", "First contact resolution", "Repeat contact volume"
+Primary Metric: FCR percentage, repeat contact count
+
+ORGANIZATIONAL PERFORMANCE BENCHMARKS
+
+COMBINED QUALITY SCORECARD:
+- QA Score Target: 85%+
+- CSAT Target: 85%+  
+- FCR Target: 80%+
+- All three metrics together indicate overall organizational service quality
+
+EXECUTIVE DASHBOARD METRICS:
+- Weekly trends for all three quality indicators
+- Combined quality performance score
+- Volume metrics (audits, surveys, total contacts)
+- Performance against targets and benchmarks
+
+This comprehensive knowledge base enables the generation of accurate SQL queries for all Worker Operations organizational-level BI needs, focusing on top-line KPIs and departmental performance metrics. All queries are designed for organizational summary reporting rather than individual agent analysis, ensuring consistent results and proper business logic application across all executive and leadership analytics requests.
+
+TEAM LEAD (SUPERVISOR) PERFORMANCE ANALYTICS
+
+BUSINESS PURPOSE:
+Track supervisor-level performance metrics across multiple KPIs including AHT, CSAT, Adherence, QA Score, and FCR for Team Lead management and coaching purposes.
+
+USED BY:
+- Operations Directors: Team Lead performance monitoring and strategic team management
+- Team Lead Managers: Individual TL coaching and performance improvement
+- HR/Performance Management: Supervisor evaluation and development planning
+- Analytics Team: Team Lead performance reporting and trend analysis
+
+=== ACTIVE TEAM LEADS LIST ===
+- Christine Presto, Erin Wood, Gian Gabrillo, Guren Onal
+- Joan Mallari, Jonathan Melenson, Kimberly Gasing, Mbali Gumede
+- Ricardo Birck, Sinead Foley, Yiannis Spanoudis, Yolanda Coughlin, Miguel Salas
+
+=== TEAM LEAD PERFORMANCE METRICS ===
+
+SUPERVISOR FILTERING:
+Column: "Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR"
+Pattern: LOWER(supervisor_column) LIKE '%[team_lead_name]%'
+
+METRIC 1: Team Lead AHT Performance
+Source: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Calculation: AVG(HANDLE_TIME_IN_MINUTES) for Voice + Chat combined
+Filter: AHT_TYPE IN ('AHT - Voice', 'AHT - Chat'), HANDLE_TIME_IN_MINUTES >= 2
+Group By: SUPERVISOR, Week
+
+METRIC 2: Team Lead CSAT Performance
+Source: DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+Calculation: AVG(CSAT_SCORE_BINARY)
+Group By: ASSIGNEE_SUPERVISOR, Week
+
+METRIC 3: Team Lead Schedule Adherence
+Source: DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+Calculation: SUM(ADHERENT_MINUTES) / SUM(SCHEDULED_MINUTES)
+Join: Via AGENT_EMAIL to DIM_ZENDESK_USERS.SUPERVISOR
+Group By: SUPERVISOR, Week
+
+METRIC 4: Team Lead QA Score
+Source: DBT_PRODUCTION.FCT_KLAUS__REVIEWS + Complex Klaus CTE
+Calculation: AVG(Overall_Score) from Klaus scorecard processing
+Filter: SCORECARD_ID = '53921' (primary scorecard)
+Join: Via REVIEWEE_EMAIL to DIM_ZENDESK_USERS.SUPERVISOR
+Group By: SUPERVISOR, Week
+
+METRIC 5: Team Lead FCR Performance
+Source: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS with FCR logic
+Calculation: (Resolved First Time / Total Contacts) * 100
+Channels: Chat and Voice only
+Group By: ASSIGNEE_SUPERVISOR, Week
+
+TEAM LEAD PERFORMANCE QUERY PATTERN:
+BUSINESS QUESTIONS: "How is Christine Presto performing?", "Team lead performance this week", "Show me Joan Mallari's metrics"
+
+SQL TEMPLATE STRUCTURE:
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    "Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR" AS supervisor_name,
+    AVG(aht_metrics.AHT) AS avg_aht,
+    AVG(csat_metrics.CSAT) AS avg_csat, 
+    AVG(adherence_metrics.adherence_pct) AS avg_adherence,
+    AVG(qa_metrics.qa_score) AS avg_qa_score,
+    AVG(fcr_metrics.fcr_rate) AS avg_fcr
+FROM base_ticket_data
+LEFT JOIN [metric_specific_subqueries] ON (week + supervisor match)
+WHERE LOWER("Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR") LIKE '%[team_lead_name]%'
+    AND date_range_filtering
+GROUP BY week_start, supervisor_name
+ORDER BY week_start ASC, supervisor_name ASC
+
+TEAM LEAD BENCHMARKS:
+- AHT (Chat + Voice): <15 minutes average across team
+- CSAT: >85% satisfaction rate  
+- Schedule Adherence: >90% adherence rate
+- QA Score: >85% average quality score
+- FCR: >80% first contact resolution rate
+
+TEAM LEAD BUSINESS QUESTION PATTERNS:
+
+SUPERVISOR-SPECIFIC QUESTIONS:
+Keywords: Team lead names, "supervisor", "TL", "manager", "team lead"
+Examples: "How is Christine Presto performing?", "Joan Mallari AHT", "Gian Gabrillo team performance"
+Filter: Specific supervisor name matching
+
+METRIC-SPECIFIC QUESTIONS:
+Keywords: "team lead AHT", "supervisor CSAT", "TL adherence", "team lead QA", "supervisor FCR"
+Examples: "Team lead AHT performance", "Supervisor CSAT trends", "QA coaching needs"
+Focus: Single metric across all team leads
+
+COMPARATIVE QUESTIONS:
+Keywords: "compare team leads", "best supervisor", "worst TL", "ranking team leads"
+Examples: "Which team lead has best AHT?", "Compare supervisor performance", "Ranking team leads"
+Output: All supervisors with comparative metrics
+
+AGENT (INDIVIDUAL) PERFORMANCE ANALYTICS
+
+BUSINESS PURPOSE:
+Track individual agent performance metrics across multiple KPIs including AHT, CSAT, Adherence, QA Score, and FCR for agent-level coaching and performance management.
+
+USED BY:
+- Team Leads: Individual agent coaching and performance improvement
+- Operations Directors: Agent-level performance monitoring and staffing decisions
+- HR/Performance Management: Agent evaluation and development planning
+- Analytics Team: Agent performance reporting and trend analysis
+
+=== KEY AGENT IDENTIFIER ===
+Agent Name Column: "Dim Zendesk Users - Assignee"."USER_NAME"
+Pattern: LOWER(agent_name_column) LIKE '%[agent_name]%'
+Filter Pattern: "Dim Zendesk Users - Assignee"."USER_NAME"
+
+=== AGENT PERFORMANCE METRICS ===
+
+AGENT METRIC 1: Individual AHT Performance
+Source: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Calculation: AVG(HANDLE_TIME_IN_MINUTES) for Voice + Chat combined
+Filter: AHT_TYPE IN ('AHT - Voice', 'AHT - Chat'), HANDLE_TIME_IN_MINUTES >= 2
+Join: Via USER_ID to base ticket data ASSIGNEE_ID
+Group By: ASSIGNEE_ID, USER_ID, Week
+
+AGENT METRIC 2: Individual CSAT Performance
+Source: DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+Calculation: AVG(CSAT_SCORE_BINARY)
+Join: Via OFFERING_ASSIGNEE_ID to base ticket data ASSIGNEE_ID
+Group By: OFFERING_ASSIGNEE_ID, Week
+
+AGENT METRIC 3: Individual QA Score
+Source: DBT_PRODUCTION.FCT_KLAUS__REVIEWS + Complex Klaus CTE
+Calculation: AVG(Overall_Score) from Klaus scorecard processing
+Filter: SCORECARD_ID = '53921' (primary scorecard)
+Join: Via REVIEWEE_EMAIL to DIM_ZENDESK_USERS.USER_ID
+Group By: USER_ID, Week
+
+AGENT METRIC 4: Individual Schedule Adherence
+Source: DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+Calculation: SUM(ADHERENT_MINUTES) / SUM(SCHEDULED_MINUTES)
+Join: Via AGENT_EMAIL to DIM_ZENDESK_USERS.USER_NAME
+Group By: USER_NAME, Week
+Filter: Active Team Lead supervisors only
+
+AGENT BENCHMARKS:
+- Individual AHT: <12 minutes target
+- Individual CSAT: >85% satisfaction rate
+- Individual Adherence: >90% adherence rate
+- Individual QA Score: >85% quality score
+- Individual FCR: >80% first contact resolution rate
+
+AGENT BUSINESS QUESTION PATTERNS:
+
+AGENT-SPECIFIC QUESTIONS:
+Keywords: Specific agent names, "agent", "individual", specific person names
+Examples: "How is John Smith performing?", "Sarah's AHT performance", "Mike's CSAT trends"
+Filter: Specific agent name matching via USER_NAME
+
+AGENT METRIC-SPECIFIC QUESTIONS:
+Keywords: "agent AHT", "individual CSAT", "agent adherence", "agent QA", "agent FCR"
+Examples: "Agent AHT performance", "Individual CSAT trends", "QA coaching needs by agent"
+Focus: Single metric across all agents
+
+AGENT COMPARATIVE QUESTIONS:
+Keywords: "compare agents", "best agent", "worst performer", "ranking agents", "top agents"
+Examples: "Which agent has best AHT?", "Compare agent performance", "Top performing agents"
+Output: All agents with comparative metrics
+
+AUDITOR PERFORMANCE ANALYTICS
+
+BUSINESS PURPOSE:
+Track QA auditor performance metrics including audit volume, ATA alignment scores, and dispute acceptance rates for auditor coaching and quality assurance management.
+
+USED BY:
+- QA Managers: Auditor performance monitoring and coaching
+- Operations Directors: Quality assurance oversight and staffing decisions
+- Analytics Team: Auditor performance reporting and quality metrics analysis
+- Senior Leadership: QA process effectiveness and auditor productivity
+
+=== KEY AUDITOR IDENTIFIER ===
+Auditor Name Column: "REVIEWER_NAME"
+Pattern: LOWER(reviewer_name_column) LIKE '%[auditor_name]%'
+Filter Pattern: "source"."REVIEWER_NAME"
+
+=== AUDITOR PERFORMANCE METRICS ===
+
+AUDITOR METRIC 1: QA Audit Count
+Source: DBT_PRODUCTION.FCT_KLAUS__REVIEWS (via complex Klaus CTE)
+Calculation: COUNT(DISTINCT REVIEW_ID)
+Description: Total number of QA audits completed by auditor
+Group By: REVIEWER_NAME, Week
+
+AUDITOR METRIC 2: ATA Alignment Score
+Source: Klaus Overall_Score from ATA scorecards
+Calculation: AVG(Overall_Score) for SCORECARD_ID IN (54262, 59144)
+Description: Average alignment score for ATA (After The Audit) reviews
+Filter: ATA-specific scorecards only
+Group By: REVIEWER_NAME, Week
+
+AUDITOR METRIC 3: Dispute Accept Rate
+Source: DBT_PRODUCTION.STG_KLAUS__DISPUTES
+Calculation: (Accepted/Partially Accepted Disputes / Total Audits) * 100
+Dispute Status Filter: 'ACCEPTED' OR 'PARTIALLY_ACCEPTED'
+Description: Percentage of auditor reviews that were successfully disputed
+Join: Via REVIEW_ID to main Klaus data
+Group By: REVIEWER_NAME, Week
+
+AUDITOR BENCHMARKS:
+- Weekly Audit Count: 15-25 audits per auditor per week
+- ATA Alignment: >90% accuracy on ATA reviews
+- Dispute Accept Rate: <10% of audits should be successfully disputed
+- Quality Consistency: Stable performance across weeks
+
+AUDITOR BUSINESS QUESTION PATTERNS:
+
+AUDITOR PRODUCTIVITY QUESTIONS:
+Keywords: "audit count", "audits completed", "productivity", "volume", "reviewer", "auditor"
+Examples: "How many audits this week?", "Auditor productivity", "Audit volume by reviewer"
+Focus: COUNT(DISTINCT REVIEW_ID) metric
+
+ATA ALIGNMENT QUESTIONS:
+Keywords: "ATA", "alignment", "accuracy", "ATA score", "after the audit"
+Examples: "ATA alignment scores", "Auditor accuracy", "ATA performance"
+Focus: AVG(Overall_Score) for ATA scorecards (54262, 59144)
+
+DISPUTE QUESTIONS:
+Keywords: "dispute", "disputed", "acceptance rate", "overturned", "challenged"
+Examples: "Dispute acceptance rate", "How many disputed audits?", "Auditor accuracy challenges"
+Focus: Dispute rate calculation from STG_KLAUS__DISPUTES
+
+KEY FOCUS AREAS:
+- Organizational ticket volume trends (not individual agent volume)
+- Departmental Average Handle Time performance (not individual agent AHT)
+- Overall response time organizational metrics (not agent-specific response times)
+- Organizational quality metrics (QA Score, CSAT, FCR) for service excellence tracking
+- Team Lead (Supervisor) performance metrics for coaching and management
+- Individual Agent performance metrics for coaching and development
+- QA Auditor performance metrics for quality assurance management
+- Top-line KPIs for executive reporting and strategic decision making
+- Department-wide performance tracking for Worker Operations leadership
