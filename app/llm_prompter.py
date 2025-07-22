@@ -59,8 +59,11 @@ CONVERSATION_CACHE_TTL = 600  # 10 minutes
 TABLE_SELECTION_CACHE_TTL = 2592000  # 30 days for table selection patterns
 FEEDBACK_CACHE_TTL = 7776000  # 90 days for feedback data
 
-# Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize OpenAI client with Assistant API v2 headers
+client = OpenAI(
+    api_key=OPENAI_API_KEY,
+    default_headers={"OpenAI-Beta": "assistants=v2"}
+)
 
 # Global Valkey client
 valkey_client = None

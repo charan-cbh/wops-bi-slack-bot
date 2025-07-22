@@ -93,10 +93,27 @@ class BIService:
         """
         Build enhanced prompt with business context and guidelines
         """
-        base_prompt = f"""You are an expert business intelligence analyst for Clipboard Health's Worker Operations team. You help answer questions about operational metrics, agent performance, and business insights.
+        base_prompt = f"""You are an expert business intelligence analyst and customer support specialist for Clipboard Health. You help answer questions about:
+
+1. BUSINESS OPERATIONS: Platform features, policies, procedures, and general business information
+2. BUSINESS INTELLIGENCE: Operational metrics, agent performance, and data insights
+
+CLIPBOARD HEALTH BUSINESS CONTEXT:
+You have comprehensive knowledge about Clipboard Health's healthcare staffing platform, including:
+- Platform features like shift management, urgent shifts, magic shifts, block booking
+- Billing and payment systems including extra time pay and instant payments
+- Document requirements and onboarding procedures for healthcare professionals
+- Digital timesheet systems, NFC technology, and geofencing
+- Mobile and desktop applications with full feature sets
+- Troubleshooting procedures and technical support information
+- Contact information and escalation procedures
+- Performance management including Clipboard Score system
+- Cancellation policies and fee structures
+- Professional account management and facility user roles
 
 Context & Guidelines:
-- Focus on providing clear, actionable business insights
+- For BUSINESS questions: Provide detailed, accurate information based on Clipboard Health's policies and procedures
+- For BI questions: Focus on providing clear, actionable business insights about operational metrics
 - When discussing metrics, explain what they mean and why they matter
 - If a question is about data you cannot access, explain what kind of analysis would be needed
 - Be concise but comprehensive in your responses
@@ -130,11 +147,49 @@ Please provide a comprehensive business intelligence response. If this question 
     
     async def _generate_ai_response(self, prompt: str, user_id: str, channel_id: str) -> str:
         """
-        Generate AI response using OpenAI Chat API directly
+        Generate AI response using OpenAI Assistant API with vector store access
         """
         try:
-            client = openai.AsyncOpenAI(api_key=self.api_key)
+            client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                default_headers={"OpenAI-Beta": "assistants=v2"}
+            )
             
+            # Check if we should use Assistant API with vector store
+            assistant_id = os.getenv("ASSISTANT_ID")
+            if assistant_id:
+                # Use Assistant API with vector store access for business context
+                thread = await client.beta.threads.create()
+                
+                await client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=prompt
+                )
+                
+                run = await client.beta.threads.runs.create(
+                    thread_id=thread.id,
+                    assistant_id=assistant_id
+                )
+                
+                # Wait for completion
+                while run.status in ['queued', 'in_progress', 'cancelling']:
+                    await asyncio.sleep(1)
+                    run = await client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                
+                if run.status == 'completed':
+                    messages = await client.beta.threads.messages.list(thread_id=thread.id, limit=1)
+                    if messages.data:
+                        content = messages.data[0].content[0]
+                        if hasattr(content, 'text'):
+                            return content.text.value.strip()
+                    
+                    return "I couldn't generate a proper response. Please try again."
+                else:
+                    # Fallback to Chat API if Assistant fails
+                    logger.warning(f"Assistant API run failed with status: {run.status}")
+            
+            # Fallback to Chat API
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[

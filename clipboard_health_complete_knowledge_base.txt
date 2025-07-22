@@ -1,0 +1,1027 @@
+CLIPBOARD HEALTH COMPLETE KNOWLEDGE BASE & COMPREHENSIVE SUPPORT DOCUMENTATION
+
+EXECUTIVE SUMMARY
+
+Clipboard Health is a comprehensive healthcare staffing platform connecting healthcare facilities with licensed professionals (CNAs, LVNs, RNs, and other specialties) for shift-based work. Founded by Wei Deng with the mission to "move as many people up the socioeconomic ladder as possible," the company is a fast-growing Series C marketplace, profitable since 2022, filling millions of shifts annually across the US.
+
+The platform operates 24/7 through mobile applications and web portals, providing real-time scheduling, billing, workforce management, instant payment processing, and comprehensive compliance management for the healthcare industry.
+
+CORE PLATFORM OVERVIEW
+
+What is Clipboard Health?
+Clipboard Health is a technology-enabled healthcare staffing marketplace that dramatically improves lives by letting healthcare professionals turn extra time and ambition into career growth and financial opportunity. The robust tech platform makes it easy for healthcare professionals and healthcare facilities to form relationships needed to care for patients and address talent shortages.
+
+Business Model Structure:
+- Facilities post available shifts on the platform marketplace
+- Healthcare professionals browse and book available shifts using mobile app or web portal
+- Clipboard Health charges facilities hourly rates for booked shifts based on contract terms
+- All shifts are eligible for instant payment to workers after timesheet submission
+- Platform operates with automated systems and human support available 24/7
+- Independent contractor model - professionals are not employees but contractors
+
+Key Value Propositions:
+For Facilities: Instant access to qualified healthcare professionals, reduced administrative burden, flexible staffing solutions, compliance management, real-time communication tools
+For Professionals: Flexible work schedules, instant payment options, access to multiple facilities, professional development opportunities, career growth potential
+
+USER TYPES AND ACCOUNT MANAGEMENT
+
+Healthcare Professional Categories:
+- Certified Nursing Assistants (CNAs)
+- Licensed Vocational Nurses (LVNs)  
+- Licensed Practical Nurses (LPNs)
+- Registered Nurses (RNs)
+- Other healthcare specialties and support roles across various care settings
+
+Professional Account Features:
+- My Account section for comprehensive profile management, document tracking, and payment preferences
+- Advanced shift booking and scheduling calendar with filtering capabilities
+- Digital timesheet submission system with instant payment processing
+- Communication tools for direct facility interaction via HIPAA-compliant messaging
+- Skills assessment tracking and certification management
+- Performance rating visibility and career development tracking
+
+Facility User Role Types:
+- Admin Users: Full access to all platform features, user management, billing oversight, facility configuration
+- Invoice Users: Access to billing systems, invoice management, and payment processing
+- Supervisor Users: Shift management capabilities, worker oversight, communication tools
+- Shift Management Users: Basic shift posting and worker management capabilities
+- Standard Users: Limited access to basic shift operations
+
+Facility User Management:
+- Facilities can add unlimited users at no additional cost
+- User access can be immediately removed when staff leaves organization
+- Role-based permissions ensure appropriate access levels and security
+- Real-time user activity monitoring and audit trails available
+
+COMPREHENSIVE SHIFT MANAGEMENT SYSTEM
+
+Shift Posting Process and Best Practices:
+- Post shifts as soon as they become available rather than waiting closer to scheduled dates
+- Earlier posting significantly increases booking likelihood by up to 300%
+- Shifts can be posted from mobile app, desktop web portal, or bulk posting tools
+- Use competitive rates based on market analysis to ensure shifts attract qualified professionals
+- Consider geographic, specialty, and time-of-day factors when setting rates
+
+Priority Access System:
+- Favorites List: Professionals on facility's favorites list receive priority booking window
+- Priority Window: Opens when shifts are first posted, lasting up to 6 hours before general marketplace access
+- A-Team System: Top-ranking professionals get enhanced priority access to all shifts
+- InstantBook Feature: Majority of facilities have this enabled for immediate shift confirmation upon booking
+
+Advanced Shift Features:
+
+Shift Invites System:
+- Facilities can invite specific professionals to work particular shifts
+- Invited shifts are visible only to the invited professional initially with exclusive access period
+- Option to open to favorites list if invitation is declined within specified timeframe
+- Custom rates can be set for invited professionals, including premium pricing
+- Works with both individual shifts and block bookings
+
+Block Booking Functionality:
+- Feature allows posting blocks of shifts across 1 or more weeks for single professional booking
+- Professionals commit to entire block (80% minimum attendance required)
+- Found in "Blocks" tab next to "Per Diem" in Find Shifts section
+- Priority Access available for blocks (up to 6 hours for favorites)
+- No rate negotiation currently available for blocks
+- Future expansion planned to include housing and daily stipends
+- Geographic restrictions apply - must have license to practice in area
+- Mutual commitment expected between facility and professional for all shifts in block
+
+Urgent Shifts System:
+
+Automatic Triggering Conditions:
+- Professional cancels within 0-8 hours before shift start time
+- Professional cancels within 0-2 hours after shift start time
+- Shifts removed from professional calendars on short notice due to attendance issues
+- Anticipated no-shows based on GPS tracking and ETA monitoring
+- System automatically detects when professionals aren't moving toward facility
+
+Urgent Shift Benefits and Operations:
+- Posted at premium rates (typically 20-50% above standard rates) to attract immediate coverage
+- No additional cost to facilities beyond standard contract rates
+- Automated system reduces administrative burden on facility staff
+- Higher likelihood of last-minute coverage (>90% fill rate for urgent shifts)
+- Professionals notified via push notifications and SMS for immediate response
+
+Magic Shifts Feature:
+- Limited, high-paying shifts that fill urgent needs over 99% of the time
+- Simply check "Use a Magic Shift" checkbox when posting
+- If unfilled, facility receives $100 invoice credit compensation
+- Only applies to CNA/LVN/LPN/RN postings posted at least 1 hour in advance
+- Limited number of free Magic Shifts provided monthly to facilities
+- Earn additional Magic Shifts by posting shifts 5+ days in advance
+
+Manual Urgent Shift Requests:
+- Facilities can manually request urgent shifts for immediate needs
+- Available through both mobile app and web portal interfaces
+- Support team assistance available for complex scheduling situations
+- Integration with existing urgent shift marketplace
+
+Skills Assessment and Quality Control:
+
+CNA Skills Assessment:
+- Video-based evaluation testing key nursing assistant skills and competencies
+- Required for newer professionals to book shifts at participating facilities
+- Ensures competency standards are met before shift assignment authorization
+- Conducted remotely through secure Clipboard Health platform
+- Assessments reviewed by qualified healthcare education professionals
+- Helps reduce performance issues and increases reliability by up to 40%
+
+Multi-State License Management:
+- Platform recognizes Nurse Licensure Compact agreements
+- Automatic verification with state boards (72-hour maximum processing time)
+- Multi-state licenses allow work in any participating compact state
+- Separate application required for multi-state license (not automatic)
+- Real-time license status monitoring and expiration alerts
+
+COMPREHENSIVE CANCELLATION POLICY AND PROCEDURES
+
+Facility Cancellation Rules:
+
+Cancellation Fee Structure:
+- Cancellations within contract-specified timeframe incur fees at agreed-upon hourly rates
+- Cancellations outside contract timeframe (typically 24+ hours) have no fees
+- Fees calculated based on individual facility contract terms and shift specifications
+- Detailed line-item breakdown provided on invoices with clear cancellation identification
+
+Late Arrival Exception Policies:
+- Cancellation fees automatically waived for professionals with 30+ minute late ETAs
+- Facilities can cancel late professionals at no charge through app or web portal
+- Contact Clipboard Health support for immediate assistance with late arrival situations
+- ETA monitoring system provides real-time updates on professional location and movement
+
+Professional No-Show Procedures:
+
+No-Show Processing:
+- Can be processed via web portal or mobile app when shift begins
+- Available as soon as professional enters facility geofence radius
+- Option to request replacement professional at no additional charge
+- Automatic systems monitor professional location, ETA, and movement patterns
+- No-show processing triggers urgent shift posting for replacement coverage
+
+ETA Monitoring and Communication:
+- GPS tracking shows professional movement toward facility in real-time
+- Automated notifications sent to professionals expected to be 30+ minutes late
+- System prompts professional to confirm intended arrival and estimated time
+- Facility receives continuous ETA updates through mobile and web interfaces
+- Integration with traffic and routing data for accurate arrival predictions
+
+Billing for Cancellations:
+
+Invoice Processing and Transparency:
+- Cancellations within 24 hours of shift start are charged per individual cancellation rules
+- Late cancellations appear on next billing cycle with detailed breakdown
+- Comprehensive line-item analysis of cancellation fees with timestamps
+- Automatic calculation based on contract terms with manual override capability for disputes
+- Historical cancellation data available for pattern analysis and facility improvement
+
+COMPREHENSIVE BILLING AND PAYMENT STRUCTURE
+
+Facility Billing Model:
+
+Shift Charge Rate System:
+- Hourly base rate facilities pay for marketplace-booked shifts
+- Rates dynamically adjustable to align with market demands and supply
+- Competitive pricing recommendations provided based on regional market analysis
+- Custom rates available for shift invites with facility-specific negotiations
+- Seasonal and specialty rate adjustments supported
+
+Rate Adjustment Process:
+- Facilities can modify charge rates for better market alignment
+- Changes reflected immediately in invoices with detailed line-item tracking
+- Complete audit trail of who made changes and when modifications occurred  
+- Historical rate data available for trend analysis and budgeting
+- Bulk rate adjustments available for multiple shift types or time periods
+
+Extra Time Pay System:
+
+Weekly Extra Time Pay:
+- Automatic incentive for professionals working 40+ hours per calendar week
+- Adjustable multipliers (typically 1.5x) and hour thresholds configurable by facility
+- Facilities can customize extra time parameters based on operational needs
+- Applied automatically to qualifying shifts with no administrative overhead
+- Calculated Sunday 12am to Saturday 11:59pm for consistent weekly tracking
+
+Consecutive Hours Extra Time Pay:
+- Incentive for professionals working extended consecutive shifts
+- Facility-configurable parameters for activation (typically 8+ or 12+ hours)
+- Multiple multiplier tiers available (1.5x after 8 hours, 2.0x after 12 hours)
+- Automatic calculation and application to invoices
+- Helps facilities attract workers for difficult-to-fill long shifts
+
+Advanced Payment Processing:
+
+Recommended Payment Methods:
+ACH Payments (Preferred):
+- Faster processing times (1-2 business days vs 3-5 for other methods)
+- Significantly reduced transaction fees compared to credit card processing
+- Enhanced security protocols and detailed tracking capabilities
+- Automatic payment options available with failure notifications
+- Integration with major banking systems for seamless transactions
+
+Invoice Management System:
+- Admin and Invoice role users can view, download, and pay invoices through web portal
+- Payment processing through secure Invoiced.com integration
+- Autopay setup strongly recommended for timely payments and avoiding late fees
+- Detailed invoice breakdown with all charges itemized by shift, professional, and time period
+- Historical invoice archive with advanced search and filtering capabilities
+
+Payment Support Services:
+- Dedicated billing support available at billing@clipboardhealth.com
+- Specialized billing phone line: (415) 604-3272 available during business hours
+- Invoice disputes and billing questions handled by trained finance team
+- Escalation procedures for complex billing issues or contract questions
+- Regular billing webinars and training sessions for facility finance staff
+
+COMPREHENSIVE DOCUMENT REQUIREMENTS AND ONBOARDING
+
+Required Professional Documents:
+
+Core Documentation Requirements:
+1. Personal Identification: Driver's license, state ID, US passport, military ID, permanent resident ID, or other government-issued photo identification with current address
+2. Selfie Verification: Required alongside identification document, verified via Stripe's Identity service for fraud prevention
+3. Background Check: Conducted through Checkr service at county, state, and federal levels with Clipboard Health covering all costs
+4. Professional License: Current state nursing license or relevant healthcare certification with board verification
+5. Social Security Number: Required for background checks and OIG/SAM exclusion list compliance verification
+6. BLS/CPR Certification: Current Basic Life Support or CPR certification from approved providers
+7. TB Testing: TB skin test within 12 months OR chest X-ray within 5 years
+8. Additional State Requirements: Varies by state law and individual facility policies
+
+Additional State and Facility Requirements:
+- Requirements vary significantly by state regulations and individual facility policies
+- Facilities can request modifications to standard document requirements
+- Updates and changes processed through onboarding@clipboardhealth.com
+- Custom requirement sets available for specialized care facilities
+- Seasonal flu vaccination requirements in applicable jurisdictions
+
+Advanced Document Verification Process:
+
+Multi-Stage Authentication:
+- Comprehensive multi-stage verification process for all submitted documents
+- Onboarding and Compliance team conducts thorough manual reviews of all submissions
+- Stripe Identity integration provides secure photo ID verification with liveness detection
+- Checkr integration enables comprehensive background screening with continuous monitoring
+- Advanced fraud detection algorithms identify potentially problematic documentation
+
+Background Check Details:
+- National Criminal Background Check conducted via Checkr at county, state, and federal levels
+- Annual background check requirement for continued platform access
+- Full compliance with healthcare industry standards and regulatory requirements
+- Verification that no criminal history exists that could affect professional licensing
+- OIG and SAM exclusion list monitoring with real-time updates
+
+Document Status Management:
+- Automated email and SMS notifications for documents expiring within 90 days
+- Real-time document status tracking in professional accounts with color-coded indicators
+- Automatic booking restrictions applied for non-compliant or expired documentation
+- 24/7 support available for document-related emergencies and urgent processing
+- Document upload through secure, encrypted channels with audit trails
+
+Facility Document Requirements Management:
+
+Customization and Configuration:
+- Facilities can remove or modify standard document requirements based on operational needs
+- Request changes via secure Facility Requirement Update Request Form
+- Direct email communication to onboarding@clipboardhealth.com for expedited processing
+- Changes typically processed within 1-2 business days with confirmation
+- Bulk requirement updates available for facility networks or chains
+
+CNA Skills Assessment Program:
+- Mandatory for newer CNAs booking at participating facilities
+- Comprehensive video-based competency evaluation covering essential skills
+- Must be scheduled and successfully completed before booking eligibility
+- Ensures skill standards meet or exceed facility expectations and regulatory requirements
+- Regular assessment updates based on industry best practices and facility feedback
+
+COMPREHENSIVE DIGITAL TIMESHEETS AND CLOCK MANAGEMENT
+
+Digital Timesheet System Overview:
+
+Core Functionality:
+- Complete in-app logging and verification of shift hours through Clipboard Health mobile application
+- Replaces traditional paper timesheets for majority of participating facilities
+- Real-time generation of detailed timecard information with GPS and timestamp verification
+- Seamless integration with instant payment system for immediate earnings access
+- Comprehensive audit trail for compliance and dispute resolution
+
+Clock In Process and Requirements:
+
+Technical Requirements for Successful Clock In:
+- Mobile device must maintain stable internet connectivity throughout shift
+- Location services must be enabled with precise location permissions granted
+- Professional must be physically inside facility building within geofence parameters
+- GPS geofencing technology ensures location accuracy within specified radius
+- Background app refresh must be enabled for continuous monitoring
+
+NFC Time Clock Integration:
+- Many facilities require NFC time clock poster interaction for enhanced security
+- Professionals must tap mobile device against facility-specific NFC poster
+- Additional security layer confirming physical presence inside facility
+- Required for both clock in and clock out processes at participating locations
+- Unique NFC identifiers assigned to each facility for fraud prevention
+- 10x15 inch posters with embedded near field communication technology
+
+Clock Out and Approval Process:
+
+Clock Out Procedures:
+- Professional initiates clock out process through mobile app at completion of shift
+- Digital timesheet automatically generated with complete timecard information including breaks
+- Facility staff digital signature required for timesheet submission and processing
+- GPS location and NFC verification required for final location confirmation
+- Automatic calculation of total hours including break deductions and overtime
+
+Facility Approval and Editing Process:
+- Facility staff can adjust start/end times during digital signature process
+- Clock out time editable by facility supervisor up to 2 hours beyond scheduled end
+- Time adjustments beyond 2 hours require direct customer support contact
+- Real-time editing capabilities with immediate update to timesheet calculations
+- Approval workflow includes photo capture of facility staff for verification
+
+Time Editing Restrictions and Controls:
+- Some facilities disable in-app timesheet editing for enhanced control
+- Professionals cannot edit times at facilities with editing restrictions enabled
+- All time adjustments at restricted facilities must be made by authorized facility staff
+- Ensures complete facility control over timesheet accuracy and compliance
+- Override capabilities available for emergency situations through support contact
+
+Advanced Break Time Management:
+
+Automatic Break Calculations:
+- System automatically calculates required break times based on shift duration and state labor laws
+- Worked break payment requests can be submitted when breaks are missed due to operational needs
+- Full compliance with state and federal labor law break requirements
+- Facility-specific break policies configurable through administrative interface
+- Exception handling for emergency situations where breaks cannot be taken
+
+Paper Timesheet Alternative:
+
+Legacy System Support:
+- Available for facilities without digital timesheet implementation
+- Backup option during technical issues or system maintenance
+- Professional must photograph and upload paper timesheet through mobile app
+- Less preferred method due to processing delays and manual verification requirements
+- Instant payment not available for paper timesheet submissions
+
+MOBILE AND DESKTOP APPLICATION COMPREHENSIVE GUIDE
+
+Clipboard Workplace Mobile App (Facilities):
+
+Core Feature Set:
+
+1. Advanced Shifts Management:
+   - Quick shift posting with template functionality and bulk operations
+   - Intuitive calendar view with color-coded shift status indicators
+   - Real-time shift status updates with push notification alerts
+   - Advanced filtering and search capabilities across all posted shifts
+   - Shift duplication and template creation for recurring needs
+
+2. Live ETA Tracking and Monitoring:
+   - Comprehensive monitoring of professional's estimated time of arrival
+   - GPS-based location tracking with traffic pattern integration
+   - Real-time updates on professional movement toward facility
+   - Automatic late arrival detection and notification system
+   - Integration with facility workflow for proactive staffing management
+
+3. Comprehensive Workers Management:
+   - List view of upcoming, in-progress, and completed shifts with detailed information
+   - Direct messaging capabilities with professionals via HIPAA-compliant chat system
+   - Comprehensive rating and feedback system for performance tracking
+   - Worker blocking functionality for problematic individuals with detailed reporting
+   - Access to professional profiles, certifications, and work history
+
+4. Advanced Communication Tools:
+   - Encrypted, HIPAA-compliant messaging system for secure communication
+   - Start new conversations or continue existing chat history with scheduled workers
+   - Real-time messaging notifications with customizable alert settings
+   - File and image sharing capabilities for shift-related information
+   - Group messaging for multiple professionals on same shift
+
+5. Comprehensive Facility Information Hub:
+   - View and update facility information, policies, and operational settings
+   - Access to real-time upcoming charges and detailed invoice history
+   - Add helpful information for incoming professionals including parking, entry procedures
+   - Facility rating and review system for professional feedback
+   - Integration with facility management systems for streamlined operations
+
+Clipboard Health App (Professionals):
+
+Professional-Focused Features:
+- Advanced shift browsing with multiple filtering options (distance, pay rate, shift type, facility rating)
+- Calendar integration for comprehensive schedule management with conflict detection
+- Digital timesheet clock in/out functionality with GPS and NFC verification
+- Secure document upload and management with real-time status tracking
+- Instant payment access with multiple withdrawal options after shift completion
+- HIPAA-compliant communication tools for direct facility interaction
+- Performance tracking and career development resources
+
+Desktop Web Portal Comprehensive Features:
+
+1. Advanced Shift Management:
+   - Post, edit, delete, or cancel individual shifts with bulk operation capabilities
+   - Advanced bulk shift operations for efficiency including template-based posting
+   - Sophisticated filtering and search capabilities across historical and future shifts
+   - Shift analytics and reporting for optimization and planning
+   - Integration with facility scheduling systems and workforce management tools
+
+2. Workplace Rules Management:
+   - Create custom text fields for professional guidance and facility-specific requirements
+   - Generate interactive quizzes for professional compliance verification
+   - Facility-specific policy communication and acknowledgment tracking
+   - Customizable onboarding workflows for new professionals
+   - Compliance tracking and reporting for regulatory requirements
+
+3. Advanced Time-Clock Settings:
+   - Configure worker clock in/out parameters with custom geofence settings
+   - Set maximum hours restrictions and overtime thresholds
+   - Geofencing setup and management with precise location controls
+   - NFC integration configuration for enhanced security
+   - Break time management and labor law compliance settings
+
+4. Comprehensive Invoice and Billing Management:
+   - View, download, and pay invoices with detailed line-item analysis
+   - Access to historical billing data with advanced reporting capabilities
+   - Payment method management with multiple payment options
+   - Automatic payment setup and failure notification systems
+   - Billing dispute resolution and support ticket integration
+
+5. User Management and Security:
+   - Add, edit, or remove facility users with role-based access control
+   - Comprehensive role and permission assignment with custom configurations
+   - User activity monitoring and detailed audit trail capabilities
+   - Single sign-on integration for enterprise environments
+   - Advanced security controls and compliance reporting
+
+Cross-Platform Integration and Synchronization:
+
+Unified Experience:
+- Real-time data synchronization between mobile and desktop platforms
+- Unified user authentication across all platforms with single sign-on capability
+- Consistent feature availability regardless of access method or device
+- Cloud-based data storage ensuring accessibility and data redundancy
+- Offline capability with automatic synchronization when connectivity restored
+
+COMPREHENSIVE TROUBLESHOOTING AND TECHNICAL SUPPORT
+
+Common Application Issues and Detailed Solutions:
+
+Login Problems and Resolution:
+
+1. General Login Issues:
+   - Ensure latest version of mobile app is installed through official app stores
+   - Close and completely relaunch application to clear temporary data
+   - Verify stable internet connectivity and try different networks
+   - Clear app cache and stored data if issues persist
+   - Restart mobile device to resolve system-level conflicts
+
+2. Account Verification Issues:
+   - Visit https://hcp.clipboard.health to request new verification link
+   - Enter current email address or phone number for verification resend
+   - Check spam/junk folders for verification emails from Clipboard Health
+   - Verify correct email address is associated with account in profile settings
+   - Contact support if email address needs to be updated or changed
+
+3. Workplace Account Login Specific Issues:
+   - Use Google Chrome browser exclusively for optimal compatibility and performance
+   - Outlook users must ensure verification links open in Chrome browser
+   - Clear browser cache, cookies, and stored data if persistent issues occur
+   - Disable browser extensions that may interfere with login processes
+   - Try incognito/private browsing mode to isolate extension conflicts
+
+Mobile App Comprehensive Troubleshooting:
+
+Common Issues and Resolution Procedures:
+- App crashes and instability: Update to latest version, restart device, check available storage
+- Pages not loading properly: Verify internet connectivity, clear app cache, reinstall if necessary
+- Clock in/out functionality problems: Confirm location services enabled, check GPS accuracy
+- Location services and GPS issues: Reset location permissions, calibrate GPS, check for interference
+- NFC time clock connectivity problems: Ensure NFC enabled, clean device sensors, verify poster functionality
+
+Standard Mobile Troubleshooting Protocol:
+1. Update to latest app version through official app store
+2. Restart mobile device completely to clear system resources
+3. Check internet connection stability and switch networks if necessary
+4. Verify location services are enabled with precise location permissions
+5. Ensure background app refresh is allowed for continuous functionality
+6. Clear app cache and data if problems persist
+7. Reinstall application as final resolution step
+
+Desktop and Web Portal Issues:
+
+Browser Compatibility and Optimization:
+- Google Chrome browser strongly recommended for optimal performance and compatibility
+- Regularly clear cache and cookies to prevent data conflicts
+- Disable browser extensions that may interfere with platform functionality
+- Ensure JavaScript is enabled and up-to-date for full feature access
+- Use incognito/private browsing mode for testing and troubleshooting
+- Maintain current browser version with automatic updates enabled
+
+Advanced Technical Support Escalation:
+
+When to Contact Direct Support:
+- Standard troubleshooting steps have been unsuccessful after multiple attempts
+- Complete account access is blocked despite following resolution procedures
+- Payment or billing system issues affecting financial transactions
+- Document verification problems preventing work authorization
+- Facility-specific technical configurations requiring administrative access
+- Integration issues with facility management systems
+
+AI VIRTUAL ASSISTANT COMPREHENSIVE CAPABILITIES
+
+Advanced Virtual Assistant Features:
+
+24/7 AI-Powered Support System:
+- Instant responses to user queries through intuitive, user-friendly interface
+- Comprehensive step-by-step guidance for platform navigation and issue resolution
+- Wide range of query handling capabilities covering all platform functions
+- Enhanced support system leveraging advanced artificial intelligence technology
+- Contextual understanding of complex multi-step problems and solutions
+- Integration with human support for seamless escalation when needed
+
+Access Methods and Availability:
+- Available through mobile app: My Account > Help Center > Start a Chat
+- Full web portal integration for desktop users with same functionality
+- 24/7 availability for immediate assistance with no wait times
+- No queue limitations for basic support queries and common issues
+- Priority handling for urgent situations and time-sensitive problems
+
+Advanced Support Capabilities:
+
+Document and Media Analysis:
+- Accept supporting documents for comprehensive issue investigation
+- Screenshot and screen recording analysis for visual problem diagnosis
+- Detailed query processing with contextual responses based on user history
+- Integration with human support specialists for complex technical issues
+- Automated case creation and tracking for ongoing problems
+
+Optimization Guidelines for Users:
+
+Effective Communication Strategies:
+- Provide detailed information and clear explanation of concerns with specific examples
+- Maintain consistent information when describing same issue across multiple interactions
+- Include relevant screenshots, error messages, or documents when applicable
+- Be specific about desired outcomes, expected results, and attempted solutions
+- Use clear, concise language and avoid technical jargon when possible
+
+Query Types Handled by AI Assistant:
+
+Comprehensive Support Categories:
+- Account management questions including password resets, profile updates, role changes
+- Shift booking and scheduling assistance with complex scenarios and edge cases
+- Billing and payment inquiries including invoice questions and payment processing
+- Technical troubleshooting guidance for mobile and web platform issues
+- Policy and procedure clarifications with specific examples and scenarios
+- Document requirement explanations with state-specific variations
+- Performance improvement recommendations and best practices
+
+AI Assistant Benefits and Improvements:
+
+User Experience Enhancements:
+- Immediate response times compared to traditional support ticket systems
+- Personal assistant-like experience with contextual understanding of user needs
+- Significant reduction in wait times for common questions and standard procedures
+- Enhanced problem-solving through comprehensive document and media analysis
+- Seamless escalation to human support specialists when complex issues require manual intervention
+
+COMPREHENSIVE CONTACT INFORMATION AND SUPPORT CHANNELS
+
+Primary Support Channels and Contact Methods:
+
+24/7 Phone Support Services:
+- Main Support Line: (408) 837-0116 available 24 hours daily, 7 days weekly
+- Direct access to trained support representatives with healthcare industry expertise
+- Emergency and urgent issue priority handling with escalation procedures
+- Multi-language support available for diverse user base
+- Call routing based on issue type for specialized assistance
+
+Specialized Support Lines and Teams:
+- Billing and Finance Support: (415) 604-3272 during business hours
+- Email Billing Support: billing@clipboardhealth.com for non-urgent billing inquiries
+- Onboarding and Compliance: onboarding@clipboardhealth.com for document and licensing issues
+- Trust and Safety Department: For serious incidents, safety concerns, and regulatory compliance
+
+Digital Support Options and Self-Service:
+
+Comprehensive Help Center:
+- Complete self-service support documentation at support.clipboardhealth.com
+- Category-specific help articles organized by user type and common issues
+- Detailed step-by-step tutorials and troubleshooting guides with screenshots
+- Extensive Frequently Asked Questions database covering common scenarios
+- Video tutorials and webinar recordings for complex procedures
+
+AI Virtual Assistant Integration:
+- Access through mobile app or web portal with consistent functionality
+- 24/7 availability for immediate assistance with no wait times
+- Advanced document upload and analysis capabilities for complex issues
+- Seamless escalation to human support when automated resolution insufficient
+
+Specialized Support Teams and Expertise:
+
+Onboarding and Compliance Team:
+- Professional document verification and authentication services
+- Healthcare professional licensing support and guidance
+- Background check assistance and expedited processing
+- State-specific requirement guidance and regulatory compliance
+- Available 24/7 for document-related emergencies and urgent processing needs
+
+Billing and Finance Team:
+- Invoice questions, disputes, and billing discrepancy resolution
+- Payment processing assistance and troubleshooting
+- Rate adjustment support and contract clarification
+- Financial reporting assistance and custom billing solutions
+- Escalation procedures for complex financial issues
+
+Trust and Safety Department:
+- Safety incident reporting and investigation
+- Professional misconduct and facility compliance issues
+- Regulatory compliance and industry standard adherence
+- Emergency response coordination and incident management
+
+Support Request Submission and Tracking:
+
+Web Portal Request System:
+- Submit detailed support requests through secure support.clipboardhealth.com portal
+- Attach relevant documents, screenshots, and supporting materials
+- Real-time request status tracking with automated updates
+- Direct communication with assigned support representatives
+- Case history and resolution tracking for ongoing issues
+
+Mobile App Support Integration:
+- In-app support request submission with photo and document upload
+- Push notification updates on request status and resolution progress
+- Integration with AI Virtual Assistant for immediate preliminary help
+- Escalation capabilities for urgent issues requiring immediate attention
+
+COMPREHENSIVE FREQUENTLY ASKED QUESTIONS
+
+General Platform Questions and Detailed Answers:
+
+Q: What is Clipboard Health and how does it work?
+A: Clipboard Health is a comprehensive healthcare staffing platform that connects healthcare facilities with licensed professionals (CNAs, LVNs, RNs, and other specialties) for shift-based work. The platform operates through mobile applications and web portals, providing real-time scheduling, billing, workforce management, and instant payment processing. Founded with the mission to move healthcare professionals up the socioeconomic ladder, it serves as a marketplace where facilities post shifts and professionals book available work.
+
+Q: How does Clipboard Health generate revenue?
+A: Clipboard Health charges facilities hourly rates for shifts booked through the platform based on individual contract terms. The company operates on a marketplace model where they earn revenue from facility payments while professionals receive their earnings through instant payment processing after completing shifts and submitting digital timesheets.
+
+Q: Who is eligible to work through Clipboard Health?
+A: Licensed healthcare professionals including Certified Nursing Assistants (CNAs), Licensed Vocational Nurses (LVNs), Licensed Practical Nurses (LPNs), Registered Nurses (RNs), and other healthcare specialties can work through the platform. All professionals must complete comprehensive document verification and onboarding processes including background checks, license verification, and skills assessments where applicable.
+
+Shift Management Questions and Comprehensive Answers:
+
+Q: When should facilities post shifts for optimal booking success?
+A: Shifts should be posted as soon as they become available rather than waiting until closer to the scheduled date. Earlier posting significantly increases booking likelihood by up to 300% because it allows professionals more time to plan their schedules and provides access to the priority access system for favorites and A-team professionals.
+
+Q: What happens when a professional cancels a shift at the last minute?
+A: Cancellations within 0-8 hours before or 0-2 hours after shift start automatically trigger the Urgent Shifts system, which reposts the shift at premium rates (typically 20-50% above standard rates) to attract immediate replacement coverage at no additional cost to facilities. The system has over 90% success rate for filling urgent shifts.
+
+Q: How does the Shift Invites feature work for facilities?
+A: The Shift Invites feature allows facilities to invite specific professionals to work particular shifts with exclusive access periods. Invited shifts are visible only to the invited professional initially, with options to open to the favorites list if the invitation is declined. Custom rates can be set for invited professionals, and the system works with both individual shifts and block bookings.
+
+Q: What is Block Booking and how does it work?
+A: Block Booking allows facilities to post a series of shifts across one or more weeks for a single professional to book in its entirety. Professionals must commit to at least 80% of the block, and mutual commitment is expected for all shifts. Block bookings can include Priority Access for facility favorites and are designed for consistent staffing needs across multiple days or weeks.
+
+Billing and Payment Questions and Detailed Answers:
+
+Q: How are facilities billed for shifts and what costs are involved?
+A: Facilities are charged hourly rates for booked shifts based on individual contract terms, with invoices reflecting filled shifts and any applicable cancellation fees. Additional costs may include Extra Time Pay for professionals working over 40 hours per week or extended consecutive shifts, and cancellation fees for shifts canceled within 24 hours of start time based on contract specifications.
+
+Q: What payment methods are available and which is recommended?
+A: ACH payment is strongly recommended for faster processing (1-2 business days), reduced transaction fees, and enhanced security. Payments are processed through secure Invoiced.com integration with autopay options available. Credit card payments are accepted but incur higher processing fees and longer processing times.
+
+Q: How does Extra Time Pay work and how is it calculated?
+A: Extra Time Pay is an automatic incentive system with two types: Weekly Extra Time Pay for professionals working 40+ hours per calendar week (calculated Sunday to Saturday), and Consecutive Hours Extra Time Pay for extended single shifts. Multipliers are typically 1.5x after 8 hours and 2.0x after 12 hours, with facilities able to customize parameters based on operational needs.
+
+Document and Onboarding Questions and Comprehensive Answers:
+
+Q: What documents are required for healthcare professionals to work on the platform?
+A: Required documents include: government-issued photo ID with selfie verification via Stripe Identity, comprehensive background check through Checkr (covered by Clipboard Health), current state professional license with board verification, Social Security Number for compliance verification, BLS/CPR certification, TB skin test within 12 months or chest X-ray within 5 years, and any additional state-specific requirements based on jurisdiction.
+
+Q: How long does the document verification process take?
+A: Document verification is conducted by the specialized Onboarding and Compliance team with thorough review processes. Professional licenses are verified with state boards within 72 hours maximum. Overall document processing timeline varies based on document complexity, completeness, and state requirements, but most standard verifications complete within 3-5 business days.
+
+Q: Can facilities modify standard document requirements?
+A: Yes, facilities can request modifications to standard document requirements by contacting onboarding@clipboardhealth.com or submitting a Facility Requirement Update Request Form. Changes are typically processed within 1-2 business days with confirmation. Only authorized facility roles (Admin, Supervisor, Staffing Coordinator) can request requirement modifications.
+
+Technical Support Questions and Detailed Answers:
+
+Q: What should I do if I cannot log into my account?
+A: Follow these steps: 1) Ensure you have the latest app version installed, 2) Close and relaunch the application completely, 3) Visit https://hcp.clipboard.health for new verification links, 4) Check spam folders for verification emails, 5) Verify the correct email address is associated with your account, 6) Use Google Chrome browser for workplace accounts, 7) Contact support at (408) 837-0116 if issues persist.
+
+Q: How do I contact support and what options are available?
+A: Support is available through multiple channels: 24/7 phone support at (408) 837-0116, AI Virtual Assistant through the app (My Account > Help Center > Start a Chat), email support through support.clipboardhealth.com request forms, specialized billing support at (415) 604-3272, and onboarding/compliance support at onboarding@clipboardhealth.com.
+
+Q: What browsers and technical requirements work best with the platform?
+A: Google Chrome is strongly recommended for optimal compatibility and performance. Ensure JavaScript is enabled, regularly clear cache and cookies, disable interfering browser extensions, and maintain current browser versions. Mobile apps require stable internet connectivity, enabled location services with precise permissions, and background app refresh enabled.
+
+Digital Timesheet Questions and Comprehensive Answers:
+
+Q: How do digital timesheets work and what are the requirements?
+A: Digital timesheets allow professionals to clock in/out through the mobile app using GPS geofencing and often NFC time clock posters for enhanced security. Requirements include: device connected to internet, location services enabled, physical presence inside facility building, and NFC interaction where required. Facility staff must digitally sign timesheets for final submission and payment processing.
+
+Q: Can facility staff adjust timesheet times and what are the limitations?
+A: Yes, facility staff can adjust start and end times during the digital signature process. Clock out times can be adjusted up to 2 hours beyond scheduled shift end time. Adjustments beyond 2 hours require customer support assistance. Some facilities disable in-app timesheet editing, requiring all adjustments to be made by authorized facility staff.
+
+Q: What happens if a facility doesn't use digital timesheets?
+A: Some facilities still use paper timesheets as backup or primary method. Professionals must photograph and upload paper timesheets through the mobile app. However, digital timesheets are strongly preferred because they enable faster processing, instant payment eligibility, better accuracy, and reduced administrative overhead for both professionals and facilities.
+
+ADVANCED FEATURES AND SPECIALIZED FUNCTIONALITY
+
+Clipboard Score and Performance Management:
+
+Clipboard Score System Overview:
+Clipboard Score is the evolution of the previous Attendance Score system, designed to recognize and continuously reward healthcare professionals for excellent work performance. The new system removes the previous 100-point cap, allowing professionals to earn unlimited points for outstanding performance.
+
+Key Features of Clipboard Score:
+- All accounts start with 100 points as baseline
+- No maximum point limit allows unlimited recognition for excellent performance
+- Point bonuses awarded for excellent facility ratings (4-5 stars)
+- Additional points earned for punctuality and attendance reliability
+- Account restrictions applied when score drops to 0 or below
+- Priority Access granted to high-scoring professionals for facility shifts
+
+Account Status Impact and Restrictions:
+- Enrolled accounts (score above 0) can book shifts at any qualifying facility
+- Restricted accounts (score 0 or below) can only book shifts from facilities that specifically invite them
+- First and second restrictions within 6 months last 7 days each
+- Score resets to 80 points when restrictions are lifted
+- Currently piloted in select regions: Provo UT, Salt Lake City UT, Seattle WA, Portland-Vancouver OR
+
+Streaks Feature and Professional Retention:
+
+Streaks Program Benefits:
+The Streaks program rewards professionals for consistently returning to the same facility, creating higher continuity of care and improved outcomes. Key benefits include:
+- Professionals receive extra pay for working at the same facility week after week
+- "Regular" professionals are 70% less likely to no-show or cause incidents
+- 40% reduction in cancellations and late arrivals for streak participants
+- Currently available in select areas with expansion planned
+
+Magic Shifts Advanced Feature:
+
+Magic Shifts Guarantee System:
+Magic Shifts provide facilities with a 99%+ guarantee for filling critical urgent staffing needs:
+- Limited number of free Magic Shifts provided monthly to each facility
+- Additional Magic Shifts earned by posting shifts 5+ days in advance
+- $100 invoice credit provided if Magic Shift cannot be filled
+- Only available for CNA/LVN/LPN/RN positions posted at least 1 hour in advance
+- Premium rates automatically applied to attract immediate coverage
+
+Worker Left Early Feature:
+
+Comprehensive Early Departure Management:
+The Worker Left Early feature provides facilities with tools to manage unexpected early departures:
+- Automatic notification when workers leave before completing 50% of shift
+- Distinguish between "Send Home" (facility decision) and "Worker Left Early" (professional decision)
+- Immediate Urgent Shift posting for replacement coverage
+- Billing protection - only pay for hours actually worked
+- Attendance penalties applied appropriately based on departure circumstances
+
+A-Team Professional Management:
+
+Elite Professional Recognition System:
+A-Team represents the highest-performing professionals who receive enhanced benefits:
+- Top-ranking professionals identified through performance metrics and facility ratings
+- Enhanced Priority Access to all facility shifts before general marketplace
+- Extended priority windows up to 6 hours for exclusive booking access
+- Special recognition and reward programs for sustained excellence
+- Facilities can customize A-Team criteria based on specific needs
+
+Performance Review and Rating System:
+
+Comprehensive Professional Evaluation:
+Facilities can provide detailed performance feedback through multiple rating mechanisms:
+- 5-star rating system with specific performance categories
+- 4-5 star ratings automatically add professionals to facility Favorites list
+- 1-star reviews provide option to block worker from future shifts
+- Only Admin or Shift Management roles can submit performance ratings
+- Ratings contribute to Clipboard Score and Priority Access determination
+
+Browse Workers Advanced Feature:
+
+Professional Discovery and Recruitment:
+The Browse Workers feature allows facilities to proactively identify and recruit professionals:
+- Search available professionals by specialty, location, and availability
+- View professional profiles, ratings, work history, and certifications
+- Send direct shift invites to professionals not currently working at facility
+- Filter by experience level, ratings, and geographic proximity
+- Integration with Shift Invites for targeted recruitment
+
+Referral Programs and Incentives:
+
+Facility Referral Program:
+Comprehensive referral system designed to expand network through existing facility relationships:
+- Earn shift credits for successful facility referrals
+- Both referring and referred facilities receive credit bonuses
+- Tracking system for referral attribution and credit allocation
+- Facility Affiliate Program Playbook provides best practices and strategies
+- Ongoing support and resources for maximizing referral success
+
+Professional Referral Benefits:
+- Professionals can refer other healthcare workers to join platform
+- Bonus payments for successful professional referrals who complete qualifying shifts
+- Enhanced reputation and priority status for successful referrers
+
+Instant Payment Advanced Features:
+
+InstantPay Comprehensive System:
+100% of shifts on Clipboard Health are eligible for instant payment processing:
+- Immediate payment available after digital timesheet submission
+- Multiple withdrawal options: instant to debit card ($2.99 fee) or 2-3 day ACH to bank account (free)
+- Integration with Stripe payment processing for security and reliability
+- Automatic withdrawal scheduling available for regular income management
+- Real-time payment tracking and history through professional dashboard
+
+Payment Method Management:
+- Support for major debit cards and bank accounts
+- Instant payment requires supported banking institutions
+- Manual and automatic withdrawal options with customizable scheduling
+- Payment failure notifications with alternative method suggestions
+- Comprehensive transaction history with detailed breakdowns
+
+Communication and Messaging Systems:
+
+HIPAA-Compliant Facility Chat:
+Advanced messaging system designed specifically for healthcare facility-professional communication:
+- End-to-end encryption for all messages and file transfers
+- Individual channels created for each facility relationship
+- 30-day communication window from shift booking
+- File and image sharing capabilities for shift-related information
+- Available only to professionals with upcoming or in-progress shifts
+
+Chat Feature Requirements and Access:
+- Facility staff must have Admin, Supervisor, or Shift Management roles
+- Integration with mobile and web platforms for seamless communication
+- Real-time message notifications with customizable alert settings
+- Message history preservation for reference and compliance
+- Automatic channel creation upon shift booking
+
+Location Services and Geofencing:
+
+Advanced GPS and Location Technology:
+Clipboard Health uses sophisticated location services for multiple platform functions:
+- Precise geofencing for facility boundaries and clock-in/out verification
+- Real-time ETA calculation and traffic pattern integration
+- Professional location sharing for safety and coordination
+- Distance-based shift filtering and preference management
+- Integration with mapping services for accurate facility location data
+
+Location Service Requirements:
+- Always-on precise location access required for full functionality
+- Location services used for shift matching, ETA tracking, attendance verification
+- Privacy controls allow professionals to manage location sharing preferences
+- Battery optimization settings may require adjustment for continuous tracking
+- Location data used exclusively for platform functionality and safety
+
+NFC Technology Integration:
+
+Near Field Communication Security:
+NFC time clock posters provide enhanced security and verification:
+- Unique NFC identifiers for each facility location
+- 10x15 inch posters with embedded NFC technology
+- Requires physical device contact for clock-in/out verification
+- Same technology as Apple Pay and other secure payment systems
+- Visual confirmation for facility staff of professional presence
+
+NFC Implementation and Usage:
+- Professionals must tap mobile device against poster for verification
+- Required at participating facilities for both start and end of shifts
+- Backup GPS geofencing available when NFC systems unavailable
+- NFC posters strategically placed for maximum security and convenience
+- Integration with digital timesheet system for seamless workflow
+
+Tax Documentation and Compliance:
+
+Professional Tax Information Management:
+Comprehensive tax documentation system for independent contractor status:
+- 1099-NEC forms issued for professionals earning $600+ annually
+- Electronic delivery through Stripe Express platform integration
+- Paper copies mailed for those declining electronic delivery
+- Tax information includes all payments and InstantPay fees within earnings totals
+- Forms available for download through secure Stripe portal
+
+Tax Form Timeline and Process:
+- Tax information update invitations sent mid-January
+- Electronic delivery consent requested for faster processing
+- Forms typically available by January 31st for previous tax year
+- Support available through webforms and in-app chat for tax-related questions
+- Integration with major tax preparation software for easy import
+
+REGULATORY COMPLIANCE AND SAFETY MEASURES
+
+Healthcare Industry Compliance:
+
+Comprehensive Regulatory Adherence:
+Clipboard Health maintains strict compliance with healthcare industry regulations:
+- HIPAA compliance for all communication and data handling
+- State nursing board integration for license verification
+- OIG and SAM exclusion list monitoring for all professionals
+- Background check compliance with healthcare industry standards
+- Continuous monitoring for regulatory changes and updates
+
+Professional License Management:
+- Real-time verification with state licensing boards
+- 72-hour maximum processing time for license validation
+- Automatic alerts for licenses expiring within 90 days
+- Multi-state license recognition through Nurse Licensure Compact
+- State-specific requirement tracking and compliance monitoring
+
+Trust and Safety Department:
+
+Incident Reporting and Investigation:
+Dedicated Trust and Safety team handles serious incidents and safety concerns:
+- Safety incident reporting for violence, abuse, or patient neglect
+- Comprehensive investigation procedures for reported incidents
+- Coordination with facilities for incident response and resolution
+- Regulatory reporting as required by state and federal authorities
+- Professional account suspension and investigation during serious incidents
+
+Safety Protocols and Procedures:
+- Immediate incident reporting through web portal and mobile app
+- 24/7 emergency response for critical safety situations
+- Professional background monitoring and continuous screening
+- Facility safety standard verification and compliance
+- Integration with law enforcement when required
+
+Do-Not-Return (DNR) List Management:
+
+Professional Blocking and Management:
+Facilities can manage professional access through comprehensive DNR functionality:
+- Add professionals to facility-specific Do-Not-Return lists
+- Reasons include: shift cancellations, late arrivals, safety issues, policy violations
+- Automatic notification to Trust and Safety for safety or narcotics-related DNR entries
+- Professional notification of DNR status with appeal process available
+- DNR list management through mobile app and web portal
+
+DNR Categories and Procedures:
+- Performance-related blocks for attendance and reliability issues
+- Safety-related blocks requiring Trust and Safety involvement
+- Policy violation blocks for facility rule infractions
+- Temporary vs permanent blocking options available
+- Appeal and reinstatement procedures for blocked professionals
+
+Skills Assessment and Quality Assurance:
+
+CNA Skills Assessment Program:
+Comprehensive competency evaluation system for nursing assistants:
+- Video-based assessment covering essential CNA skills
+- Required for newer professionals at participating facilities
+- Remote assessment conducted through secure platform
+- Assessment reviewed by qualified healthcare education professionals
+- Performance tracking and improvement recommendations provided
+
+Quality Improvement Impact:
+- 40% reduction in performance issues at facilities using assessments
+- Increased reliability and professional competency standards
+- Enhanced patient care quality through verified skill levels
+- Reduced facility training time and onboarding costs
+- Continuous assessment updates based on industry standards
+
+BUSINESS INTELLIGENCE AND ANALYTICS
+
+Performance Metrics and Key Performance Indicators:
+
+Operational Excellence Metrics:
+- Shift Fill Rates: Percentage of posted shifts successfully filled by professionals with geographic and specialty breakdowns
+- Average Booking Speed: Time from shift posting to professional booking with trend analysis
+- Urgent Shift Success: Fill rates for urgent shifts with premium pricing effectiveness
+- Professional Retention: Worker return rates to facilities with loyalty program impact
+- Geographic Performance: Regional fill rate variations with market analysis
+
+Quality Assurance Metrics:
+- Professional Satisfaction: Ratings and feedback from professionals working shifts
+- Facility Satisfaction: Ratings and feedback from facilities using platform services
+- Incident Rates: Safety incidents per shifts worked with trend analysis
+- Document Compliance: Percentage of professionals with current verified credentials
+- Platform Reliability: System uptime and performance metrics across all services
+
+Financial Performance Indicators:
+
+Revenue and Cost Analysis:
+- Average Charge Rates: Facility hourly rates across specialties, regions, and shift types
+- Premium Rate Capture: Revenue from urgent shifts and high-demand periods
+- Extra Time Pay Impact: Utilization rates and cost analysis for overtime incentives
+- Payment Processing Efficiency: Speed and accuracy of billing and payment systems
+- Cost Per Acquisition: Facility and professional onboarding costs with lifetime value analysis
+
+Market Analysis and Trends:
+- Geographic Expansion: Market penetration rates and growth opportunities
+- Specialty Demand: Healthcare role demand patterns and market trends
+- Seasonal Variations: Shift demand patterns and seasonal staffing fluctuations
+- Competitive Positioning: Market share analysis and competitive advantages
+- Technology Adoption: Feature utilization rates and user engagement metrics
+
+Data Analytics and Reporting:
+
+Advanced Analytics Capabilities:
+Comprehensive data analysis and reporting tools for facilities and platform optimization:
+- Real-time dashboard with customizable metrics and KPI tracking
+- Historical trend analysis with predictive modeling capabilities
+- Facility-specific performance reports with benchmarking against regional averages
+- Professional performance analytics with career development recommendations
+- Custom reporting tools for regulatory compliance and operational optimization
+
+Business Intelligence Integration:
+- API access for facility management system integration
+- Data export capabilities for external analysis and reporting
+- Real-time alert systems for critical metrics and threshold breaches
+- Machine learning algorithms for demand prediction and optimization
+- Integration with third-party analytics platforms for enhanced insights
+
+This comprehensive knowledge base provides complete coverage of all Clipboard Health platform features, policies, procedures, and support information, enabling the BI bot to answer virtually any question about the platform with detailed, accurate responses.

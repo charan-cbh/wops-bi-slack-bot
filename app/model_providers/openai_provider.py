@@ -30,7 +30,10 @@ class OpenAIProvider(BaseModelProvider):
         if not api_key:
             raise ModelProviderError("OpenAI API key not configured")
         
-        self.client = openai.AsyncOpenAI(api_key=api_key)
+        self.client = openai.AsyncOpenAI(
+            api_key=api_key,
+            default_headers={"OpenAI-Beta": "assistants=v2"}
+        )
         self.model_name = model_name
         self.use_assistant_api = use_assistant_api
         self.assistant_id = assistant_id
