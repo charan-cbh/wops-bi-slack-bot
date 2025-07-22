@@ -157,39 +157,66 @@ Please provide a comprehensive business intelligence response. If this question 
             
             # Check if we should use Assistant API with vector store
             assistant_id = os.getenv("ASSISTANT_ID")
+            logger.info(f"🔧 BI Service: Assistant ID = {assistant_id}")
+            
             if assistant_id:
-                # Use Assistant API with vector store access for business context
-                thread = await client.beta.threads.create()
-                
-                await client.beta.threads.messages.create(
-                    thread_id=thread.id,
-                    role="user",
-                    content=prompt
-                )
-                
-                run = await client.beta.threads.runs.create(
-                    thread_id=thread.id,
-                    assistant_id=assistant_id
-                )
-                
-                # Wait for completion
-                while run.status in ['queued', 'in_progress', 'cancelling']:
-                    await asyncio.sleep(1)
-                    run = await client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-                
-                if run.status == 'completed':
-                    messages = await client.beta.threads.messages.list(thread_id=thread.id, limit=1)
-                    if messages.data:
-                        content = messages.data[0].content[0]
-                        if hasattr(content, 'text'):
-                            return content.text.value.strip()
+                try:
+                    logger.info("🤖 Using Assistant API with vector store for business context")
                     
-                    return "I couldn't generate a proper response. Please try again."
-                else:
-                    # Fallback to Chat API if Assistant fails
-                    logger.warning(f"Assistant API run failed with status: {run.status}")
+                    # Use Assistant API with vector store access for business context
+                    thread = await client.beta.threads.create()
+                    logger.info(f"📋 Created thread: {thread.id}")
+                    
+                    await client.beta.threads.messages.create(
+                        thread_id=thread.id,
+                        role="user",
+                        content=prompt
+                    )
+                    logger.info("📝 Added message to thread")
+                    
+                    run = await client.beta.threads.runs.create(
+                        thread_id=thread.id,
+                        assistant_id=assistant_id
+                    )
+                    logger.info(f"🏃 Started run: {run.id}")
+                    
+                    # Wait for completion with timeout
+                    max_attempts = 60  # 60 seconds timeout
+                    attempts = 0
+                    while run.status in ['queued', 'in_progress', 'cancelling'] and attempts < max_attempts:
+                        await asyncio.sleep(1)
+                        attempts += 1
+                        run = await client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+                        if attempts % 10 == 0:  # Log every 10 seconds
+                            logger.info(f"⏳ Run status: {run.status} (attempt {attempts})")
+                    
+                    logger.info(f"✅ Run completed with status: {run.status}")
+                    
+                    if run.status == 'completed':
+                        messages = await client.beta.threads.messages.list(thread_id=thread.id, limit=1)
+                        if messages.data:
+                            content = messages.data[0].content[0]
+                            if hasattr(content, 'text'):
+                                response_text = content.text.value.strip()
+                                logger.info(f"✅ Assistant response received: {len(response_text)} chars")
+                                return response_text
+                        
+                        logger.warning("⚠️ No response content from Assistant")
+                        return "I couldn't generate a proper response. Please try again."
+                    else:
+                        # Log detailed error information
+                        logger.warning(f"❌ Assistant API run failed with status: {run.status}")
+                        if hasattr(run, 'last_error') and run.last_error:
+                            logger.warning(f"❌ Assistant error: {run.last_error}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Assistant API error: {e}")
+                    logger.info("🔄 Falling back to Chat API")
+            else:
+                logger.info("⚠️ No Assistant ID configured, using Chat API")
             
             # Fallback to Chat API
+            logger.info("🔄 Using Chat API fallback (no business context)")
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=[
