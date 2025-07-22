@@ -268,8 +268,8 @@ async def process_with_bi_service(
 
 def should_use_bi_service(question: str) -> bool:
     """
-    Determine if a question should be routed to BI Service
-    Based on question patterns and BI Service availability
+    Determine if a question should be routed to BI Service vs SQL generation
+    Based on question patterns and whether it needs data execution
     """
     if not USE_BI_SERVICE:
         return False
@@ -278,8 +278,59 @@ def should_use_bi_service(question: str) -> bool:
     if not bi_service.is_enabled():
         return False
     
-    # Always use BI Service when enabled (simplified for Slack)
-    # Could add more sophisticated routing logic here
+    # Convert to lowercase for pattern matching
+    q_lower = question.lower().strip()
+    
+    # Conversational questions should go to BI Service - check these first
+    conversational_indicators = [
+        'how do i', 'how do we', 'how can i', 'how can we', 'how to',
+        'what are', 'explain', 'help me', 'tutorial', 'learn', 'understand',
+        'difference between', 'best practice', 'recommendation', 'advice',
+        'strategy', 'approach', 'improve', 'better', 'optimize'
+    ]
+    
+    # Check conversational patterns first (higher priority)
+    for indicator in conversational_indicators:
+        if indicator in q_lower:
+            print(f"💬 Conversational indicator '{indicator}' found, routing to BI Service")
+            return True
+    
+    # SQL-requiring questions should NOT go to BI Service - they need actual data
+    sql_indicators = [
+        # Strong data request patterns
+        'what\'s our', 'show me', 'how many', 'what is our', 'get me',
+        'display', 'find', 'count', 'total', 'volume',
+        # Performance data requests
+        'performance', 'metrics', 'trends', 'trending',
+        # Time-based data requests
+        'today', 'yesterday', 'this week', 'last week', 'weekly', 'daily',
+        'monthly', 'comparison', 'compare',
+        # Channel/team specific data
+        'chat volume', 'voice volume', 'web volume', 'ticket volume',
+        'team lead', 'agent performance', 'auditor performance', 'auditor productivity',
+        # Specific names that need data lookup
+        'christine presto', 'joan mallari', 'gian gabrillo', 'erin wood',
+        'kimberly gasing', 'mbali gumede', 'ricardo birck', 'sinead foley',
+        'yiannis spanoudis', 'yolanda coughlin', 'miguel salas', 'jonathan melenson',
+        'guren onal',
+        # Specific data requests
+        'qa score', 'csat score', 'tickets', 'audits', 'reviews', 'surveys'
+    ]
+    
+    # If question contains SQL indicators, route to SQL generation
+    for indicator in sql_indicators:
+        if indicator in q_lower:
+            print(f"🔍 SQL indicator '{indicator}' found, routing to SQL generation")
+            return False
+    
+    # Default: route data-looking questions to SQL, others to BI Service
+    data_question_words = ['what', 'show', 'how much', 'how many', 'display', 'get', 'find']
+    for word in data_question_words:
+        if q_lower.startswith(word):
+            print(f"📊 Data question detected, routing to SQL generation")
+            return False
+    
+    print(f"💬 No clear pattern detected, routing to BI Service for conversational response")
     return True
 
 # Configuration helper functions
