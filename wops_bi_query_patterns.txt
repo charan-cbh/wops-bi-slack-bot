@@ -1,0 +1,202 @@
+WOPS BI QUERY PATTERN MATCHING FOR PERFECT SQL GENERATION
+
+=== BUSINESS QUESTION PATTERNS → SQL TEMPLATES ===
+
+CATEGORY 1: TICKET VOLUME QUERIES
+Pattern Keywords: "tickets", "volume", "count", "how many"
+Table: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+Primary Metric: COUNT(DISTINCT TICKET_ID)
+
+QUESTION PATTERN: "How many [CHANNEL] tickets [TIME_PERIOD]?"
+Examples:
+- "How many chat tickets today?"
+- "Show me voice ticket volume for last week"  
+- "Daily ticket counts for this month"
+
+SQL TEMPLATE:
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    COUNT(DISTINCT TICKET_ID) AS ticket_count
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE STATUS IN ('closed', 'solved')
+    AND (ASSIGNEE_NAME != 'Automated Update' OR ASSIGNEE_NAME IS NULL)
+    AND (ASSIGNEE_NAME != 'TechOps Bot' OR ASSIGNEE_NAME IS NULL)
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL)
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' OR TICKET_TAGS IS NULL)
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%' OR TICKET_TAGS IS NULL)
+    AND CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+    AND BRAND_ID IN ('29186504989207', '360002340693')
+    AND CASE WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+             WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+             WHEN GROUP_ID = '5495272772503' THEN 'Web'
+             ELSE 'Other' END = '{CHANNEL}'
+    AND {TIME_FILTER}
+GROUP BY TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST))
+ORDER BY date ASC
+
+CATEGORY 2: AHT (AVERAGE HANDLE TIME) QUERIES  
+Pattern Keywords: "AHT", "handle time", "average handle", "response time"
+Table: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Primary Metrics: AVG(HANDLE_TIME_IN_MINUTES), PERCENTILE_CONT(0.5)
+
+QUESTION PATTERN: "What's the [CHANNEL] AHT [TIME_PERIOD]?"
+Examples:
+- "What's our chat AHT this week?"
+- "Show me voice handle time trends"
+- "Weekly AHT for last month"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', CREATED_AT_PST) AS period,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = '{AHT_TYPE}'
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND {TIME_FILTER}
+GROUP BY DATE_TRUNC('week', CREATED_AT_PST)
+ORDER BY period ASC
+
+CATEGORY 3: RESPONSE TIME DISTRIBUTION QUERIES
+Pattern Keywords: "response time", "reply time", "how quickly", "time buckets"
+Table: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS  
+Primary Metric: Response time buckets based on REPLY_TIME_IN_MINUTES
+
+QUESTION PATTERN: "What's the response time breakdown for [CHANNEL]?"
+Examples:
+- "Response time distribution for chat"
+- "How quickly do we respond to voice tickets?"
+- "Show me reply times by bucket"
+
+SQL TEMPLATE:
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES <= 1 THEN 1 ELSE 0 END) AS under_1_min,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 1 AND REPLY_TIME_IN_MINUTES <= 15 THEN 1 ELSE 0 END) AS min_1_to_15,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 15 AND REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END) AS min_15_to_60,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 60 THEN 1 ELSE 0 END) AS over_1_hour
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE [STANDARD_TICKET_FILTERS] AND {CHANNEL_FILTER} AND {TIME_FILTER}
+GROUP BY TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST))
+ORDER BY date ASC
+
+CATEGORY 4: AGENT PERFORMANCE QUERIES
+Pattern Keywords: "agent", "who", "individual", "performance", "coaching"
+Table: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Primary Metric: Agent-level aggregations
+
+QUESTION PATTERN: "Which agents have [HIGH/LOW] [METRIC]?"
+Examples:
+- "Which agents have high AHT?"
+- "Show me agent performance for chat"
+- "Who needs coaching on handle time?"
+
+SQL TEMPLATE:
+SELECT 
+    AGENT_NAME,
+    COUNT(*) AS ticket_count,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = '{AHT_TYPE}'
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND {TIME_FILTER}
+GROUP BY AGENT_NAME
+HAVING COUNT(*) >= 10
+ORDER BY mean_aht DESC
+
+=== CHANNEL MAPPING RULES ===
+
+WHEN user mentions: "chat", "messaging", "text" 
+→ Contact Channel Filter: CASE WHEN GROUP_ID = '17837476387479' THEN 'Chat' ELSE 'Other' END = 'Chat'
+→ AHT Type Filter: AHT_TYPE = 'AHT - Chat'
+
+WHEN user mentions: "voice", "phone", "call", "calling"
+→ Contact Channel Filter: CASE WHEN GROUP_ID = '28949203098007' THEN 'Voice' ELSE 'Other' END = 'Voice'  
+→ AHT Type Filter: AHT_TYPE = 'AHT - Voice'
+
+WHEN user mentions: "web", "email", "ticket", "form"
+→ Contact Channel Filter: CASE WHEN GROUP_ID = '5495272772503' THEN 'Web' ELSE 'Other' END = 'Web'
+→ AHT Type Filter: AHT_TYPE = 'AHT - Web'
+
+WHEN user mentions: "all channels", "compare channels", "by channel"
+→ Include all channels in query with GROUP BY channel
+
+=== TIME PERIOD MAPPING RULES ===
+
+TODAY: 
+CREATED_AT_PST >= CAST(CURRENT_DATE AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE + INTERVAL '1 day' AS timestamp)
+
+YESTERDAY:
+CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '1 day' AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+THIS WEEK:
+CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '1 week'
+
+LAST WEEK:
+CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE)
+
+LAST 7 DAYS:
+CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '7 days' AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+THIS MONTH:
+CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+
+LAST MONTH:
+CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE)
+
+=== STANDARD FILTER TEMPLATES ===
+
+STANDARD_TICKET_FILTERS:
+STATUS IN ('closed', 'solved')
+AND (ASSIGNEE_NAME != 'Automated Update' OR ASSIGNEE_NAME IS NULL)
+AND (ASSIGNEE_NAME != 'TechOps Bot' OR ASSIGNEE_NAME IS NULL)
+AND (NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL)
+AND (NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' OR TICKET_TAGS IS NULL)
+AND (NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%' OR TICKET_TAGS IS NULL)
+AND CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+AND BRAND_ID IN ('29186504989207', '360002340693')
+
+STANDARD_AHT_FILTERS:
+HANDLE_TIME_IN_MINUTES >= 2
+AND LOWER(GROUP_NAME) LIKE '%wops%'
+
+=== AGGREGATION PATTERNS ===
+
+DAILY GROUPING: GROUP BY TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST))
+WEEKLY GROUPING: GROUP BY DATE_TRUNC('week', CREATED_AT_PST)  
+MONTHLY GROUPING: GROUP BY DATE_TRUNC('month', CREATED_AT_PST)
+
+COMMON METRICS:
+- Ticket Count: COUNT(DISTINCT TICKET_ID)
+- Mean AHT: AVG(HANDLE_TIME_IN_MINUTES) 
+- Median AHT: PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES)
+- Response Rate: COUNT(DISTINCT TICKET_ID) / COUNT(DISTINCT DATE)
+
+=== BUSINESS LOGIC VALIDATION ===
+
+ALWAYS INCLUDE for ticket queries:
+- Status filter (closed/solved only)
+- Exclude automated agents
+- Exclude system-generated tickets
+- Valid brand and channel filters
+
+ALWAYS INCLUDE for AHT queries:
+- Minimum handle time threshold (>= 2 minutes)
+- WOPS team filter
+- Valid AHT type for channel
+
+THRESHOLDS TO MENTION:
+- Good Chat AHT: < 15 minutes
+- Good Voice AHT: < 20 minutes  
+- Good Web AHT: < 10 minutes
+- Minimum tickets for agent analysis: 10 tickets

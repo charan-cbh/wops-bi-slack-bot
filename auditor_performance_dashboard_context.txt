@@ -1,0 +1,137 @@
+AUDITOR PERFORMANCE DASHBOARD CONTEXT FOR BI QUERY GENERATION
+
+=== DASHBOARD: Weekly Auditor Performance Analytics ===
+
+DASHBOARD PURPOSE:
+Track QA auditor performance metrics including audit volume, ATA alignment scores, and dispute acceptance rates for auditor coaching and quality assurance management.
+
+USED BY:
+- QA Managers: Auditor performance monitoring and coaching
+- Operations Directors: Quality assurance oversight and staffing decisions
+- Analytics Team: Auditor performance reporting and quality metrics analysis
+- Senior Leadership: QA process effectiveness and auditor productivity
+
+=== KEY AUDITOR IDENTIFIER ===
+Auditor Name Column: "REVIEWER_NAME"
+Pattern: LOWER(reviewer_name_column) LIKE '%[auditor_name]%'
+Filter Pattern: "source"."REVIEWER_NAME"
+
+=== AUDITOR PERFORMANCE METRICS ===
+
+METRIC 1: QA Audit Count
+Source: DBT_PRODUCTION.FCT_KLAUS__REVIEWS (via complex Klaus CTE)
+Calculation: COUNT(DISTINCT REVIEW_ID)
+Description: Total number of QA audits completed by auditor
+Group By: REVIEWER_NAME, Week
+
+METRIC 2: ATA Alignment Score
+Source: Klaus Overall_Score from ATA scorecards
+Calculation: AVG(Overall_Score) for SCORECARD_ID IN (54262, 59144)
+Description: Average alignment score for ATA (After The Audit) reviews
+Filter: ATA-specific scorecards only
+Group By: REVIEWER_NAME, Week
+
+METRIC 3: Dispute Accept Rate
+Source: DBT_PRODUCTION.STG_KLAUS__DISPUTES
+Calculation: (Accepted/Partially Accepted Disputes / Total Audits) * 100
+Dispute Status Filter: 'ACCEPTED' OR 'PARTIALLY_ACCEPTED'
+Description: Percentage of auditor reviews that were successfully disputed
+Join: Via REVIEW_ID to main Klaus data
+Group By: REVIEWER_NAME, Week
+
+=== SCORECARD FILTERING FOR AUDITORS ===
+Primary QA Scorecards: 53921, 60047 (main filtering)
+ATA Alignment Scorecards: 54262, 59144 (for ATA metric)
+All Valid Scorecards: 53921, 54262, 59144, 60047, 56287, 60363
+
+EXCLUDED AUDITORS:
+- 'Daria Samad' (filtered out)
+- 'Jennalyn Ocampo' (filtered out)
+
+=== COMPLEX KLAUS DATA PROCESSING ===
+
+Klaus Base CTE:
+- Extracts all review data with scorecard filtering
+- Handles rating category processing and scoring logic
+- Manages ticket ID extraction from TICKET_URL
+
+PivotedRatings CTE:
+- Calculates Overall_Score using weighted rating system
+- Handles No_Auto_Fail logic (< 100 = 0 score)
+- Processes ATA-specific rating categories
+- Combines old and new communication scoring methods
+
+Main Query Structure:
+- Joins ReviewBase + PivotedRatings for complete scoring
+- Links to ticket data for date filtering
+- Connects to dispute data for acceptance rate calculation
+
+AUDITOR QUERY PATTERN:
+BUSINESS QUESTIONS: "How many audits did Sarah complete?", "Auditor performance this week", "Show me dispute rates", "ATA alignment scores"
+
+SQL TEMPLATE STRUCTURE:
+SELECT 
+    "source"."REVIEWER_NAME" AS auditor_name,
+    DATE_TRUNC('week', ticket_data.SOLVED_AT_PST) AS week_start,
+    COUNT(DISTINCT "source"."REVIEW_ID") AS audit_count,
+    AVG(CASE WHEN scorecard_filter_for_ata THEN Overall_Score END) AS ata_alignment,
+    (COUNT(DISTINCT disputed_accepted_reviews) / COUNT(DISTINCT total_reviews)) AS dispute_accept_rate
+FROM complex_klaus_cte AS "source"
+LEFT JOIN ticket_data ON ticket_join_logic
+LEFT JOIN dispute_data ON review_id_match
+WHERE scorecard_filtering AND date_filtering AND auditor_exclusions
+GROUP BY auditor_name, week_start
+ORDER BY audit_count DESC, auditor_name ASC, week_start ASC
+
+AUDITOR BENCHMARKS:
+- Weekly Audit Count: 15-25 audits per auditor per week
+- ATA Alignment: >90% accuracy on ATA reviews
+- Dispute Accept Rate: <10% of audits should be successfully disputed
+- Quality Consistency: Stable performance across weeks
+
+AUDITOR BUSINESS QUESTION PATTERNS:
+
+PRODUCTIVITY QUESTIONS:
+Keywords: "audit count", "audits completed", "productivity", "volume"
+Examples: "How many audits this week?", "Auditor productivity", "Audit volume by reviewer"
+Focus: COUNT(DISTINCT REVIEW_ID) metric
+
+ATA ALIGNMENT QUESTIONS:  
+Keywords: "ATA", "alignment", "accuracy", "ATA score", "after the audit"
+Examples: "ATA alignment scores", "Auditor accuracy", "ATA performance"
+Focus: AVG(Overall_Score) for ATA scorecards (54262, 59144)
+
+DISPUTE QUESTIONS:
+Keywords: "dispute", "disputed", "acceptance rate", "overturned", "challenged"
+Examples: "Dispute acceptance rate", "How many disputed audits?", "Auditor accuracy challenges"
+Focus: Dispute rate calculation from STG_KLAUS__DISPUTES
+
+QUALITY QUESTIONS:
+Keywords: "quality", "consistency", "performance", "auditor effectiveness"
+Examples: "Auditor quality metrics", "Performance consistency", "Overall auditor effectiveness"
+Focus: Combined metrics with trend analysis
+
+=== COMPLEX DATA RELATIONSHIPS ===
+
+PRIMARY FLOW:
+Klaus Reviews → Complex CTE Processing → Ticket Data Join → Dispute Data Join
+
+CRITICAL JOINS:
+1. Klaus Base CTE extracts TICKET_ID from TICKET_URL using REGEXP_REPLACE
+2. Ticket join filters by SOLVED_AT_PST for date ranges
+3. Dispute join uses REVIEW_ID to match acceptance status
+4. Multiple scorecard filtering for different metrics
+
+SCORECARD LOGIC:
+- Main filtering: SCORECARD_ID IN (53921, 60047) for primary metrics
+- ATA filtering: SCORECARD_ID IN (54262, 59144) for alignment scoring
+- Pass/Fail logic: Different thresholds per scorecard type
+
+DATE FILTERING:
+- Uses ticket SOLVED_AT_PST for consistency with other dashboards
+- Standard 6-8 week historical range
+- Excludes current incomplete periods
+
+AUDITOR EXCLUSIONS:
+- Hardcoded exclusions for specific auditors
+- Applied via AND (REVIEWER_NAME <> 'Name' OR REVIEWER_NAME IS NULL) pattern

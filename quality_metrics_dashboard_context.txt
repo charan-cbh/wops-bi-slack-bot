@@ -1,0 +1,272 @@
+QUALITY METRICS DASHBOARD CONTEXT FOR BI QUERY GENERATION
+
+=== DASHBOARD: Quality Assurance (QA) Score Analytics ===
+
+DASHBOARD PURPOSE:
+Track organizational-level quality performance through Klaus QA reviews and scoring to monitor service quality standards and identify improvement opportunities for the Worker Operations department.
+
+USED BY:
+- Senior Leadership: Quality performance oversight and strategic quality management
+- Operations Directors: Department-wide quality monitoring and improvement initiatives
+- QA Management: Organizational quality trends and benchmark tracking
+- Analytics Team: Quality metrics reporting for executive dashboards
+
+KEY BUSINESS QUESTIONS:
+- "What's our overall QA score this week?"
+- "Show me weekly QA score trends for the organization"
+- "How many QA audits were completed?"
+- "What's our organizational quality performance?"
+
+=== PRIMARY TABLES ===
+1. DBT_PRODUCTION.FCT_KLAUS__REVIEWS - Klaus QA review data
+2. DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS - Ticket data for joining
+
+KEY QA METRICS:
+- Overall_Score: Calculated QA score (0-100 scale)
+- Total_Audits: Number of QA reviews completed
+- Average_QA_Score: Mean quality score across all audits
+- Pass_Fail_Status: Pass/Fail determination based on scorecard thresholds
+
+SCORECARD FILTERING:
+Valid Scorecard IDs: 53921, 54262, 59144, 60047, 56287, 60363
+Primary Scorecards for reporting: 53921, 60047
+
+QA SCORE THRESHOLDS:
+- Scorecards 53921, 54262, 60047: Pass >= 85%
+- Scorecard 59144: Pass >= 90%
+- Target Score: 85%+ for most scorecards
+
+QA SCORE QUERY PATTERN:
+BUSINESS QUESTIONS: "What's our weekly QA score?", "Show me QA trends", "How many audits this week?"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', tickets.SOLVED_AT_PST) AS week_start,
+    AVG(qa_data.Overall_Score) AS average_qa_score,
+    COUNT(*) AS total_audits
+FROM (
+    -- Klaus QA Data Processing CTE
+    WITH KlausBase AS (
+        SELECT
+            klaus.REVIEW_ID,
+            REGEXP_REPLACE(TICKET_URL, '.*/tickets/', '') as TICKET_ID,
+            SCORECARD_ID,
+            SCORECARD_NAME,
+            RATING_CATEGORY_ID,
+            RATING_SCORE,
+            RATING_WEIGHT,
+            REVIEWEE_EMAIL,
+            REVIEWEE_NAME,
+            REVIEW_CREATED_AT
+        FROM DBT_PRODUCTION.FCT_KLAUS__REVIEWS as klaus
+        WHERE SCORECARD_ID IN (53921, 54262, 59144, 60047, 56287, 60363)
+    ),
+    PivotedRatings AS (
+        SELECT
+            REVIEW_ID,
+            CASE WHEN SUM(RATING_WEIGHT) = 0 THEN NULL
+                 ELSE SUM(RATING_SCORE * RATING_WEIGHT) / SUM(100 * RATING_WEIGHT) * 100
+            END as Overall_Score
+        FROM KlausBase
+        GROUP BY REVIEW_ID
+    )
+    SELECT 
+        kb.TICKET_ID,
+        kb.SCORECARD_ID,
+        pr.Overall_Score
+    FROM KlausBase kb
+    JOIN PivotedRatings pr ON kb.REVIEW_ID = pr.REVIEW_ID
+    WHERE kb.REVIEWEE_EMAIL IS NOT NULL
+) qa_data
+LEFT JOIN DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS tickets 
+    ON qa_data.TICKET_ID = tickets.TICKET_ID
+WHERE qa_data.SCORECARD_ID IN (53921, 60047)
+    AND tickets.SOLVED_AT_PST >= {START_DATE}
+    AND tickets.SOLVED_AT_PST < {END_DATE}
+    AND tickets.STATUS IN ('closed', 'solved')
+GROUP BY DATE_TRUNC('week', tickets.SOLVED_AT_PST)
+ORDER BY week_start ASC
+
+=== DASHBOARD: Customer Satisfaction (CSAT) Analytics ===
+
+DASHBOARD PURPOSE:
+Monitor organizational customer satisfaction levels through post-resolution surveys to track service quality from the customer perspective across the Worker Operations department.
+
+USED BY:
+- Senior Leadership: Customer satisfaction oversight and strategic customer experience management
+- Operations Directors: Department-wide customer satisfaction monitoring
+- Customer Experience Team: Satisfaction trends and improvement tracking
+- Analytics Team: CSAT metrics for executive reporting
+
+KEY BUSINESS QUESTIONS:
+- "What's our CSAT score this week?"
+- "Show me weekly CSAT trends"
+- "How many CSAT surveys were completed?"
+- "What's our customer satisfaction performance?"
+
+PRIMARY TABLE: DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+
+KEY CSAT METRICS:
+- CSAT_SCORE_BINARY: Binary satisfaction score (0 or 1)
+- Average CSAT: Mean customer satisfaction percentage
+- Survey Count: Total number of completed surveys
+- SOLVED_AT_PST: Ticket resolution date for trending
+
+CSAT PERFORMANCE BENCHMARKS:
+- Excellent: 95%+ satisfaction
+- Good: 90%+ satisfaction  
+- Target: 85%+ satisfaction
+- Needs Improvement: <85% satisfaction
+
+CSAT QUERY PATTERN:
+BUSINESS QUESTIONS: "What's our CSAT this week?", "Show me customer satisfaction trends", "Weekly CSAT performance"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    AVG(CSAT_SCORE_BINARY) AS average_csat_score,
+    COUNT(*) AS total_surveys
+FROM DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+WHERE SOLVED_AT_PST >= {START_DATE}
+    AND SOLVED_AT_PST < {END_DATE}
+GROUP BY DATE_TRUNC('week', SOLVED_AT_PST)
+ORDER BY week_start ASC
+
+=== DASHBOARD: First Contact Resolution (FCR) Analytics ===
+
+DASHBOARD PURPOSE:
+Track organizational ability to resolve customer issues on the first contact, measuring efficiency and customer experience quality across Chat and Voice channels for the Worker Operations department.
+
+USED BY:
+- Senior Leadership: Operational efficiency oversight and strategic process improvement
+- Operations Directors: Department-wide resolution efficiency monitoring
+- Process Improvement Team: FCR trends and optimization opportunities
+- Analytics Team: Efficiency metrics for executive dashboards
+
+KEY BUSINESS QUESTIONS:
+- "What's our FCR rate this week?"
+- "Show me first contact resolution trends"
+- "How much repeat contact volume do we have?"
+- "FCR performance for Chat and Voice combined"
+
+PRIMARY TABLE: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS (with complex FCR logic)
+
+KEY FCR METRICS:
+- FCR Rate: Percentage of issues resolved on first contact
+- Repeat Contact Volume: Number of follow-up contacts within 24 hours
+- IS_RESOLVED_FIRST_TIME: Binary indicator (1 = resolved first time, 0 = repeat contact)
+- Contact Channels: Chat and Voice combined for FCR calculation
+
+FCR CALCULATION LOGIC:
+A ticket is considered "resolved first time" if:
+1. No follow-up ticket from same requester within 24 hours
+2. Only applies to Chat and Voice channels
+3. Must be from same requester (REQUESTER_ID)
+
+FCR PERFORMANCE BENCHMARKS:
+- Excellent: 90%+ FCR rate
+- Good: 85%+ FCR rate
+- Target: 80%+ FCR rate  
+- Needs Improvement: <80% FCR rate
+
+FCR QUERY PATTERN:
+BUSINESS QUESTIONS: "What's our FCR rate?", "Show me FCR trends", "Repeat contact volume"
+
+SQL TEMPLATE:
+SELECT 
+    DATE_TRUNC('week', CREATED_AT_PST) AS week_start,
+    (CAST(SUM(CASE WHEN IS_RESOLVED_FIRST_TIME = 1 
+                    AND CONTACT_CHANNEL IN ('Chat', 'Voice') THEN 1 ELSE 0 END) AS DOUBLE) /
+     NULLIF(CAST(SUM(CASE WHEN CONTACT_CHANNEL IN ('Chat', 'Voice') THEN 1 ELSE 0 END) AS DOUBLE), 0)) * 100 AS fcr_rate,
+    SUM(CASE WHEN IS_RESOLVED_FIRST_TIME = 0 
+             AND CONTACT_CHANNEL IN ('Chat', 'Voice') THEN 1 ELSE 0 END) AS repeat_contact_volume
+FROM (
+    WITH FCR_CTE AS (
+        SELECT
+            ticket_id,
+            requester_id,
+            CASE WHEN group_id = '17837476387479' THEN 'Chat'
+                 WHEN group_id = '28949203098007' THEN 'Voice'
+                 ELSE 'Other' END AS contact_channel,
+            created_at_pst,
+            CASE WHEN created_at_pst + INTERVAL '24 HOUR' >= 
+                      LEAD(created_at_pst) OVER (PARTITION BY requester_id ORDER BY created_at_pst)
+                 THEN 0 ELSE 1 END AS is_resolved_first_time
+        FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+        WHERE STATUS IN ('solved', 'closed')
+            AND brand_id IN ('360002340693', '29186504989207')
+            AND channel IN ('native_messaging')
+            AND group_id IN ('17837476387479', '28949203098007')
+            AND ASSIGNEE_ID != '15840273336343'
+            AND TICKET_TAGS NOT LIKE '%email_blocked%'
+            AND TICKET_TAGS NOT LIKE '%bulk_email_tool%'
+            AND TICKET_TAGS NOT LIKE '%seattle_psst_monthly_email%'
+            AND created_at_pst >= {DATE_RANGE}
+    )
+    SELECT * FROM FCR_CTE
+) fcr_data
+WHERE CREATED_AT_PST >= {START_DATE}
+    AND CREATED_AT_PST < {END_DATE}
+GROUP BY DATE_TRUNC('week', CREATED_AT_PST)
+ORDER BY week_start ASC
+
+=== QUALITY METRICS BUSINESS QUESTION PATTERNS ===
+
+QA SCORE QUESTIONS:
+Keywords: "QA score", "quality score", "Klaus", "audit", "quality performance"
+Examples: "What's our QA score this week?", "Show me quality trends", "How many audits?"
+Primary Metric: AVG(Overall_Score), COUNT(*) audits
+
+CSAT QUESTIONS:  
+Keywords: "CSAT", "customer satisfaction", "satisfaction score", "customer feedback"
+Examples: "What's our CSAT?", "Customer satisfaction trends", "How satisfied are customers?"
+Primary Metric: AVG(CSAT_SCORE_BINARY), COUNT(*) surveys
+
+FCR QUESTIONS:
+Keywords: "FCR", "first contact resolution", "repeat contact", "resolution rate"
+Examples: "What's our FCR rate?", "First contact resolution", "Repeat contact volume"
+Primary Metric: FCR percentage, repeat contact count
+
+=== TIME PERIOD MAPPING FOR QUALITY METRICS ===
+
+WEEKLY TRENDING (Most Common):
+DATE_TRUNC('week', [DATE_COLUMN]) for week-over-week analysis
+
+COMMON DATE RANGES:
+- Last 6 weeks: CURRENT_DATE - INTERVAL '6 weeks'
+- Current quarter: DATE_TRUNC('quarter', CURRENT_DATE)  
+- Last 3 months: CURRENT_DATE - INTERVAL '3 months'
+
+=== ORGANIZATIONAL PERFORMANCE BENCHMARKS ===
+
+COMBINED QUALITY SCORECARD:
+- QA Score Target: 85%+
+- CSAT Target: 85%+  
+- FCR Target: 80%+
+- All three metrics together indicate overall organizational service quality
+
+EXECUTIVE DASHBOARD METRICS:
+- Weekly trends for all three quality indicators
+- Combined quality performance score
+- Volume metrics (audits, surveys, total contacts)
+- Performance against targets and benchmarks
+
+=== QUALITY METRICS FILTERING RULES ===
+
+QA SCORE FILTERS:
+- Valid scorecard IDs only
+- Exclude null reviewee emails (except scorecard 60363)
+- Focus on primary scorecards for executive reporting
+
+CSAT FILTERS:  
+- Based on solved ticket dates
+- Include all valid survey responses
+- No additional filtering required
+
+FCR FILTERS:
+- Chat and Voice channels only (group_ids: 17837476387479, 28949203098007)
+- Exclude TechOps Bot (ASSIGNEE_ID: 15840273336343)
+- Valid brand IDs and channel types
+- Exclude system-generated tickets and bulk emails
+
+These quality metrics provide comprehensive organizational performance visibility for Worker Operations leadership decision-making and strategic planning.

@@ -160,31 +160,22 @@ class OpenAIProvider(BaseModelProvider):
         return thread.id
     
     async def generate_sql(self, question: str, instructions: str, context: Dict[str, Any] = None) -> str:
-        """Generate SQL query using OpenAI"""
+        """Generate SQL query using OpenAI with Assistant API and vector store when available"""
         
-        system_prompt = f"""You are an expert SQL query generator for business intelligence. Your task is to generate accurate SQL queries based on user questions and provided instructions.
-
-{instructions}
-
-IMPORTANT RULES:
-1. Return ONLY the SQL query, no explanations or additional text
-2. Use proper SQL syntax for Snowflake
-3. Include appropriate filters, aggregations, and sorting
-4. Handle NULL values properly
-5. Use meaningful column aliases
-6. Follow all business logic requirements in the instructions"""
-
         user_message = f"""Generate a SQL query to answer this question:
 
 Question: {question}
 
+Instructions: {instructions}
+
 {f"Additional Context: {json.dumps(context, indent=2)}" if context else ""}
 
-Return only the SQL query, no explanations."""
+Please use the business intelligence knowledge base to understand the table structures and relationships. Return only the SQL query, no explanations."""
 
         messages = [{"role": "user", "content": user_message}]
         
-        response = await self.generate_response(messages, system_prompt, temperature=0.1)
+        # This will automatically use Assistant API with vector store if configured
+        response = await self.generate_response(messages, temperature=0.1)
         
         # Extract SQL from response (remove any markdown formatting)
         sql = response.strip()

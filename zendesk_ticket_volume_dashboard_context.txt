@@ -1,0 +1,164 @@
+ZENDESK TICKET VOLUME DASHBOARD CONTEXT FOR BI QUERY GENERATION
+
+=== DASHBOARD: Ticket Volume Metrics ===
+
+DASHBOARD PURPOSE:
+Track daily ticket volume across different contact channels (Chat, Voice, Web) for Worker Operations team
+
+USED BY TEAMS:
+- Operations Managers: Monitor daily volume trends
+- Team Leads: Capacity planning and staffing decisions  
+- Analytics Team: Performance reporting
+- Leadership: High-level volume metrics
+
+KEY BUSINESS QUESTIONS:
+- "How many tickets did we get today?"
+- "Show me chat volume for last week"  
+- "What's the ticket volume trend by channel?"
+- "Compare voice vs chat ticket volume"
+- "Show me daily ticket counts for this month"
+
+=== PRIMARY TABLE: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS ===
+
+KEY COLUMNS:
+- TICKET_ID: Unique ticket identifier
+- CREATED_AT_PST: Ticket creation timestamp in PST
+- GROUP_ID: Determines contact channel (5495272772503=Web, 17837476387479=Chat, 28949203098007=Voice)  
+- STATUS: Ticket status (closed, solved, etc.)
+- ASSIGNEE_NAME: Agent assigned to ticket
+- TICKET_TAGS: Tags applied to ticket
+- CHANNEL: Communication channel (api, email, native_messaging, web)
+- BRAND_ID: Brand identifier for filtering
+
+CONTACT CHANNEL MAPPING:
+Chat: GROUP_ID = '17837476387479'
+Voice: GROUP_ID = '28949203098007'  
+Web: GROUP_ID = '5495272772503'
+Other: All other GROUP_ID values
+
+=== STANDARD FILTERS (ALWAYS APPLY) ===
+
+STATUS FILTER:
+STATUS IN ('closed', 'solved')
+
+EXCLUDE AUTOMATED AGENTS:  
+ASSIGNEE_NAME != 'Automated Update' OR ASSIGNEE_NAME IS NULL
+ASSIGNEE_NAME != 'TechOps Bot' OR ASSIGNEE_NAME IS NULL
+
+EXCLUDE SYSTEM TICKETS:
+NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL
+NOT LOWER(TICKET_TAGS) LIKE '%bulk_email_tool%' OR TICKET_TAGS IS NULL  
+NOT LOWER(TICKET_TAGS) LIKE '%seattle_psst_monthly_email%' OR TICKET_TAGS IS NULL
+
+VALID CHANNELS:
+CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+
+BRAND FILTER:
+BRAND_ID IN ('29186504989207', '360002340693')
+
+=== QUERY PATTERNS ===
+
+PATTERN 1: Daily Ticket Volume by Channel
+BUSINESS QUESTIONS: "Show me chat tickets today", "Daily ticket volume for last week"
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    COUNT(DISTINCT TICKET_ID) AS ticket_count
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS  
+WHERE STATUS IN ('closed', 'solved')
+    AND (ASSIGNEE_NAME != 'Automated Update' OR ASSIGNEE_NAME IS NULL)
+    AND (ASSIGNEE_NAME != 'TechOps Bot' OR ASSIGNEE_NAME IS NULL) 
+    AND (NOT LOWER(TICKET_TAGS) LIKE '%email_blocked%' OR TICKET_TAGS IS NULL)
+    AND CHANNEL IN ('api', 'email', 'native_messaging', 'web')
+    AND BRAND_ID IN ('29186504989207', '360002340693')
+    AND CASE WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+             WHEN GROUP_ID = '28949203098007' THEN 'Voice' 
+             WHEN GROUP_ID = '5495272772503' THEN 'Web'
+             ELSE 'Other' END = 'Chat'  -- Change this for different channels
+    AND CREATED_AT_PST >= CAST('2025-07-15 00:00:00' AS timestamp)
+    AND CREATED_AT_PST < CAST('2025-07-23 00:00:00' AS timestamp)
+GROUP BY TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST))
+ORDER BY date ASC
+
+PATTERN 2: Multi-Channel Volume Comparison  
+BUSINESS QUESTIONS: "Compare all channels", "Which channel has most volume?"
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    CASE WHEN GROUP_ID = '17837476387479' THEN 'Chat'
+         WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+         WHEN GROUP_ID = '5495272772503' THEN 'Web' 
+         ELSE 'Other' END AS channel,
+    COUNT(DISTINCT TICKET_ID) AS ticket_count
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE [STANDARD_FILTERS]
+    AND CREATED_AT_PST >= [DATE_RANGE]
+GROUP BY date, channel
+ORDER BY date ASC, channel
+
+=== TIME PERIOD PATTERNS ===
+
+TODAY: 
+CREATED_AT_PST >= CAST(CURRENT_DATE AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE + INTERVAL '1 day' AS timestamp)
+
+YESTERDAY:
+CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '1 day' AS timestamp)  
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+LAST 7 DAYS:
+CREATED_AT_PST >= CAST(CURRENT_DATE - INTERVAL '7 days' AS timestamp)
+AND CREATED_AT_PST < CAST(CURRENT_DATE AS timestamp)
+
+THIS WEEK (Monday to Sunday):
+CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE)  
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '1 week'
+
+THIS MONTH:
+CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+
+=== RESPONSE TIME ANALYSIS ===
+
+TABLE: Same as ticket volume (DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS)
+COLUMN: REPLY_TIME_IN_MINUTES
+
+RESPONSE TIME BUCKETS:
+- Under 1 minute: REPLY_TIME_IN_MINUTES <= 1
+- 1-15 minutes: REPLY_TIME_IN_MINUTES > 1 AND REPLY_TIME_IN_MINUTES <= 15  
+- 15-60 minutes: REPLY_TIME_IN_MINUTES > 15 AND REPLY_TIME_IN_MINUTES <= 60
+- Over 1 hour: REPLY_TIME_IN_MINUTES > 60
+
+RESPONSE TIME QUERY PATTERN:
+SELECT 
+    TO_DATE(TO_TIMESTAMP_LTZ(CREATED_AT_PST)) AS date,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES <= 1 THEN 1 ELSE 0 END) AS under_1_min,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 1 AND REPLY_TIME_IN_MINUTES <= 15 THEN 1 ELSE 0 END) AS min_1_to_15,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 15 AND REPLY_TIME_IN_MINUTES <= 60 THEN 1 ELSE 0 END) AS min_15_to_60,
+    SUM(CASE WHEN REPLY_TIME_IN_MINUTES > 60 THEN 1 ELSE 0 END) AS over_1_hour
+FROM DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+WHERE [STANDARD_FILTERS] AND [CHANNEL_FILTER] AND [DATE_RANGE]
+GROUP BY date ORDER BY date ASC
+
+=== COMMON BUSINESS QUESTIONS → SQL MAPPING ===
+
+"How many chat tickets today?"
+→ Filter: Contact Channel = 'Chat', Date = today
+→ Metric: COUNT(DISTINCT TICKET_ID)
+
+"Show me voice volume for last week"  
+→ Filter: Contact Channel = 'Voice', Date = last 7 days
+→ Group by: Daily
+→ Metric: COUNT(DISTINCT TICKET_ID)
+
+"Compare chat vs voice tickets this month"
+→ Filter: Contact Channel IN ('Chat', 'Voice'), Date = this month  
+→ Group by: Channel
+→ Metric: COUNT(DISTINCT TICKET_ID)
+
+"What's the daily ticket trend for all channels?"
+→ Filter: All channels, Date range specified
+→ Group by: Date, Channel
+→ Metric: COUNT(DISTINCT TICKET_ID)
+
+"Response time breakdown for chat tickets"
+→ Filter: Contact Channel = 'Chat'
+→ Metric: Response time buckets with counts

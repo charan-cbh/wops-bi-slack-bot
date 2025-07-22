@@ -1,0 +1,142 @@
+BI QUERY GENERATION CONTEXT FOR CLIPBOARD HEALTH WORKER OPERATIONS
+
+=== QUERY PATTERN MATCHING SYSTEM ===
+
+BUSINESS QUESTION PATTERNS -> SQL TEMPLATES
+
+1. AGENT PERFORMANCE QUERIES
+Pattern: "How is [agent_name] performing", "Show [agent_name] metrics", "[agent_name] performance"
+Tables: agent_performance, agents, tickets
+Key Columns: agent_name, aht_seconds, quality_score, fcr_rate, schedule_adherence
+Time Filter: Usually last 30 days
+Group By: agent_name, date
+Sample Query:
+SELECT agent_name, AVG(aht_seconds) as avg_aht, AVG(quality_score) as quality
+FROM agent_performance 
+WHERE agent_name ILIKE '%{agent_name}%' AND date >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY agent_name
+
+2. TEAM COMPARISON QUERIES  
+Pattern: "Compare teams", "Team [team_name] vs others", "Team ranking"
+Tables: agent_performance, teams
+Key Columns: team_name, aht_seconds, quality_score, tickets_handled
+Time Filter: Current month or quarter
+Group By: team_name
+Sample Query:
+SELECT team_name, AVG(aht_seconds) as avg_aht, COUNT(*) as agent_count
+FROM agent_performance 
+WHERE date >= DATE_TRUNC('month', CURRENT_DATE)
+GROUP BY team_name ORDER BY avg_aht
+
+3. AHT (AVERAGE HANDLE TIME) QUERIES
+Pattern: "AHT for", "Average handle time", "Handle time trends"
+Business Logic: 
+- Good AHT: <280 seconds for most teams
+- Exclude training calls and system issues
+- Include only productive time
+Sample Query:
+SELECT DATE(date) as day, AVG(aht_seconds) as daily_aht
+FROM agent_performance 
+WHERE team_name = '{team_name}' AND date >= CURRENT_DATE - INTERVAL '7 days'
+GROUP BY DATE(date) ORDER BY day
+
+4. QUALITY SCORE QUERIES
+Pattern: "Quality score", "QA scores", "Agent quality"
+Business Logic:
+- Scale: 1-5, target >4.0
+- Based on Klaus QA assessments
+- Monthly rolling average preferred
+Sample Query:
+SELECT agent_name, AVG(quality_score) as avg_quality
+FROM agent_performance 
+WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY agent_name HAVING COUNT(*) >= 10 ORDER BY avg_quality DESC
+
+5. PRODUCTIVITY QUERIES
+Pattern: "Tickets handled", "Productivity", "Volume metrics"
+Tables: agent_performance, tickets
+Business Logic:
+- Count only resolved tickets
+- Exclude test/admin accounts
+Sample Query:
+SELECT agent_name, SUM(tickets_handled) as total_tickets, AVG(tickets_handled) as daily_avg
+FROM agent_performance 
+WHERE date >= DATE_TRUNC('month', CURRENT_DATE)
+GROUP BY agent_name ORDER BY total_tickets DESC
+
+=== COMMON FILTERS AND CONDITIONS ===
+
+TIME PERIODS:
+- "today": date = CURRENT_DATE
+- "yesterday": date = CURRENT_DATE - INTERVAL '1 day'  
+- "this week": date >= DATE_TRUNC('week', CURRENT_DATE)
+- "last week": date >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week' AND date < DATE_TRUNC('week', CURRENT_DATE)
+- "this month": date >= DATE_TRUNC('month', CURRENT_DATE)
+- "last month": date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month' AND date < DATE_TRUNC('month', CURRENT_DATE)
+- "last 7 days": date >= CURRENT_DATE - INTERVAL '7 days'
+- "last 30 days": date >= CURRENT_DATE - INTERVAL '30 days'
+
+TEAM FILTERS:
+- Team Gian: team_name = 'Team Gian'
+- Team Sarah: team_name = 'Team Sarah'  
+- All teams: team_name NOT IN ('Training', 'Admin', 'Test')
+
+AGENT FILTERS:
+- Specific agent: agent_name ILIKE '%{name}%'
+- Active agents: agent_status = 'Active'
+- Exclude test accounts: agent_name NOT LIKE '%test%'
+
+=== BUSINESS THRESHOLDS AND BENCHMARKS ===
+
+AHT TARGETS:
+- Team Gian: <280 seconds
+- Team Sarah: <300 seconds
+- Company Average: ~275 seconds
+
+QUALITY SCORE TARGETS:
+- Minimum: >3.5
+- Good: >4.0
+- Excellent: >4.5
+
+FCR (First Contact Resolution) TARGETS:
+- Minimum: >80%
+- Good: >85%
+- Excellent: >90%
+
+SCHEDULE ADHERENCE TARGETS:
+- Minimum: >90%
+- Good: >95%
+- Excellent: >98%
+
+=== EXAMPLE DASHBOARD QUERIES ===
+
+DASHBOARD: Agent Performance Overview
+PURPOSE: Daily monitoring of key agent metrics
+USED BY: Team leads, managers
+QUERY EXAMPLES:
+
+1. "Show me top performing agents this month"
+SELECT agent_name, team_name, AVG(aht_seconds) as avg_aht, AVG(quality_score) as avg_quality
+FROM agent_performance 
+WHERE date >= DATE_TRUNC('month', CURRENT_DATE)
+GROUP BY agent_name, team_name
+ORDER BY avg_quality DESC, avg_aht ASC LIMIT 10
+
+2. "Which agents need coaching on AHT?"
+SELECT agent_name, team_name, AVG(aht_seconds) as avg_aht
+FROM agent_performance 
+WHERE date >= CURRENT_DATE - INTERVAL '7 days'
+GROUP BY agent_name, team_name
+HAVING AVG(aht_seconds) > 300
+ORDER BY avg_aht DESC
+
+3. "Team performance comparison"
+SELECT team_name, 
+       COUNT(DISTINCT agent_name) as team_size,
+       AVG(aht_seconds) as avg_aht,
+       AVG(quality_score) as avg_quality,
+       AVG(fcr_rate) as avg_fcr
+FROM agent_performance 
+WHERE date >= DATE_TRUNC('month', CURRENT_DATE)
+GROUP BY team_name
+ORDER BY avg_quality DESC

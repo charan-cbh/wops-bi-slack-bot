@@ -68,27 +68,138 @@ class LLMOrchestrator:
         
         print(f"📊 Question classified as: {classification}")
         
-        # Route based on classification
-        if classification == 'conversational':
-            try:
-                if self.model_provider:
-                    response = await self.model_provider.handle_conversational(question, context)
-                else:
-                    response = await self.result_processor.handle_conversational_question(question, user_id, channel_id)
-            except Exception as e:
-                print(f"⚠️ Error handling conversational question with model provider: {e}")
-                response = await self.result_processor.handle_conversational_question(question, user_id, channel_id)
-            return response, 'conversational'
+        # Use unified Assistant API approach for ALL questions when model provider is available
+        if self.model_provider and self.model_provider.use_assistant_api and self.model_provider.assistant_id:
+            print("🤖 Using unified Assistant API approach with vector store")
+            return await self._handle_question_with_assistant(question, user_id, channel_id, context)
         else:
-            # SQL required - generate and execute SQL, return results
-            sql_response = await self._handle_sql_question(question, user_id, channel_id, assistant_id)
-            # Check if response contains actual data results or just raw SQL
-            if sql_response.startswith(('--', '❌', 'Error:')):
-                # This is an error or raw SQL, needs further processing
-                return sql_response, 'sql'
+            # Fallback to original routing for non-Assistant API providers
+            if classification == 'conversational':
+                try:
+                    if self.model_provider:
+                        response = await self.model_provider.handle_conversational(question, context)
+                    else:
+                        response = await self.result_processor.handle_conversational_question(question, user_id, channel_id)
+                except Exception as e:
+                    print(f"⚠️ Error handling conversational question with model provider: {e}")
+                    response = await self.result_processor.handle_conversational_question(question, user_id, channel_id)
+                return response, 'conversational'
             else:
-                # This is processed data results, ready for display
-                return sql_response, 'sql_with_data'
+                # SQL required - generate and execute SQL, return results
+                sql_response = await self._handle_sql_question(question, user_id, channel_id, assistant_id)
+                # Check if response contains actual data results or just raw SQL
+                if sql_response.startswith(('--', '❌', 'Error:')):
+                    # This is an error or raw SQL, needs further processing
+                    return sql_response, 'sql'
+                else:
+                    # This is processed data results, ready for display
+                    return sql_response, 'sql_with_data'
+    
+    async def _handle_question_with_assistant(self, question: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
+        """
+        Handle all questions using Assistant API with vector store
+        For data questions: Assistant generates SQL -> Execute -> Assistant summarizes
+        For conversational questions: Assistant provides direct response
+        """
+        try:
+            # First, ask the Assistant whether this requires SQL or is conversational
+            classification_prompt = f"""Analyze this question and determine if it requires executing a SQL query against our database or if it's a conversational question about business processes/policies.
+
+Question: {question}
+
+Respond with either:
+- "DATA" if this requires querying our database tables for specific data
+- "CONVERSATIONAL" if this is about business processes, policies, or general information
+
+Consider questions about specific metrics, counts, performance data, or "show me" requests as DATA questions."""
+
+            classification = await self.model_provider.handle_conversational(classification_prompt, context)
+            classification = classification.strip().upper()
+            
+            print(f"🤖 Assistant classification: {classification}")
+            
+            if "DATA" in classification:
+                # Data question: Generate SQL using Assistant API, execute, then summarize
+                return await self._handle_data_question_with_assistant(question, user_id, channel_id, context)
+            else:
+                # Conversational question: Direct response from Assistant API
+                response = await self.model_provider.handle_conversational(question, context)
+                return response, 'conversational'
+            
+        except Exception as e:
+            print(f"❌ Error handling question with Assistant API: {e}")
+            # Fallback to original approach
+            return f"❌ Error processing your question: {str(e)}", 'error'
+    
+    async def _handle_data_question_with_assistant(self, question: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
+        """Handle data questions using Assistant API for SQL generation and result summarization"""
+        try:
+            # Step 1: Generate SQL using Assistant API with vector store context
+            sql_prompt = f"""Generate a SQL query to answer this question using the business intelligence knowledge base:
+
+{question}
+
+Instructions:
+- Use the vector store knowledge to understand which tables and columns to use
+- Generate proper Snowflake SQL syntax
+- Include appropriate filters, joins, and aggregations
+- Return ONLY the SQL query, no explanations
+
+Use the business intelligence knowledge base to understand table structures and relationships."""
+            
+            sql_query = await self.model_provider.handle_conversational(sql_prompt, context)
+            
+            # Clean up the SQL (remove markdown formatting)
+            sql_query = sql_query.strip()
+            if sql_query.startswith('```sql'):
+                sql_query = sql_query[6:]
+            if sql_query.startswith('```'):
+                sql_query = sql_query[3:]
+            if sql_query.endswith('```'):
+                sql_query = sql_query[:-3]
+            sql_query = sql_query.strip()
+            
+            print(f"🔍 Generated SQL: {sql_query[:100]}...")
+            
+            # Step 2: Execute SQL
+            try:
+                from app.snowflake_runner import run_query
+                df = run_query(sql_query)
+                
+                if isinstance(df, str) or (hasattr(df, 'empty') and df.empty):
+                    return f"❌ Query execution failed or returned no data", 'sql'
+                
+                # Convert DataFrame to string for summarization
+                result_table = df.to_string(index=False, max_rows=50)
+                
+                # Step 3: Summarize results using Assistant API with vector store context
+                summary_prompt = f"""Analyze and summarize these query results for the user:
+
+Original Question: {question}
+
+SQL Query Used: {sql_query}
+
+Results:
+{result_table}
+
+Instructions:
+- Provide a clear, business-focused summary of the results
+- Explain what the data means in practical terms
+- Include key insights and trends if visible
+- Use the business intelligence knowledge base to provide context
+- Format the response in a user-friendly way
+- If appropriate, suggest follow-up questions or actions"""
+
+                final_response = await self.model_provider.handle_conversational(summary_prompt, context)
+                return final_response, 'sql_with_data'
+                
+            except Exception as sql_error:
+                print(f"❌ SQL execution error: {sql_error}")
+                return f"❌ Error executing query: {str(sql_error)}", 'sql'
+            
+        except Exception as e:
+            print(f"❌ Error in data question handling: {e}")
+            return f"❌ Error processing data question: {str(e)}", 'error'
     
     async def _handle_sql_question(self, question: str, user_id: str, channel_id: str, assistant_id: str = None) -> str:
         """Handle questions that require SQL generation"""

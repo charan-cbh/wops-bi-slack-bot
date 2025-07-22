@@ -1,0 +1,225 @@
+TEAM LEAD (TL) PERFORMANCE DASHBOARD CONTEXT FOR BI QUERY GENERATION
+
+=== DASHBOARD: Weekly Team Lead Performance Analytics ===
+
+DASHBOARD PURPOSE:
+Track supervisor-level performance metrics across multiple KPIs including AHT, CSAT, Adherence, QA Score, and FCR for Team Lead management and coaching purposes.
+
+USED BY:
+- Operations Directors: Team Lead performance monitoring and strategic team management
+- Team Lead Managers: Individual TL coaching and performance improvement
+- HR/Performance Management: Supervisor evaluation and development planning
+- Analytics Team: Team Lead performance reporting and trend analysis
+
+KEY BUSINESS QUESTIONS:
+- "How is Christine Presto performing this week?"
+- "Show me team lead performance across all metrics"
+- "Which team leads need coaching on QA scores?"
+- "Team lead AHT performance for Joan Mallari"
+- "Weekly performance trends for all supervisors"
+
+=== PRIMARY TABLES AND JOINS ===
+
+CORE BASE TABLE: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS
+SUPERVISOR DIMENSION: DBT_PRODUCTION.DIM_ZENDESK_USERS (Assignee Supervisor)
+
+PERFORMANCE METRICS TABLES:
+1. DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME - AHT metrics by supervisor
+2. DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS - CSAT scores by supervisor  
+3. DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE - Schedule adherence by supervisor
+4. DBT_PRODUCTION.FCT_KLAUS__REVIEWS - QA scores by supervisor (via reviewee email)
+5. DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS - FCR calculation by supervisor
+
+=== TEAM LEAD (SUPERVISOR) FILTERING ===
+
+ACTIVE TEAM LEADS LIST:
+- Christine Presto
+- Erin Wood  
+- Gian Gabrillo
+- Guren Onal
+- Joan Mallari
+- Jonathan Melenson
+- Kimberly Gasing
+- Mbali Gumede
+- Ricardo Birck
+- Sinead Foley
+- Yiannis Spanoudis
+- Yolanda Coughlin
+- Miguel Salas
+
+SUPERVISOR COLUMN MAPPING:
+- Tickets Table: ASSIGNEE_SUPERVISOR field
+- Dimension Table: "Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR"
+- QA Reviews: Join via REVIEWEE_EMAIL to DIM_ZENDESK_USERS.SUPERVISOR
+- Adherence: Join via AGENT_EMAIL to DIM_ZENDESK_USERS.SUPERVISOR
+
+=== KEY PERFORMANCE METRICS ===
+
+METRIC 1: Average Handle Time (AHT)
+Source: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Calculation: AVG(HANDLE_TIME_IN_MINUTES) for Voice + Chat combined
+Filter: AHT_TYPE IN ('AHT - Voice', 'AHT - Chat')
+Group By: SUPERVISOR, Week
+
+METRIC 2: Customer Satisfaction (CSAT)  
+Source: DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+Calculation: AVG(CSAT_SCORE_BINARY)
+Group By: ASSIGNEE_SUPERVISOR, Week
+
+METRIC 3: Schedule Adherence
+Source: DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+Calculation: SUM(ADHERENT_MINUTES) / SUM(SCHEDULED_MINUTES)
+Join: Via AGENT_EMAIL to get SUPERVISOR
+Group By: SUPERVISOR, Week
+
+METRIC 4: QA Score
+Source: DBT_PRODUCTION.FCT_KLAUS__REVIEWS + Complex Klaus CTE
+Calculation: AVG(Overall_Score) from Klaus scorecard processing
+Filter: SCORECARD_ID = '53921' (primary scorecard)
+Join: Via REVIEWEE_EMAIL to DIM_ZENDESK_USERS.SUPERVISOR
+Group By: SUPERVISOR, Week
+
+METRIC 5: First Contact Resolution (FCR)
+Source: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS with FCR logic
+Calculation: (Resolved First Time / Total Contacts) * 100
+Channels: Chat and Voice only
+Group By: ASSIGNEE_SUPERVISOR, Week
+
+=== STANDARD FILTERS FOR ALL METRICS ===
+
+DATE RANGE FILTERING:
+- Weekly aggregation: DATE_TRUNC('week', date_column)
+- Typical range: Last 6-8 weeks of data
+- Date fields: SOLVED_AT_PST (tickets), ADHERENCE_DATE (schedule)
+
+SUPERVISOR FILTERING:
+WHERE clause pattern for all active team leads:
+LOWER("Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR") LIKE '%christine presto%'
+OR LOWER("Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR") LIKE '%erin wood%'
+[... continue for all 13 team leads]
+
+TICKET FILTERS (when using ticket data):
+- STATUS IN ('closed', 'solved')  
+- ASSIGNEE_NAME NOT IN ('Automated Update', 'TechOps Bot') OR NULL
+- Standard tag exclusions (email_blocked, bulk_email_tool, etc.)
+- BRAND_ID IN ('29186504989207', '360002340693')
+- Valid channels and groups
+
+=== TEAM LEAD PERFORMANCE QUERY PATTERN ===
+
+BUSINESS QUESTIONS: "How is [TL_NAME] performing?", "Team lead performance this week", "Show me supervisor metrics"
+
+SQL TEMPLATE STRUCTURE:
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    "Dim Zendesk Users - Assignee Supervisor"."SUPERVISOR" AS supervisor_name,
+    AVG(aht_metrics.AHT) AS avg_aht,
+    AVG(csat_metrics.CSAT) AS avg_csat, 
+    AVG(adherence_metrics.adherence_pct) AS avg_adherence,
+    AVG(qa_metrics.qa_score) AS avg_qa_score,
+    AVG(fcr_metrics.fcr_rate) AS avg_fcr
+FROM base_ticket_data
+LEFT JOIN aht_weekly_data ON (week match + supervisor match)
+LEFT JOIN csat_weekly_data ON (week match + supervisor match)  
+LEFT JOIN adherence_weekly_data ON (week match + supervisor match)
+LEFT JOIN qa_weekly_data ON (week match + supervisor match)
+LEFT JOIN fcr_weekly_data ON (week match + supervisor match)
+WHERE supervisor filtering for active TLs
+    AND date_range_filtering
+GROUP BY week_start, supervisor_name
+ORDER BY week_start ASC, supervisor_name ASC
+
+=== INDIVIDUAL METRIC QUERY PATTERNS ===
+
+AHT BY TEAM LEAD:
+BUSINESS QUESTIONS: "Show me Joan Mallari's AHT performance", "Team lead AHT trends"
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    SUPERVISOR,
+    AVG(CASE WHEN AHT_TYPE IN ('AHT - Voice', 'AHT - Chat') 
+             THEN HANDLE_TIME_IN_MINUTES END) AS avg_aht_minutes
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE HANDLE_TIME_IN_MINUTES >= 2
+    AND date_range_filtering
+    AND supervisor_filtering
+GROUP BY week_start, SUPERVISOR
+
+CSAT BY TEAM LEAD:
+BUSINESS QUESTIONS: "Team lead CSAT performance", "Which supervisors have low CSAT?"
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    ASSIGNEE_SUPERVISOR,
+    AVG(CSAT_SCORE_BINARY) AS avg_csat_score,
+    COUNT(*) AS total_surveys
+FROM DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS  
+WHERE date_range_filtering
+GROUP BY week_start, ASSIGNEE_SUPERVISOR
+
+QA SCORE BY TEAM LEAD:
+BUSINESS QUESTIONS: "Team lead quality performance", "QA coaching needs by supervisor"
+Uses complex Klaus CTE processing + supervisor join via REVIEWEE_EMAIL
+Filter: SCORECARD_ID = '53921' for primary QA scorecard
+Calculation: AVG(Overall_Score) grouped by supervisor and week
+
+FCR BY TEAM LEAD:
+BUSINESS QUESTIONS: "Team lead resolution efficiency", "First contact performance by supervisor"
+Uses complex FCR CTE with 24-hour repeat contact logic
+Channels: Chat and Voice only (group_id filtering)
+Calculation: (First time resolved / Total contacts) * 100
+
+ADHERENCE BY TEAM LEAD:
+BUSINESS QUESTIONS: "Schedule adherence by team lead", "Which supervisors need attendance coaching?"
+Calculation: SUM(ADHERENT_MINUTES) / SUM(SCHEDULED_MINUTES)
+Requires join from AGENT_EMAIL to DIM_ZENDESK_USERS.SUPERVISOR
+
+=== BUSINESS QUESTION PATTERNS ===
+
+SUPERVISOR-SPECIFIC QUESTIONS:
+Keywords: Team lead names, "supervisor", "TL", "manager"
+Examples: "How is Christine Presto performing?", "Joan Mallari AHT", "Gian Gabrillo team performance"
+Filter: Specific supervisor name matching
+
+METRIC-SPECIFIC QUESTIONS:
+Keywords: "AHT", "CSAT", "adherence", "QA score", "FCR", "quality"
+Examples: "Team lead AHT performance", "Supervisor CSAT trends", "QA coaching needs"
+Focus: Single metric across all team leads
+
+COMPARATIVE QUESTIONS:
+Keywords: "compare", "best", "worst", "ranking", "all team leads"
+Examples: "Which team lead has best AHT?", "Compare supervisor performance", "Ranking team leads"
+Output: All supervisors with comparative metrics
+
+TRENDING QUESTIONS:
+Keywords: "trend", "week over week", "improvement", "declining"
+Examples: "Team lead performance trends", "Weekly supervisor metrics", "Performance improvement"
+Analysis: Time series analysis with week-over-week comparisons
+
+=== PERFORMANCE BENCHMARKS ===
+
+TEAM LEAD TARGETS:
+- AHT (Chat + Voice): <15 minutes average across team
+- CSAT: >85% satisfaction rate  
+- Schedule Adherence: >90% adherence rate
+- QA Score: >85% average quality score
+- FCR: >80% first contact resolution rate
+
+COACHING THRESHOLDS:
+- Needs Attention: Any metric below target for 2+ consecutive weeks
+- Critical: Any metric below 80% of target
+- Excellent: All metrics above target consistently
+
+=== TIME PERIOD PATTERNS ===
+
+WEEKLY ANALYSIS (Most Common):
+DATE_TRUNC('week', date_column) for week-over-week trending
+
+COMMON DATE RANGES:
+- Last 6 weeks: Current performance tracking
+- Last 3 months: Quarterly performance review  
+- Current quarter: Performance period evaluation
+
+ADHERENCE SPECIFIC:
+- Filter: ADHERENCE_DATE < CURRENT_DATE (exclude today's incomplete data)
+- Weekly aggregation of daily adherence percentages
+
+This Team Lead Performance dashboard enables supervisor-level coaching, performance management, and strategic team optimization for the Worker Operations department.

@@ -1,0 +1,122 @@
+AGENT PERFORMANCE DASHBOARD CONTEXT FOR BI QUERY GENERATION
+
+=== DASHBOARD: Weekly Agent Performance Analytics ===
+
+DASHBOARD PURPOSE:
+Track individual agent performance metrics across multiple KPIs including AHT, CSAT, Adherence, QA Score, and FCR for agent-level coaching and performance management.
+
+USED BY:
+- Team Leads: Individual agent coaching and performance improvement
+- Operations Directors: Agent-level performance monitoring and staffing decisions
+- HR/Performance Management: Agent evaluation and development planning
+- Analytics Team: Agent performance reporting and trend analysis
+
+=== KEY AGENT IDENTIFIER ===
+Agent Name Column: "Dim Zendesk Users - Assignee"."USER_NAME"
+Pattern: LOWER(agent_name_column) LIKE '%[agent_name]%'
+Filter Pattern: "Dim Zendesk Users - Assignee"."USER_NAME" 
+
+=== AGENT PERFORMANCE METRICS ===
+
+METRIC 1: Agent AHT Performance
+Source: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+Calculation: AVG(HANDLE_TIME_IN_MINUTES) for Voice + Chat combined
+Filter: AHT_TYPE IN ('AHT - Voice', 'AHT - Chat'), HANDLE_TIME_IN_MINUTES >= 2
+Join: Via USER_ID to base ticket data ASSIGNEE_ID
+Group By: ASSIGNEE_ID, USER_ID, Week
+
+METRIC 2: Agent CSAT Performance
+Source: DBT_PRODUCTION.RPT_CSAT_SURVEY_DETAILS
+Calculation: AVG(CSAT_SCORE_BINARY)
+Join: Via OFFERING_ASSIGNEE_ID to base ticket data ASSIGNEE_ID
+Group By: OFFERING_ASSIGNEE_ID, Week
+
+METRIC 3: Agent QA Score
+Source: DBT_PRODUCTION.FCT_KLAUS__REVIEWS + Complex Klaus CTE
+Calculation: AVG(Overall_Score) from Klaus scorecard processing
+Filter: SCORECARD_ID = '53921' (primary scorecard)
+Join: Via REVIEWEE_EMAIL to DIM_ZENDESK_USERS.USER_ID
+Group By: USER_ID, Week
+
+METRIC 4: Agent Schedule Adherence
+Source: DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+Calculation: SUM(ADHERENT_MINUTES) / SUM(SCHEDULED_MINUTES)
+Join: Via AGENT_EMAIL to DIM_ZENDESK_USERS.USER_NAME
+Group By: USER_NAME, Week
+Filter: Active Team Lead supervisors only
+
+METRIC 5: Agent FCR Performance
+Source: DBT_PRODUCTION.FCT_ZENDESK__MQR_TICKETS with FCR logic
+Calculation: (Resolved First Time / Total Contacts) * 100
+Channels: Chat and Voice only
+Group By: ASSIGNEE_ID, Week
+
+=== SUPERVISOR FILTERING FOR AGENTS ===
+Active supervisors filter in Agent queries:
+- Christine Presto, Erin Wood, Gian Gabrillo, Guren Onal
+- Joan Mallari, Jonathan Melenson, Kimberly Gasing, Mbali Gumede  
+- Miguel Salas, Ricardo Birck, Sinead Foley, Yiannis Spanoudis, Yolanda Coughlin
+
+AGENT PERFORMANCE QUERY PATTERN:
+BUSINESS QUESTIONS: "How is John Smith performing?", "Agent performance this week", "Show me Sarah's metrics", "Compare agent AHT"
+
+SQL TEMPLATE STRUCTURE:
+SELECT 
+    DATE_TRUNC('week', SOLVED_AT_PST) AS week_start,
+    "Dim Zendesk Users - Assignee"."USER_NAME" AS agent_name,
+    AVG(aht_metrics.AHT) AS avg_aht,
+    AVG(csat_metrics.CSAT) AS avg_csat, 
+    AVG(adherence_metrics.adherence_pct) AS avg_adherence,
+    AVG(qa_metrics.qa_score) AS avg_qa_score,
+    AVG(fcr_metrics.fcr_rate) AS avg_fcr
+FROM base_agent_ticket_data
+LEFT JOIN [metric_specific_subqueries] ON (week + agent_id match)
+WHERE "Dim Zendesk Users - Assignee"."SUPERVISOR" IN (active_supervisor_list)
+    AND LOWER("Dim Zendesk Users - Assignee"."USER_NAME") LIKE '%[agent_name]%'
+    AND date_range_filtering
+GROUP BY week_start, agent_name, ASSIGNEE_ID
+ORDER BY week_start ASC, agent_name ASC
+
+AGENT BENCHMARKS:
+- AHT (Chat + Voice): <12 minutes individual target
+- CSAT: >85% satisfaction rate  
+- Schedule Adherence: >90% adherence rate
+- QA Score: >85% quality score
+- FCR: >80% first contact resolution rate
+
+AGENT BUSINESS QUESTION PATTERNS:
+
+AGENT-SPECIFIC QUESTIONS:
+Keywords: Specific agent names, "agent", "individual", specific person names
+Examples: "How is John Smith performing?", "Sarah's AHT performance", "Mike's CSAT trends"
+Filter: Specific agent name matching via USER_NAME
+
+METRIC-SPECIFIC QUESTIONS:
+Keywords: "agent AHT", "individual CSAT", "agent adherence", "agent QA", "agent FCR"
+Examples: "Agent AHT performance", "Individual CSAT trends", "QA coaching needs by agent"
+Focus: Single metric across all agents
+
+COMPARATIVE QUESTIONS:
+Keywords: "compare agents", "best agent", "worst performer", "ranking agents", "top agents"
+Examples: "Which agent has best AHT?", "Compare agent performance", "Top performing agents"
+Output: All agents with comparative metrics
+
+COACHING QUESTIONS:
+Keywords: "coaching", "improvement", "training needs", "performance issues"
+Examples: "Agents needing coaching", "Performance improvement areas", "Training priorities"
+Focus: Agents below benchmarks or with declining performance
+
+=== COMPLEX JOINS REQUIRED FOR AGENT PERFORMANCE ===
+
+BASE DATA: FCT_ZENDESK__MQR_TICKETS (weekly aggregated by agent)
+JOIN 1: ZENDESK_TICKET_AGENT__HANDLE_TIME (AHT metrics via USER_ID)
+JOIN 2: RPT_CSAT_SURVEY_DETAILS (CSAT via OFFERING_ASSIGNEE_ID)
+JOIN 3: Klaus Reviews CTE + DIM_ZENDESK_USERS (QA via REVIEWEE_EMAIL → USER_ID)
+JOIN 4: RPT_AGENT_SCHEDULE_ADHERENCE + DIM_ZENDESK_USERS (Adherence via AGENT_EMAIL → USER_NAME)
+JOIN 5: FCR CTE (FCR calculation via ASSIGNEE_ID)
+JOIN 6: DIM_ZENDESK_USERS (Agent details via USER_ID, supervisor filtering)
+
+DATE RANGE FILTERING:
+Standard range: 6-8 weeks of historical data
+Current date exclusions for adherence: < current date in PST
+All metrics use SOLVED_AT_PST for consistency

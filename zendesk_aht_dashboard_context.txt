@@ -1,0 +1,203 @@
+ZENDESK AVERAGE HANDLE TIME (AHT) DASHBOARD CONTEXT FOR BI QUERY GENERATION
+
+=== DASHBOARD: Average Handle Time (AHT) Metrics ===
+
+DASHBOARD PURPOSE:  
+Track agent performance through Average Handle Time across different contact channels (Chat, Voice, Web) with weekly trends
+
+USED BY TEAMS:
+- Team Leads: Agent performance monitoring and coaching
+- Operations Managers: Productivity tracking and capacity planning
+- QA Team: Performance standard compliance
+- Agents: Personal performance tracking
+
+KEY BUSINESS QUESTIONS:
+- "What's our average handle time for chat this week?"
+- "Show me AHT trends for voice over last month"
+- "How does chat AHT compare to voice?"  
+- "Which agents have high handle time?"
+- "What's the median AHT vs mean AHT?"
+- "AHT week over week trends"
+
+=== PRIMARY TABLE: DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME ===
+
+KEY COLUMNS:
+- HANDLE_TIME_IN_MINUTES: Agent handle time for the ticket in minutes
+- AHT_TYPE: Channel type ('AHT - Chat', 'AHT - Voice', 'AHT - Web')  
+- CREATED_AT_PST: Ticket creation timestamp in PST
+- GROUP_NAME: Team/group name (filter for '%wops%' for Worker Operations)
+- AGENT_NAME: Individual agent identifier
+- TICKET_ID: Unique ticket identifier
+
+AHT TYPE MAPPING:
+Chat: AHT_TYPE = 'AHT - Chat'
+Voice: AHT_TYPE = 'AHT - Voice'  
+Web: AHT_TYPE = 'AHT - Web'
+
+=== STANDARD FILTERS (ALWAYS APPLY) ===
+
+MINIMUM HANDLE TIME:
+HANDLE_TIME_IN_MINUTES >= 2  (Excludes very quick interactions that may be system errors)
+
+WOPS TEAM FILTER:
+LOWER(GROUP_NAME) LIKE '%wops%'  (Focus on Worker Operations team)
+
+=== QUERY PATTERNS ===
+
+PATTERN 1: Weekly AHT Trends by Channel
+BUSINESS QUESTIONS: "Show me chat AHT trends", "Weekly AHT for voice channel"
+SELECT 
+    DATE_TRUNC('week', CREATED_AT_PST) AS week_start,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = 'AHT - Chat'  -- Change for different channels
+    AND CREATED_AT_PST >= CAST('2025-06-15 00:00:00' AS timestampntz)
+    AND CREATED_AT_PST < CAST('2025-07-27 00:00:00' AS timestampntz)
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+GROUP BY DATE_TRUNC('week', CREATED_AT_PST)
+ORDER BY week_start ASC
+
+PATTERN 2: Daily AHT by Channel
+BUSINESS QUESTIONS: "Daily AHT for this week", "Show me today's handle time"
+SELECT 
+    DATE_TRUNC('day', CREATED_AT_PST) AS day,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = 'AHT - Chat'
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND CREATED_AT_PST >= [DATE_RANGE]
+GROUP BY DATE_TRUNC('day', CREATED_AT_PST)
+ORDER BY day ASC
+
+PATTERN 3: Agent-Level AHT Performance
+BUSINESS QUESTIONS: "Which agents have highest AHT?", "Show me individual agent performance"
+SELECT 
+    AGENT_NAME,
+    COUNT(*) AS ticket_count,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = 'AHT - Chat'
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND CREATED_AT_PST >= [DATE_RANGE]
+GROUP BY AGENT_NAME
+HAVING COUNT(*) >= 10  -- Minimum ticket threshold for statistical significance
+ORDER BY mean_aht DESC
+
+PATTERN 4: Multi-Channel AHT Comparison
+BUSINESS QUESTIONS: "Compare AHT across all channels", "Which channel has lowest AHT?"
+SELECT 
+    AHT_TYPE,
+    COUNT(*) AS ticket_count,
+    AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY HANDLE_TIME_IN_MINUTES) AS median_aht
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE IN ('AHT - Chat', 'AHT - Voice', 'AHT - Web')
+    AND HANDLE_TIME_IN_MINUTES >= 2
+    AND LOWER(GROUP_NAME) LIKE '%wops%'
+    AND CREATED_AT_PST >= [DATE_RANGE]
+GROUP BY AHT_TYPE
+ORDER BY mean_aht ASC
+
+=== TIME PERIOD PATTERNS FOR AHT ===
+
+THIS WEEK:
+CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '1 week'
+
+LAST WEEK:
+CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'  
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE)
+
+LAST 4 WEEKS:
+CREATED_AT_PST >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '4 weeks'
+AND CREATED_AT_PST < DATE_TRUNC('week', CURRENT_DATE)
+
+THIS MONTH:
+CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE)
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+
+LAST 3 MONTHS:
+CREATED_AT_PST >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '3 months'
+AND CREATED_AT_PST < DATE_TRUNC('month', CURRENT_DATE)
+
+=== AHT BENCHMARKS AND THRESHOLDS ===
+
+CHAT AHT TARGETS:
+- Good: Under 15 minutes
+- Target: Under 12 minutes  
+- Excellent: Under 8 minutes
+
+VOICE AHT TARGETS:  
+- Good: Under 20 minutes
+- Target: Under 15 minutes
+- Excellent: Under 10 minutes
+
+WEB AHT TARGETS:
+- Good: Under 10 minutes  
+- Target: Under 7 minutes
+- Excellent: Under 5 minutes
+
+STATISTICAL THRESHOLDS:
+- Minimum tickets for agent analysis: 10 tickets
+- Minimum handle time to include: 2 minutes
+- Outlier threshold: Handle time > 120 minutes (exclude from averages)
+
+=== COMMON BUSINESS QUESTIONS → SQL MAPPING ===
+
+"What's our chat AHT this week?"
+→ Filter: AHT_TYPE = 'AHT - Chat', Date = this week
+→ Metric: AVG(HANDLE_TIME_IN_MINUTES)
+
+"Show me weekly AHT trends for voice"
+→ Filter: AHT_TYPE = 'AHT - Voice', Date = last 8 weeks
+→ Group by: Week
+→ Metrics: AVG and MEDIAN handle time
+
+"Which agents need AHT coaching?"
+→ Filter: AHT_TYPE specified, recent date range
+→ Group by: Agent
+→ Filter: AVG(HANDLE_TIME_IN_MINUTES) > threshold
+→ Order by: highest AHT first
+
+"Compare chat vs voice AHT performance"
+→ Filter: AHT_TYPE IN ('AHT - Chat', 'AHT - Voice')
+→ Group by: AHT_TYPE  
+→ Metrics: AVG, MEDIAN, COUNT
+
+"Weekly AHT trend week over week"
+→ Group by: DATE_TRUNC('week', CREATED_AT_PST)
+→ Metrics: AVG(HANDLE_TIME_IN_MINUTES) AS current_week
+→ Include: LAG() for previous week comparison
+
+=== ADVANCED AHT ANALYSIS PATTERNS ===
+
+AHT Distribution Analysis:
+SELECT 
+    CASE WHEN HANDLE_TIME_IN_MINUTES <= 5 THEN '0-5 min'
+         WHEN HANDLE_TIME_IN_MINUTES <= 10 THEN '5-10 min'  
+         WHEN HANDLE_TIME_IN_MINUTES <= 15 THEN '10-15 min'
+         WHEN HANDLE_TIME_IN_MINUTES <= 30 THEN '15-30 min'
+         ELSE '30+ min' END AS aht_bucket,
+    COUNT(*) AS ticket_count
+FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME
+WHERE AHT_TYPE = 'AHT - Chat' AND [STANDARD_FILTERS]
+GROUP BY aht_bucket ORDER BY MIN(HANDLE_TIME_IN_MINUTES)
+
+Week over Week AHT Change:
+SELECT 
+    week_start,
+    mean_aht,
+    LAG(mean_aht) OVER (ORDER BY week_start) AS prev_week_aht,
+    mean_aht - LAG(mean_aht) OVER (ORDER BY week_start) AS wow_change
+FROM (
+    SELECT DATE_TRUNC('week', CREATED_AT_PST) AS week_start,
+           AVG(HANDLE_TIME_IN_MINUTES) AS mean_aht
+    FROM DBT_PRODUCTION.ZENDESK_TICKET_AGENT__HANDLE_TIME  
+    WHERE [FILTERS] GROUP BY week_start
+) ORDER BY week_start
