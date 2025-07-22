@@ -139,13 +139,16 @@ Consider questions about specific metrics, counts, performance data, or "show me
 
 {question}
 
-Instructions:
-- Use the vector store knowledge to understand which tables and columns to use
-- Generate proper Snowflake SQL syntax
+CRITICAL INSTRUCTIONS:
+- Use EXACT table names from the knowledge base (including schema prefixes like ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE)
+- Use EXACT column names as specified in the table definitions
+- For QA score questions, use the RPT_WOPS_AGENT_PERFORMANCE table which has QA_SCORE column
+- Generate proper Snowflake SQL syntax with correct date filters
 - Include appropriate filters, joins, and aggregations
-- Return ONLY the SQL query, no explanations
+- For "this week" questions, use proper date filtering like WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
+- Return ONLY the executable SQL query, no explanations or markdown formatting
 
-Use the business intelligence knowledge base to understand table structures and relationships."""
+Review the knowledge base carefully for exact table and column names before generating the query."""
             
             sql_query = await self.model_provider.handle_conversational(sql_prompt, context)
             
@@ -158,6 +161,27 @@ Use the business intelligence knowledge base to understand table structures and 
             if sql_query.endswith('```'):
                 sql_query = sql_query[:-3]
             sql_query = sql_query.strip()
+            
+            # Fix common table name errors the Assistant makes
+            # Replace incorrect table names with correct ones from knowledge base
+            table_corrections = [
+                ('ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE'),
+                ('ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE'),
+                ('ANALYTICS.DBT_PRODUCTION.WOPS_TICKETS', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS'),
+                # Handle cases without schema prefix (but be careful not to double-replace)
+            ]
+            
+            original_sql = sql_query
+            corrections_made = []
+            for incorrect, correct in table_corrections:
+                if incorrect in sql_query:
+                    sql_query = sql_query.replace(incorrect, correct)
+                    corrections_made.append((incorrect, correct))
+            
+            if corrections_made:
+                print(f"🔧 Fixed table names in SQL query:")
+                for incorrect, correct in corrections_made:
+                    print(f"   {incorrect} → {correct}")
             
             print(f"🔍 Generated SQL: {sql_query[:100]}...")
             
