@@ -219,9 +219,9 @@ Original Question: {question}
 Query Results:
 {results}
 
-{f"SQL Query Used: {sql_query}" if sql_query else ""}
+{f"SQL Query Used: {sql_query}" if sql_query and self._user_requested_sql(question) else ""}
 
-Provide a clear, business-friendly summary with key insights and include the SQL query at the end if provided."""
+Provide a clear, business-friendly summary with key insights. Only include the SQL query in your response if it was explicitly provided in the context above."""
 
         messages = [{"role": "user", "content": user_message}]
         
