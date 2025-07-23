@@ -147,14 +147,28 @@ CRITICAL INSTRUCTIONS:
 - Include appropriate filters, joins, and aggregations
 - For "this week" questions, use proper date filtering like WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
 
-IMPORTANT NAME MATCHING RULES:
-- When filtering by person names (ASSIGNEE_NAME, SUPERVISOR, etc.), ALWAYS use LIKE with wildcards for partial matching
-- Examples: 
-  * "Sine" -> WHERE ASSIGNEE_NAME LIKE '%Sine%'
-  * "Lindsay" -> WHERE ASSIGNEE_NAME LIKE '%Lindsay%'
-  * "John Smith" -> WHERE ASSIGNEE_NAME LIKE '%John%Smith%' OR ASSIGNEE_NAME LIKE '%Smith%'
-- This allows matching partial names, nicknames, and variations
-- If the query might return multiple people, include ASSIGNEE_NAME in SELECT to show all matches
+IMPORTANT TABLE-SPECIFIC COLUMN RULES:
+- Use the CORRECT column names for each table:
+
+RPT_WOPS_AGENT_PERFORMANCE table:
+  * Person column: ASSIGNEE_NAME
+  * Date column: SOLVED_WEEK
+  * Example: WHERE ASSIGNEE_NAME LIKE '%Sine%' AND SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
+
+RPT_AGENT_SCHEDULE_ADHERENCE table:
+  * Person column: AGENT_NAME
+  * Date column: ADHERENCE_DATE
+  * Key columns: ADHERENT_MINUTES, SCHEDULED_MINUTES, ADHERENCE_PERCENTAGE, SCHEDULED_TASK
+  * Example: WHERE AGENT_NAME LIKE '%Sine%' AND ADHERENCE_DATE >= CURRENT_DATE - INTERVAL '7 days'
+  * Note: ADHERENCE_PERCENTAGE is already calculated, or use ADHERENT_MINUTES/SCHEDULED_MINUTES for custom calculations
+
+RPT_WOPS_TL_PERFORMANCE table:
+  * Person column: SUPERVISOR
+  * Date column: SOLVED_WEEK
+  * Example: WHERE SUPERVISOR LIKE '%John%' AND SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE)
+
+- Always use LIKE with wildcards for partial name matching
+- Always include the person name column in SELECT to show all matches and handle disambiguation
 
 Return ONLY the executable SQL query, no explanations or markdown formatting.
 
@@ -207,6 +221,8 @@ Review the knowledge base carefully for exact table and column names before gene
                 name_column = None
                 if 'ASSIGNEE_NAME' in df.columns:
                     name_column = 'ASSIGNEE_NAME'
+                elif 'AGENT_NAME' in df.columns:
+                    name_column = 'AGENT_NAME'
                 elif 'SUPERVISOR' in df.columns:
                     name_column = 'SUPERVISOR'
                 
@@ -215,7 +231,7 @@ Review the knowledge base carefully for exact table and column names before gene
                     if len(unique_names) > 1:
                         # Multiple people found - ask for clarification
                         names_list = '\n'.join([f"• {name}" for name in unique_names])
-                        person_type = "agents" if name_column == 'ASSIGNEE_NAME' else "supervisors"
+                        person_type = "agents" if name_column in ['ASSIGNEE_NAME', 'AGENT_NAME'] else "supervisors"
                         clarification_response = f"""I found multiple {person_type} matching your search:
 
 {names_list}
