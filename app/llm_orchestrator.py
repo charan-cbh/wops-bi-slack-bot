@@ -145,9 +145,12 @@ CRITICAL INSTRUCTIONS:
 - For QA score questions, use the RPT_WOPS_AGENT_PERFORMANCE table which has QA_SCORE column
 - Generate proper Snowflake SQL syntax with correct date filters
 - Include appropriate filters, joins, and aggregations
-- Only add date filters when explicitly requested (e.g., "this week", "last month")
+- Only add date filters when explicitly requested (e.g., "this week", "last week", "last month")
 - For general performance questions without time specification, do not add date filters
-- For "this week" questions, use: WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
+- For date filtering, use these exact Snowflake patterns:
+  * "this week": WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
+  * "last week": WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
+  * "past 4 weeks": WHERE SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '3 week'
 
 IMPORTANT TABLE-SPECIFIC COLUMN RULES:
 - Use the CORRECT column names for each table:
