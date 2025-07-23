@@ -233,7 +233,9 @@ Review the knowledge base carefully for exact table and column names before gene
                     name_column = 'SUPERVISOR'
                 
                 # Only ask for clarification if this is a single-person query, not a "how many" or "list" query
-                is_list_query = any(phrase in question.lower() for phrase in ['how many', 'list', 'show all', 'count', 'give me all'])
+                is_list_query = any(phrase in question.lower() for phrase in [
+                    'how many', 'list', 'show all', 'count', 'give me all', 'give me the', 'names of', 'which agents', 'what agents'
+                ])
                 
                 if name_column and len(df) > 1 and not is_list_query:
                     unique_names = df[name_column].unique()
