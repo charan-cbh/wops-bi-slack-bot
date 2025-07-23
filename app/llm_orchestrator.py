@@ -277,6 +277,66 @@ Instructions:
                 
             except Exception as sql_error:
                 print(f"❌ SQL execution error: {sql_error}")
+                
+                # Check if it's a date-related SQL error and try a simpler approach
+                if "001003" in str(sql_error) or "SQL compilation error" in str(sql_error):
+                    print("🔄 Detected SQL compilation error, trying simplified query...")
+                    
+                    # Try to regenerate with simpler date logic
+                    simplified_prompt = f"""Generate a simpler SQL query for this question using basic date comparisons:
+
+{question}
+
+CRITICAL INSTRUCTIONS:
+- Use EXACT table names: ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE
+- Use correct column names: ASSIGNEE_NAME, QA_SCORE, SOLVED_WEEK
+- For "last week" use: WHERE SOLVED_WEEK < DATE_TRUNC('week', CURRENT_DATE)
+- For agent names use: WHERE ASSIGNEE_NAME LIKE '%name%'
+- Keep the query as simple as possible
+- Return ONLY the SQL query"""
+                    
+                    try:
+                        simplified_sql = await self.model_provider.handle_conversational(simplified_prompt, context)
+                        simplified_sql = simplified_sql.strip()
+                        if simplified_sql.startswith('```sql'):
+                            simplified_sql = simplified_sql[6:]
+                        if simplified_sql.startswith('```'):
+                            simplified_sql = simplified_sql[3:]
+                        if simplified_sql.endswith('```'):
+                            simplified_sql = simplified_sql[:-3]
+                        simplified_sql = simplified_sql.strip()
+                        
+                        print(f"🔄 Trying simplified SQL: {simplified_sql[:100]}...")
+                        
+                        # Apply table name corrections
+                        table_corrections = [
+                            ('ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE'),
+                            ('ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE'),
+                            ('ANALYTICS.DBT_PRODUCTION.WOPS_TICKETS', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS'),
+                        ]
+                        
+                        for incorrect, correct in table_corrections:
+                            if incorrect in simplified_sql:
+                                simplified_sql = simplified_sql.replace(incorrect, correct)
+                        
+                        from app.snowflake_runner import run_query
+                        df_retry = run_query(simplified_sql)
+                        
+                        if not isinstance(df_retry, str) and hasattr(df_retry, 'empty') and not df_retry.empty:
+                            result_table = df_retry.to_string(index=False, max_rows=50)
+                            summary_prompt = f"""Provide a concise answer based on these results:
+
+Question: {question}
+Results: {result_table}
+
+Give a direct, brief answer with key numbers only."""
+                            
+                            final_response = await self.model_provider.handle_conversational(summary_prompt, context)
+                            return final_response, 'sql_with_data'
+                    
+                    except Exception as retry_error:
+                        print(f"❌ Simplified query also failed: {retry_error}")
+                
                 return f"❌ Error executing query: {str(sql_error)}", 'sql'
             
         except Exception as e:
