@@ -152,7 +152,9 @@ IMPORTANT TABLE-SPECIFIC COLUMN RULES:
 
 RPT_WOPS_AGENT_PERFORMANCE table:
   * Person column: ASSIGNEE_NAME
+  * Supervisor column: ASSIGNEE_SUPERVISOR
   * Date column: SOLVED_WEEK
+  * Key columns: NUM_TICKETS, AHT_MINUTES, QA_SCORE, FCR_PERCENTAGE
   * Example: WHERE ASSIGNEE_NAME LIKE '%Sine%' AND SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
 
 RPT_AGENT_SCHEDULE_ADHERENCE table:
@@ -223,6 +225,8 @@ Review the knowledge base carefully for exact table and column names before gene
                     name_column = 'ASSIGNEE_NAME'
                 elif 'AGENT_NAME' in df.columns:
                     name_column = 'AGENT_NAME'
+                elif 'ASSIGNEE_SUPERVISOR' in df.columns:
+                    name_column = 'ASSIGNEE_SUPERVISOR'
                 elif 'SUPERVISOR' in df.columns:
                     name_column = 'SUPERVISOR'
                 
