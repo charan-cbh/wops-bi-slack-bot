@@ -145,7 +145,9 @@ CRITICAL INSTRUCTIONS:
 - For QA score questions, use the RPT_WOPS_AGENT_PERFORMANCE table which has QA_SCORE column
 - Generate proper Snowflake SQL syntax with correct date filters
 - Include appropriate filters, joins, and aggregations
-- For "this week" questions, use proper date filtering like WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
+- Only add date filters when explicitly requested (e.g., "this week", "last month")
+- For general performance questions without time specification, do not add date filters
+- For "this week" questions, use: WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
 
 IMPORTANT TABLE-SPECIFIC COLUMN RULES:
 - Use the CORRECT column names for each table:
@@ -247,22 +249,20 @@ Please specify which person you're asking about by using their full name or a mo
                 result_table = df.to_string(index=False, max_rows=50)
                 
                 # Step 3: Summarize results using Assistant API with vector store context
-                summary_prompt = f"""Analyze and summarize these query results for the user:
+                summary_prompt = f"""Provide a concise answer to this question based on the query results:
 
-Original Question: {question}
-
-SQL Query Used: {sql_query}
+Question: {question}
 
 Results:
 {result_table}
 
 Instructions:
-- Provide a clear, business-focused summary of the results
-- Explain what the data means in practical terms
-- Include key insights and trends if visible
-- Use the business intelligence knowledge base to provide context
-- Format the response in a user-friendly way
-- If appropriate, suggest follow-up questions or actions"""
+- Give a direct, brief answer to the user's question
+- Include the key numbers/metrics they asked for
+- Keep it concise - no technical explanations about tables or procedures
+- Format numbers clearly (e.g., "QA score: 85.2%", "AHT: 12.5 minutes")
+- Only mention insights if they are directly relevant and brief
+- Do not explain what QA scores mean or suggest follow-up actions unless asked"""
 
                 final_response = await self.model_provider.handle_conversational(summary_prompt, context)
                 return final_response, 'sql_with_data'
