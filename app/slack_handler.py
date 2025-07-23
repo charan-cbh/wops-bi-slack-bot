@@ -252,42 +252,7 @@ async def process_app_mention(event):
         except Exception as e:
             print(f"⚠️ Could not send thinking indicator: {e}")
 
-        # Check if we should use BI Service instead of SQL generation
-        if should_use_bi_service(clean_question):
-            print(f"🔧 Routing to BI Service for AI-only response")
-            
-            # Delete thinking message
-            if thinking_msg:
-                try:
-                    slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
-                except:
-                    pass
-            
-            # Process with BI Service
-            try:
-                bi_response, bi_response_type = await process_with_bi_service(
-                    clean_question, user_id, channel_id
-                )
-                
-                print(f"📊 BI Service response type: {bi_response_type}")
-                
-                # Handle different response types
-                if bi_response_type == 'rate_limited':
-                    await send_slack_message(channel_id, bi_response, include_feedback_hint=False)
-                    return
-                elif bi_response_type == 'error':
-                    # Fallback to normal flow on BI Service error
-                    print(f"⚠️ BI Service error, falling back to normal flow: {bi_response}")
-                else:
-                    # Send AI response
-                    await send_slack_message(channel_id, bi_response, include_feedback_hint=False)
-                    return
-                    
-            except Exception as e:
-                print(f"❌ BI Service processing failed: {e}")
-                # Continue to normal flow as fallback
-        
-        # Use smart routing with assistant API
+        # Prioritize unified Assistant API approach when available
         if USE_ASSISTANT_API and ASSISTANT_ID:
             print(f"🤖 Using Assistant API with intelligent table selection")
 
@@ -389,7 +354,41 @@ async def process_app_mention(event):
                 await update_conversation_context(user_id, channel_id, clean_question, response, 'conversational')
 
         else:
-            # Fallback to embedding search
+            # Fallback: Check if we should use BI Service for conversational questions
+            if should_use_bi_service(clean_question):
+                print(f"🔧 Fallback: Routing to BI Service for AI-only response")
+                
+                # Delete thinking message
+                if thinking_msg:
+                    try:
+                        slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
+                    except:
+                        pass
+                
+                # Process with BI Service
+                try:
+                    bi_response, bi_response_type = await process_with_bi_service(
+                        clean_question, user_id, channel_id
+                    )
+                    
+                    print(f"📊 BI Service response type: {bi_response_type}")
+                    
+                    # Handle different response types
+                    if bi_response_type == 'rate_limited':
+                        await send_slack_message(channel_id, bi_response, include_feedback_hint=False)
+                        return
+                    elif bi_response_type == 'error':
+                        print(f"⚠️ BI Service error, falling back to embedding search: {bi_response}")
+                    else:
+                        # Send AI response
+                        await send_slack_message(channel_id, bi_response, include_feedback_hint=False)
+                        return
+                        
+                except Exception as e:
+                    print(f"❌ BI Service processing failed: {e}")
+                    # Continue to embedding search as final fallback
+            
+            # Final fallback to embedding search
             if thinking_msg:
                 try:
                     slack_client.chat_delete(channel=channel_id, ts=thinking_msg)
