@@ -146,7 +146,17 @@ CRITICAL INSTRUCTIONS:
 - Generate proper Snowflake SQL syntax with correct date filters
 - Include appropriate filters, joins, and aggregations
 - For "this week" questions, use proper date filtering like WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
-- Return ONLY the executable SQL query, no explanations or markdown formatting
+
+IMPORTANT NAME MATCHING RULES:
+- When filtering by person names (ASSIGNEE_NAME, SUPERVISOR, etc.), ALWAYS use LIKE with wildcards for partial matching
+- Examples: 
+  * "Sine" -> WHERE ASSIGNEE_NAME LIKE '%Sine%'
+  * "Lindsay" -> WHERE ASSIGNEE_NAME LIKE '%Lindsay%'
+  * "John Smith" -> WHERE ASSIGNEE_NAME LIKE '%John%Smith%' OR ASSIGNEE_NAME LIKE '%Smith%'
+- This allows matching partial names, nicknames, and variations
+- If the query might return multiple people, include ASSIGNEE_NAME in SELECT to show all matches
+
+Return ONLY the executable SQL query, no explanations or markdown formatting.
 
 Review the knowledge base carefully for exact table and column names before generating the query."""
             
@@ -192,6 +202,26 @@ Review the knowledge base carefully for exact table and column names before gene
                 
                 if isinstance(df, str) or (hasattr(df, 'empty') and df.empty):
                     return f"❌ Query execution failed or returned no data", 'sql'
+                
+                # Check if this is a name-based query that returned multiple people
+                name_column = None
+                if 'ASSIGNEE_NAME' in df.columns:
+                    name_column = 'ASSIGNEE_NAME'
+                elif 'SUPERVISOR' in df.columns:
+                    name_column = 'SUPERVISOR'
+                
+                if name_column and len(df) > 1:
+                    unique_names = df[name_column].unique()
+                    if len(unique_names) > 1:
+                        # Multiple people found - ask for clarification
+                        names_list = '\n'.join([f"• {name}" for name in unique_names])
+                        person_type = "agents" if name_column == 'ASSIGNEE_NAME' else "supervisors"
+                        clarification_response = f"""I found multiple {person_type} matching your search:
+
+{names_list}
+
+Please specify which person you're asking about by using their full name or a more specific identifier."""
+                        return clarification_response, 'sql_with_data'
                 
                 # Convert DataFrame to string for summarization
                 result_table = df.to_string(index=False, max_rows=50)
