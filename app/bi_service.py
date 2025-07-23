@@ -112,12 +112,11 @@ You have comprehensive knowledge about Clipboard Health's healthcare staffing pl
 - Professional account management and facility user roles
 
 Context & Guidelines:
-- For BUSINESS questions: Provide detailed, accurate information based on Clipboard Health's policies and procedures
-- For BI questions: Focus on providing clear, actionable business insights about operational metrics
-- When discussing metrics, explain what they mean and why they matter
-- If a question is about data you cannot access, explain what kind of analysis would be needed
-- Be concise but comprehensive in your responses
-- Always consider the business context and operational implications
+- Provide direct, concise answers to user questions
+- For BUSINESS questions: Give accurate information about policies and procedures
+- For BI questions: Provide key insights about operational metrics
+- Keep responses brief and focused - no lengthy explanations unless requested
+- Do not explain what metrics mean or suggest follow-up actions unless asked
 
 Available Data Domains:
 - Agent Performance (AHT, Schedule Adherence, Quality Scores)
@@ -281,18 +280,8 @@ def should_use_bi_service(question: str) -> bool:
     # Convert to lowercase for pattern matching
     q_lower = question.lower().strip()
     
-    # QA/Quality questions should go to BI Service (vector store has QA context) - check FIRST
-    qa_indicators = [
-        'qa score', 'qa scores', 'quality score', 'quality scores', 'quality metrics',
-        'quality rating', 'quality assessment', 'quality review', 'quality data',
-        'klaus', 'scorecard'
-    ]
-    
-    # Check QA patterns first (highest priority)
-    for indicator in qa_indicators:
-        if indicator in q_lower:
-            print(f"🏆 QA indicator '{indicator}' found, routing to BI Service (vector store has QA context)")
-            return True
+    # Note: QA/Quality questions now go through unified Assistant API instead of BI Service
+    # This ensures they get actual SQL execution and concise responses
     
     # Conversational questions should go to BI Service - check these second
     conversational_indicators = [
