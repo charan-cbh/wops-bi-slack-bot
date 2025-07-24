@@ -49,3 +49,29 @@ Thumbs.db
 # Cache
 .cache/
 .pytest_cache/
+
+# Fine-tuning and training files (keep local)
+*training_dataset*.jsonl
+verified_training_dataset.jsonl
+fine_tuning_training_dataset.jsonl
+add_*.py
+rebuild_*.py
+test_*_queries.py
+test_*_individual*.py
+test_*_routing*.py
+test_*_performance.py
+test_*_adherence.py
+test_*_supervisor*.py
+test_*_direct*.py
+test_*_final*.py
+test_*_concise*.py
+test_*_name*.py
+test_*_qa*.py
+debug_*.py
+update_to_finetuned_model.py
+test_finetuned*.py
+
+# Training guides and summaries (keep local)
+*FINE_TUNING*.md
+*TRAINING_DATASET*.md
+.env.finetuned
