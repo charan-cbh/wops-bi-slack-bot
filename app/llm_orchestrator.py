@@ -221,8 +221,19 @@ Review the knowledge base carefully for exact table and column names before gene
                 from app.snowflake_runner import run_query
                 df = run_query(sql_query)
                 
-                if isinstance(df, str) or (hasattr(df, 'empty') and df.empty):
-                    return f"❌ Query execution failed or returned no data", 'sql'
+                # Check if query returned an error
+                if isinstance(df, str):
+                    return f"❌ Query execution failed: {df}", 'sql'
+                
+                if hasattr(df, 'columns') and 'Error' in df.columns:
+                    error_msg = df.iloc[0]['Error'] if len(df) > 0 else "Unknown error"
+                    return f"❌ Query execution failed: {error_msg}", 'sql'
+                
+                # Check if query returned no data (empty results)
+                if hasattr(df, 'empty') and df.empty:
+                    # Provide helpful guidance for empty results
+                    helpful_message = self._generate_helpful_empty_result_message(question, sql_query)
+                    return helpful_message, 'sql_with_data'
                 
                 # Check if this is a name-based query that returned multiple people
                 name_column = None
@@ -559,6 +570,60 @@ Return ONLY the SQL query, no explanations."""
             print(f"❌ Error generating SQL: {e}")
             return f"-- Error generating SQL: {str(e)}"
     
+    def _generate_helpful_empty_result_message(self, question: str, sql_query: str) -> str:
+        """Generate helpful message for empty query results"""
+        
+        # Extract potential person/supervisor names from the question
+        question_lower = question.lower()
+        
+        # Check if this looks like a person-specific query
+        is_person_query = any(indicator in question_lower for indicator in [
+            'team', 'supervisor', 'agent', 'performance', 'metrics', "'s", 'individual'
+        ])
+        
+        # Check if this is asking about a team vs individual
+        is_team_query = any(indicator in question_lower for indicator in [
+            'team', 'supervisor team', "'s team", 'team performance'
+        ])
+        
+        if is_person_query:
+            if is_team_query:
+                return """📊 **No team data found for this supervisor.**
+
+**Possible reasons:**
+• The supervisor name might not be exact (try checking spelling)
+• This person might not currently have a team
+• Data might not be available for the requested time period
+
+**Helpful suggestions:**
+• Ask "How many teams are there in WOPS?" to see all active supervisors
+• Try asking "Which supervisors have teams this week?"
+• Use partial names if unsure of exact spelling"""
+            else:
+                return """📊 **No data found for this person.**
+
+**Possible reasons:**
+• The name might not be exact (try checking spelling)
+• This person might no longer be active
+• Data might not be available for the requested time period
+
+**Helpful suggestions:**
+• Ask "How many agents are there?" to see all active agents
+• Try using partial names if unsure of exact spelling
+• Check if this person might be a supervisor instead of an agent"""
+        else:
+            return """📊 **No data found for your query.**
+
+**Possible reasons:**
+• The requested data might not be available for this time period
+• The criteria might be too specific
+• Data might be filtered out by business rules
+
+**Helpful suggestions:**
+• Try broadening the time period (e.g., "last month" instead of "this week")
+• Ask for available data first (e.g., "What data is available?")
+• Check if your question matches available metrics"""
+
     def _format_rate_limit_message(self, rate_limit_info: Dict) -> str:
         """Format rate limit exceeded message"""
         reason = rate_limit_info.get('reason', 'unknown')
