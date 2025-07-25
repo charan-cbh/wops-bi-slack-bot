@@ -302,7 +302,12 @@ Instructions:
 - Keep it concise - no technical explanations about tables or procedures
 - Format numbers clearly (e.g., "QA score: 85.2%", "AHT: 12.5 minutes")
 - Only mention insights if they are directly relevant and brief
-- Do not explain what QA scores mean or suggest follow-up actions unless asked"""
+- Do not explain what QA scores mean or suggest follow-up actions unless asked
+
+SLACK FORMATTING:
+- Use *text* for bold (single asterisk), NOT **text**
+- Use - for bullet points
+- Keep formatting simple and Slack-compatible"""
 
                 final_response = await self.model_provider.handle_conversational(summary_prompt, context)
                 return final_response, 'sql_with_data'

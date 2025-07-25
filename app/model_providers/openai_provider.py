@@ -201,6 +201,12 @@ Your task is to:
 5. Provide context about what the results mean for business operations
 6. If the SQL query is provided, include it in a code block at the end
 
+FORMATTING RULES FOR SLACK:
+- Use *text* for bold (single asterisk), NOT **text**
+- Use bullet points with - or •
+- Keep formatting simple and Slack-compatible
+- Avoid markdown that doesn't work in Slack
+
 Be concise but informative. Focus on actionable insights rather than just restating the data."""
 
         user_message = f"""Please analyze and summarize these query results:
