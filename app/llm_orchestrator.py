@@ -246,12 +246,18 @@ Review the knowledge base carefully for exact table and column names before gene
                 elif 'SUPERVISOR' in df.columns:
                     name_column = 'SUPERVISOR'
                 
-                # Only ask for clarification if this is a single-person query, not a "how many" or "list" query
+                # Only ask for clarification if this is a single-person query, not a "how many", "list", or "team" query
                 is_list_query = any(phrase in question.lower() for phrase in [
                     'how many', 'list', 'show all', 'count', 'give me all', 'give me the', 'names of', 'which agents', 'what agents'
                 ])
                 
-                if name_column and len(df) > 1 and not is_list_query:
+                # Check if this is a team query (where multiple results are expected)
+                is_team_query = any(phrase in question.lower() for phrase in [
+                    'team', 'adherence', 'schedule adherence', 'team adherence', 'team performance', 
+                    'team metrics', 'team scores', 'team results'
+                ])
+                
+                if name_column and len(df) > 1 and not is_list_query and not is_team_query:
                     unique_names = df[name_column].unique()
                     if len(unique_names) > 1:
                         # Multiple people found - ask for clarification
