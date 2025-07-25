@@ -174,6 +174,21 @@ RPT_WOPS_TL_PERFORMANCE table:
   * Date column: SOLVED_WEEK
   * Example: WHERE SUPERVISOR LIKE '%John%' AND SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE)
 
+CRITICAL: FOR TEAM QUERIES (when asking about someone's TEAM):
+- Use CTE pattern to find team members first, then get their data
+- NEVER search for the supervisor name in AGENT_NAME - supervisors are in ASSIGNEE_SUPERVISOR column
+- Example for "Gian's team adherence":
+  SELECT AGENT_NAME, ADHERENCE_PERCENTAGE 
+  FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
+  WHERE AGENT_NAME IN (
+    SELECT ASSIGNEE_NAME 
+    FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE 
+    WHERE ASSIGNEE_SUPERVISOR LIKE '%Gian%'
+    AND SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
+  )
+  AND ADHERENCE_DATE >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
+  AND ADHERENCE_DATE < DATE_TRUNC('week', CURRENT_DATE)
+
 - Always use LIKE with wildcards for partial name matching
 - Always include the person name column in SELECT to show all matches and handle disambiguation
 
