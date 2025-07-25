@@ -476,7 +476,14 @@ Give a direct, brief answer with key numbers only."""
                     print(f"⚠️ Error with intelligent analyst: {e}")
             
             # Try intelligent data analyst for non-personal questions too
-            if not is_truly_personal:
+            # Skip intelligent data analyst for team schedule adherence queries to use fine-tuned model CTE patterns
+            is_team_adherence_query = (
+                'team' in question.lower() and 
+                'adherence' in question.lower()
+                # Don't restrict by table since system may select different primary table
+            )
+            
+            if not is_truly_personal and not is_team_adherence_query:
                 print("🧠 Trying intelligent data analyst for non-personal question")
                 try:
                     from app.intelligent_data_analyst import intelligent_data_analyst
@@ -502,6 +509,8 @@ Give a direct, brief answer with key numbers only."""
                         
                 except Exception as e:
                     print(f"⚠️ Error with intelligent analyst: {e}")
+            elif is_team_adherence_query:
+                print("🎯 Skipping intelligent data analyst for team adherence query - using fine-tuned model with CTE patterns")
             
             # Fallback to model provider for SQL generation
             try:
