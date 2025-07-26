@@ -307,8 +307,8 @@ def create_openai_provider(api_key: str = None, model_name: str = None, use_assi
         api_key = os.getenv('OPENAI_API_KEY')
     
     if not model_name:
-        # Default to latest fine-tuned model (v3) with comprehensive training data
-        model_name = os.getenv('OPENAI_MODEL', 'ft:gpt-4o-mini-2024-07-18:clipboard-health:wops-bi-bot-v3:BxHvIxl3')
+        # Default to latest fine-tuned model (v4) with comprehensive training data
+        model_name = os.getenv('OPENAI_MODEL', 'ft:gpt-4o-mini-2024-07-18:clipboard-health:wops-bi-bot-v4:BxVEcoEm')
     
     if use_assistant_api is None:
         use_assistant_api = os.getenv('USE_ASSISTANT_API', 'false').lower() == 'true'
