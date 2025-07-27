@@ -367,6 +367,7 @@ WITH FCR_ANALYSIS AS (
     CASE
       WHEN GROUP_ID = '17837476387479' THEN 'Chat'
       WHEN GROUP_ID = '28949203098007' THEN 'Voice'
+      WHEN GROUP_ID = '5495272772503' THEN 'Web'
       ELSE 'Other'
     END AS CONTACT_CHANNEL,
     -- Next ticket by same customer
