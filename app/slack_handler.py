@@ -822,7 +822,7 @@ async def execute_sql_and_respond(clean_question: str, sql: str, channel_id: str
         execution_time = time.time() - start_time
 
         if isinstance(df, str):
-            # Execution failed
+            # Execution failed - df is the error message string
             print(f"❌ SQL execution failed: {df}")
             print(f"⏱️ Execution time: {execution_time:.2f}s")
 
@@ -990,8 +990,8 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
         df = run_query(extracted_sql)
         execution_time = time.time() - start_time
 
-        if isinstance(df, str) or len(df) == 0:
-            # Execution failed
+        if isinstance(df, str):
+            # Execution failed - df is now the error message string
             print(f"❌ SQL execution failed: {df}")
             print(f"⏱️ Execution time: {execution_time:.2f}s")
 
@@ -999,6 +999,19 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
             return {
                 'success': False,
                 'error': df,
+                'result_count': 0,
+                'execution_time': execution_time
+            }
+        
+        if len(df) == 0:
+            # Query succeeded but returned no data
+            print(f"⚠️ SQL execution succeeded but returned no data")
+            print(f"⏱️ Execution time: {execution_time:.2f}s")
+
+            # Return info for retry logic
+            return {
+                'success': False,
+                'error': "Query returned no data",
                 'result_count': 0,
                 'execution_time': execution_time
             }

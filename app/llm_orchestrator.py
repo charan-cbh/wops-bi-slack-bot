@@ -135,99 +135,13 @@ Consider questions about specific metrics, counts, performance data, or "show me
         """Handle data questions using Assistant API for SQL generation and result summarization"""
         try:
             # Step 1: Generate SQL using Assistant API with vector store context
-            sql_prompt = f"""Generate a SQL query to answer this question using the business intelligence knowledge base:
+            sql_prompt = f"""Generate a SQL query for Snowflake execution to answer this question:
 
 {question}
 
-CRITICAL INSTRUCTIONS:
-- Use EXACT table names from the knowledge base (including schema prefixes like ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE)
-- Use EXACT column names as specified in the table definitions
-- For QA score questions, use the RPT_WOPS_AGENT_PERFORMANCE table which has QA_SCORE column
-- Generate proper Snowflake SQL syntax with correct date filters
-- Include appropriate filters, joins, and aggregations
-- Only add date filters when explicitly requested (e.g., "this week", "last week", "last month")
-- For general performance questions without time specification, do not add date filters
-- For date filtering, use these exact Snowflake patterns:
-  * "this week": WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE)
-  * "last week": WHERE SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
-  * "past 4 weeks": WHERE SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '3 week'
-
-IMPORTANT TABLE-SPECIFIC COLUMN RULES:
-- Use the CORRECT column names for each table:
-
-RPT_WOPS_AGENT_PERFORMANCE table:
-  * Person column: ASSIGNEE_NAME
-  * Supervisor column: ASSIGNEE_SUPERVISOR
-  * Date column: SOLVED_WEEK
-  * Key columns: NUM_TICKETS, AHT_MINUTES, QA_SCORE, FCR_PERCENTAGE
-  * Example: WHERE ASSIGNEE_NAME LIKE '%Sine%' AND SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
-
-RPT_AGENT_SCHEDULE_ADHERENCE table:
-  * Person column: AGENT_NAME
-  * Date column: ADHERENCE_DATE
-  * Key columns: ADHERENT_MINUTES, SCHEDULED_MINUTES, ADHERENCE_PERCENTAGE, SCHEDULED_TASK
-  * Example: WHERE AGENT_NAME LIKE '%Sine%' AND ADHERENCE_DATE >= CURRENT_DATE - INTERVAL '7 days'
-  * Note: ADHERENCE_PERCENTAGE is already calculated, or use ADHERENT_MINUTES/SCHEDULED_MINUTES for custom calculations
-
-RPT_WOPS_TL_PERFORMANCE table:
-  * Person column: SUPERVISOR
-  * Date column: SOLVED_WEEK
-  * Example: WHERE SUPERVISOR LIKE '%John%' AND SOLVED_WEEK >= DATE_TRUNC('week', CURRENT_DATE)
-
-CRITICAL: FOR TEAM QUERIES (when asking about someone's TEAM):
-- Use CTE pattern to find team members first, then get their data
-- NEVER search for the supervisor name in AGENT_NAME - supervisors are in ASSIGNEE_SUPERVISOR column
-- Example for "Gian's team adherence":
-  SELECT AGENT_NAME, ADHERENCE_PERCENTAGE 
-  FROM ANALYTICS.DBT_PRODUCTION.RPT_AGENT_SCHEDULE_ADHERENCE
-  WHERE AGENT_NAME IN (
-    SELECT ASSIGNEE_NAME 
-    FROM ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE 
-    WHERE ASSIGNEE_SUPERVISOR LIKE '%Gian%'
-    AND SOLVED_WEEK = DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
-  )
-  AND ADHERENCE_DATE >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week'
-  AND ADHERENCE_DATE < DATE_TRUNC('week', CURRENT_DATE)
-
-- Always use LIKE with wildcards for partial name matching
-- Always include the person name column in SELECT to show all matches and handle disambiguation
-
-Return ONLY the executable SQL query, no explanations or markdown formatting.
-
-Review the knowledge base carefully for exact table and column names before generating the query."""
+Return only the SQL query, no explanations."""
             
             sql_query = await self.model_provider.handle_conversational(sql_prompt, context)
-            
-            # Clean up the SQL (remove markdown formatting)
-            sql_query = sql_query.strip()
-            if sql_query.startswith('```sql'):
-                sql_query = sql_query[6:]
-            if sql_query.startswith('```'):
-                sql_query = sql_query[3:]
-            if sql_query.endswith('```'):
-                sql_query = sql_query[:-3]
-            sql_query = sql_query.strip()
-            
-            # Fix common table name errors the Assistant makes
-            # Replace incorrect table names with correct ones from knowledge base
-            table_corrections = [
-                ('ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE'),
-                ('ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE'),
-                ('ANALYTICS.DBT_PRODUCTION.WOPS_TICKETS', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS'),
-                # Handle cases without schema prefix (but be careful not to double-replace)
-            ]
-            
-            original_sql = sql_query
-            corrections_made = []
-            for incorrect, correct in table_corrections:
-                if incorrect in sql_query:
-                    sql_query = sql_query.replace(incorrect, correct)
-                    corrections_made.append((incorrect, correct))
-            
-            if corrections_made:
-                print(f"🔧 Fixed table names in SQL query:")
-                for incorrect, correct in corrections_made:
-                    print(f"   {incorrect} → {correct}")
             
             print(f"🔍 Generated SQL: {sql_query[:100]}...")
             
@@ -236,54 +150,15 @@ Review the knowledge base carefully for exact table and column names before gene
                 from app.snowflake_runner import run_query
                 df = run_query(sql_query)
                 
-                # Check if query returned an error
+                # Check if query returned an error (now returned as string)
                 if isinstance(df, str):
-                    return f"❌ Query execution failed: {df}", 'sql'
-                
-                if hasattr(df, 'columns') and 'Error' in df.columns:
-                    error_msg = df.iloc[0]['Error'] if len(df) > 0 else "Unknown error"
-                    return f"❌ Query execution failed: {error_msg}", 'sql'
+                    return f"❌ Query execution failed: {df}", 'error'
                 
                 # Check if query returned no data (empty results)
                 if hasattr(df, 'empty') and df.empty:
                     # Provide helpful guidance for empty results
                     helpful_message = self._generate_helpful_empty_result_message(question, sql_query)
                     return helpful_message, 'sql_with_data'
-                
-                # Check if this is a name-based query that returned multiple people
-                name_column = None
-                if 'ASSIGNEE_NAME' in df.columns:
-                    name_column = 'ASSIGNEE_NAME'
-                elif 'AGENT_NAME' in df.columns:
-                    name_column = 'AGENT_NAME'
-                elif 'ASSIGNEE_SUPERVISOR' in df.columns:
-                    name_column = 'ASSIGNEE_SUPERVISOR'
-                elif 'SUPERVISOR' in df.columns:
-                    name_column = 'SUPERVISOR'
-                
-                # Only ask for clarification if this is a single-person query, not a "how many", "list", or "team" query
-                is_list_query = any(phrase in question.lower() for phrase in [
-                    'how many', 'list', 'show all', 'count', 'give me all', 'give me the', 'names of', 'which agents', 'what agents'
-                ])
-                
-                # Check if this is a team query (where multiple results are expected)
-                is_team_query = any(phrase in question.lower() for phrase in [
-                    'team', 'adherence', 'schedule adherence', 'team adherence', 'team performance', 
-                    'team metrics', 'team scores', 'team results'
-                ])
-                
-                if name_column and len(df) > 1 and not is_list_query and not is_team_query:
-                    unique_names = df[name_column].unique()
-                    if len(unique_names) > 1:
-                        # Multiple people found - ask for clarification
-                        names_list = '\n'.join([f"• {name}" for name in unique_names])
-                        person_type = "agents" if name_column in ['ASSIGNEE_NAME', 'AGENT_NAME'] else "supervisors"
-                        clarification_response = f"""I found multiple {person_type} matching your search:
-
-{names_list}
-
-Please specify which person you're asking about by using their full name or a more specific identifier."""
-                        return clarification_response, 'sql_with_data'
                 
                 # Convert DataFrame to string for summarization
                 result_table = df.to_string(index=False, max_rows=50)
@@ -334,27 +209,8 @@ CRITICAL INSTRUCTIONS:
                     
                     try:
                         simplified_sql = await self.model_provider.handle_conversational(simplified_prompt, context)
-                        simplified_sql = simplified_sql.strip()
-                        if simplified_sql.startswith('```sql'):
-                            simplified_sql = simplified_sql[6:]
-                        if simplified_sql.startswith('```'):
-                            simplified_sql = simplified_sql[3:]
-                        if simplified_sql.endswith('```'):
-                            simplified_sql = simplified_sql[:-3]
-                        simplified_sql = simplified_sql.strip()
                         
                         print(f"🔄 Trying simplified SQL: {simplified_sql[:100]}...")
-                        
-                        # Apply table name corrections
-                        table_corrections = [
-                            ('ANALYTICS.DBT_PRODUCTION.WOPS_AGENT_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_AGENT_PERFORMANCE'),
-                            ('ANALYTICS.DBT_PRODUCTION.WOPS_TL_PERFORMANCE', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TL_PERFORMANCE'),
-                            ('ANALYTICS.DBT_PRODUCTION.WOPS_TICKETS', 'ANALYTICS.DBT_PRODUCTION.RPT_WOPS_TICKETS'),
-                        ]
-                        
-                        for incorrect, correct in table_corrections:
-                            if incorrect in simplified_sql:
-                                simplified_sql = simplified_sql.replace(incorrect, correct)
                         
                         from app.snowflake_runner import run_query
                         df_retry = run_query(simplified_sql)
@@ -416,9 +272,12 @@ Give a direct, brief answer with key numbers only."""
                 from app.snowflake_runner import run_query
                 df = run_query(sql)
                 
-                if df.empty or 'Error' in df.columns:
-                    error_msg = str(df.iloc[0]['Error']) if 'Error' in df.columns else "No data returned"
-                    return f"❌ Query execution failed: {error_msg}"
+                if isinstance(df, str):
+                    # Query execution failed - df is the error message
+                    return f"❌ Query execution failed: {df}"
+                
+                if df.empty:
+                    return f"❌ Query execution succeeded but returned no data"
                 
                 # Convert DataFrame to string for summarization
                 result_table = df.to_string(index=False, max_rows=50)

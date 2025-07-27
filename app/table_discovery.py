@@ -177,7 +177,10 @@ class TableDiscovery:
                             'type': row['DATA_TYPE'],
                             'comment': row.get('COMMENT', '')
                         }
-            except:
+                elif isinstance(column_info, str):
+                    print(f"⚠️ Column info query failed: {column_info}")
+            except Exception as e:
+                print(f"⚠️ Error getting column info: {e}")
                 column_descriptions = {}
 
             # Now sample the actual data
