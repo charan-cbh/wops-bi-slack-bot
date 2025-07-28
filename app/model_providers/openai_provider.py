@@ -431,6 +431,7 @@ Please generate a corrected SQL query that fixes this error."""
     
     def _extract_keywords(self, question: str) -> List[str]:
         """Extract relevant keywords from question"""
+        import re
         question_lower = question.lower()
         
         # Important BI keywords
@@ -439,14 +440,20 @@ Please generate a corrected SQL query that fixes this error."""
             'average', 'avg', 'handle time', 'aht', 'agent', 'tickets',
             'chat', 'voice', 'email', 'qa score', 'adherence', 'performance',
             'team', 'supervisor', 'count', 'total', 'last week', 'this week',
-            'today', 'yesterday', 'fcr', 'resolution', 'schedule'
+            'today', 'yesterday', 'fcr', 'resolution', 'schedule', 'scheduler'
         ]
         
         for keyword in keyword_patterns:
             if keyword in question_lower:
                 keywords.append(keyword)
         
-        return keywords[:5]  # Limit to top 5 keywords
+        # Extract person names (capitalized words that might be names)
+        person_names = re.findall(r"\b([A-Z][a-z]+(?:'s)?)\b", question)
+        for name in person_names:
+            if name.lower() not in ['what', 'how', 'show', 'this', 'last', 'the']:
+                keywords.append(name.lower().replace("'s", ""))
+        
+        return keywords[:8]  # Increased limit to include more keywords
     
     async def _search_training_dataset(self, keywords: List[str]) -> str:
         """Search training dataset for relevant examples"""
@@ -479,7 +486,7 @@ Please generate a corrected SQL query that fixes this error."""
                                     'sql': assistant_message
                                 })
                                 
-                                if len(relevant_examples) >= 2:  # Limit to 2 examples
+                                if len(relevant_examples) >= 5:  # Increased to 5 examples
                                     break
                     except:
                         continue
