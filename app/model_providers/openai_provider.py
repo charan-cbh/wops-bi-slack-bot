@@ -105,9 +105,6 @@ class OpenAIProvider(BaseModelProvider):
         # Send message
         user_message = messages[-1]['content'] if messages else ""
         
-        # Add system prompt as additional instructions if provided
-        additional_instructions = system_prompt if system_prompt else None
-        
         async def make_request():
             # Send message to thread
             await self.client.beta.threads.messages.create(
@@ -119,8 +116,7 @@ class OpenAIProvider(BaseModelProvider):
             # Run assistant
             run = await self.client.beta.threads.runs.create(
                 thread_id=thread_id,
-                assistant_id=self.assistant_id,
-                additional_instructions=additional_instructions
+                assistant_id=self.assistant_id
             )
             
             # Wait for completion
@@ -175,7 +171,7 @@ Please use the business intelligence knowledge base to understand the table stru
         messages = [{"role": "user", "content": user_message}]
         
         # This will automatically use Assistant API with vector store if configured
-        response = await self.generate_response(messages, temperature=0.1)
+        response = await self.generate_response(messages)
         
         # Extract SQL from response (remove any markdown formatting)
         sql = response.strip()
@@ -222,7 +218,7 @@ Provide a clear, business-friendly summary with key insights. Only include the S
 
         messages = [{"role": "user", "content": user_message}]
         
-        response = await self.generate_response(messages, system_prompt, temperature=0.3)
+        response = await self.generate_response(messages, system_prompt)
         
         # Only show SQL if user explicitly requested it
         if sql_query and "```sql" not in response and self._user_requested_sql(question):
@@ -254,7 +250,7 @@ Return only "sql_required" or "conversational"."""
 
         messages = [{"role": "user", "content": user_message}]
         
-        response = await self.generate_response(messages, system_prompt, temperature=0.1)
+        response = await self.generate_response(messages, system_prompt)
         
         classification = response.strip().lower()
         if 'sql_required' in classification:
@@ -268,7 +264,7 @@ Return only "sql_required" or "conversational"."""
     async def handle_conversational(self, question: str, context: Dict[str, Any] = None) -> str:
         """Handle conversational questions using OpenAI"""
         
-        system_prompt = """You are a specialized BI assistant for Worker Operations. Generate SQL queries for data analysis questions using the DBT_PRODUCTION schema, or provide conversational responses about business context. For SQL generation, return only the executable SQL query without markdown formatting."""
+        system_prompt = """You are a specialized BI assistant for Worker Operations. Generate SQL queries for data analysis questions using the DBT_PRODUCTION schema, or provide conversational responses about business context. For SQL generation, return only the executable SQL query with right columns without markdown formatting."""
 
         user_message = question
         if context:
@@ -276,7 +272,7 @@ Return only "sql_required" or "conversational"."""
 
         messages = [{"role": "user", "content": user_message}]
         
-        return await self.generate_response(messages, system_prompt, temperature=0.5)
+        return await self.generate_response(messages, system_prompt)
     
     def _user_requested_sql(self, question: str) -> bool:
         """Check if user explicitly requested to see SQL query"""
@@ -300,7 +296,7 @@ def create_openai_provider(api_key: str = None, model_name: str = None, use_assi
     
     if not model_name:
         # Default to latest fine-tuned model (v5) with comprehensive training data
-        model_name = os.getenv('OPENAI_MODEL', 'ft:gpt-4.1-mini-2025-04-14:clipboard-health:wops-bi-bot-v5:By05mvOd')
+        model_name = os.getenv('OPENAI_MODEL', 'ft:gpt-4o-mini-2024-07-18:clipboard-health:wops-bi-bot-v5:By0reSwZ')
     
     if use_assistant_api is None:
         use_assistant_api = os.getenv('USE_ASSISTANT_API', 'false').lower() == 'true'
