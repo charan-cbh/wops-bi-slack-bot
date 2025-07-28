@@ -300,8 +300,13 @@ Please generate a corrected SQL query that fixes this error."""
             schema_info = await self._get_table_schema(table_name)
             if schema_info:
                 enhanced_parts.append(f"TABLE SCHEMA:\n{schema_info}")
+            
+            # 2. Get recent data samples (most important for context)
+            sample_data = await self._get_table_samples(table_name)
+            if sample_data:
+                enhanced_parts.append(f"RECENT DATA SAMPLES:\n{sample_data}")
         
-        # 2. Get relevant training examples
+        # 3. Get relevant training examples
         training_examples = await self._get_relevant_training_examples(question)
         if training_examples:
             enhanced_parts.append(f"RELEVANT TRAINING EXAMPLES:\n{training_examples}")
@@ -338,6 +343,77 @@ Please generate a corrected SQL query that fixes this error."""
             
         except Exception as e:
             return f"Error getting schema: {str(e)}"
+    
+    async def _get_table_samples(self, table_name: str) -> str:
+        """Get recent data samples from table ordered by audit timestamp/creation date"""
+        try:
+            from app.snowflake_runner import run_query
+            
+            # Common audit/timestamp column names to try
+            timestamp_columns = [
+                'AUDIT_TIMESTAMP', 'CREATED_AT_PST', 'CREATED_AT', 'UPDATED_AT', 
+                'SOLVED_AT', 'SUBMITTED_AT', 'ADHERENCE_DATE', 'SOLVED_WEEK'
+            ]
+            
+            # First, get table schema to find the right timestamp column
+            describe_sql = f"DESCRIBE TABLE {table_name}"
+            schema_result = run_query(describe_sql)
+            
+            if isinstance(schema_result, str):
+                return f"Error getting schema for samples: {schema_result}"
+            
+            # Find the best timestamp column from the schema
+            available_columns = []
+            timestamp_column = None
+            
+            if hasattr(schema_result, 'iterrows'):
+                for _, row in schema_result.iterrows():
+                    col_name = row['name'] if 'name' in row else str(row.iloc[0])
+                    available_columns.append(col_name)
+                    
+                    # Check if this is a timestamp column we can use
+                    if col_name.upper() in [tc.upper() for tc in timestamp_columns]:
+                        timestamp_column = col_name
+                        break
+            
+            # Build the sample query
+            if timestamp_column:
+                sample_sql = f"""
+                SELECT * 
+                FROM {table_name} 
+                WHERE {timestamp_column} IS NOT NULL 
+                ORDER BY {timestamp_column} DESC 
+                LIMIT 3
+                """
+            else:
+                # Fallback: just get recent records without ordering
+                sample_sql = f"SELECT * FROM {table_name} LIMIT 3"
+            
+            print(f"🔍 Getting samples with: {sample_sql}")
+            
+            # Execute sample query
+            sample_result = run_query(sample_sql)
+            
+            if isinstance(sample_result, str):
+                return f"Error getting samples: {sample_result}"
+            
+            # Format the samples nicely with column info
+            if hasattr(sample_result, 'to_string'):
+                # Limit column width for readability
+                sample_str = sample_result.to_string(index=False, max_cols=10, max_colwidth=50)
+                
+                # Add context about the samples
+                context_info = f"Showing {len(sample_result)} most recent records"
+                if timestamp_column:
+                    context_info += f" (ordered by {timestamp_column} DESC)"
+                
+                return f"{context_info}:\n\n{sample_str}"
+            
+            return str(sample_result)
+            
+        except Exception as e:
+            print(f"⚠️ Error getting table samples: {e}")
+            return f"Error getting samples: {str(e)}"
     
     async def _get_relevant_training_examples(self, question: str) -> str:
         """Get relevant examples from training dataset based on keywords"""
