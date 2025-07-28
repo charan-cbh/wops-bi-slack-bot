@@ -135,13 +135,11 @@ Consider questions about specific metrics, counts, performance data, or "show me
         """Handle data questions using Assistant API for SQL generation and result summarization"""
         try:
             # Step 1: Generate SQL using Assistant API with vector store context
-            sql_prompt = f"""Generate a SQL query for Snowflake execution to answer this question:
-
-{question}
-
-Return only the SQL query, no explanations."""
-            
-            sql_query = await self.model_provider.handle_conversational(sql_prompt, context)
+            sql_query = await self.model_provider.generate_sql(
+                question, 
+                "Generate a SQL query for Snowflake execution to answer this question.", 
+                context
+            )
             
             print(f"🔍 Generated SQL: {sql_query[:100]}...")
             
