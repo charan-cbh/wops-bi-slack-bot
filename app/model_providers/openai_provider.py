@@ -268,15 +268,7 @@ Return only "sql_required" or "conversational"."""
     async def handle_conversational(self, question: str, context: Dict[str, Any] = None) -> str:
         """Handle conversational questions using OpenAI"""
         
-        system_prompt = """You are a helpful assistant for a business intelligence Slack bot. You help users understand how to use the system and provide friendly, helpful responses to general questions.
-
-Key information about the bot:
-- This is a BI (Business Intelligence) bot that can answer questions about agent performance, tickets, schedules, and team metrics
-- Users can ask questions like "How many agents are in team X?" or "What's the average handle time for agent Y?"
-- The bot connects to Snowflake database with various performance and schedule tables
-- For data questions, users should ask specific questions about agents, teams, performance metrics, etc.
-
-Be friendly, helpful, and concise. If users ask how to use the bot, guide them on asking data-related questions."""
+        system_prompt = """You are a specialized BI assistant for Worker Operations. Generate SQL queries for data analysis questions using the DBT_PRODUCTION schema, or provide conversational responses about business context. For SQL generation, return only the executable SQL query without markdown formatting."""
 
         user_message = question
         if context:
