@@ -113,7 +113,7 @@ Respond with either:
 
 Consider questions about specific metrics, counts, performance data, or "show me" requests as DATA questions."""
 
-            classification = await self.model_provider.handle_conversational(classification_prompt, context)
+            classification = await self.model_provider.handle_conversational(classification_prompt)
             classification = classification.strip().upper()
             
             print(f"🤖 Assistant classification: {classification}")
@@ -137,8 +137,7 @@ Consider questions about specific metrics, counts, performance data, or "show me
             # Step 1: Generate SQL using Assistant API with vector store context
             sql_query = await self.model_provider.generate_sql(
                 question, 
-                "Generate a SQL query for Snowflake execution to answer this question.", 
-                context
+                "Generate a SQL query for Snowflake execution to answer this question."
             )
             
             print(f"🔍 Generated SQL: {sql_query[:100]}...")
@@ -206,7 +205,7 @@ CRITICAL INSTRUCTIONS:
 - Return ONLY the SQL query"""
                     
                     try:
-                        simplified_sql = await self.model_provider.handle_conversational(simplified_prompt, context)
+                        simplified_sql = await self.model_provider.handle_conversational(simplified_prompt)
                         
                         print(f"🔄 Trying simplified SQL: {simplified_sql[:100]}...")
                         
