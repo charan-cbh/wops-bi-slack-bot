@@ -105,29 +105,36 @@ class LLMOrchestrator:
             # Build curated context from conversation history
             curated_context = await self._build_curated_context(user_id, channel_id)
             
-            # Use retry mechanism for SQL generation
-            sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
-                question, max_retries=3, context=curated_context
-            )
-            
-            if success:
-                # SQL generation and execution succeeded
-                from app.snowflake_runner import run_query
-                df = run_query(sql_query)
+            # First determine if this needs SQL or is conversational
+            if self._requires_sql_query(question):
+                # Data question: Use retry mechanism for SQL generation
+                sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
+                    question, max_retries=3, context=curated_context
+                )
                 
-                # Summarize the results
-                result = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
-                
-                # Update conversation history with Q&A pair
-                await self._update_conversation_history(user_id, channel_id, question, sql_query, 'sql')
-                
-                return result
+                if success:
+                    # SQL generation and execution succeeded
+                    from app.snowflake_runner import run_query
+                    df = run_query(sql_query)
+                    
+                    # Summarize the results
+                    result = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
+                    
+                    # Update conversation history with Q&A pair
+                    await self._update_conversation_history(user_id, channel_id, question, sql_query, 'sql')
+                    
+                    return result
+                else:
+                    # All retries failed, return error with final attempt
+                    error_response = f"❌ Failed to generate working SQL query after 3 attempts.\n\nFinal error: {error_message}\n\nLast SQL attempted:\n```sql\n{sql_query}\n```"
+                    
+                    await self._update_conversation_history(user_id, channel_id, question, error_response, 'error')
+                    return error_response, 'error'
             else:
-                # All retries failed, return error with final attempt
-                error_response = f"❌ Failed to generate working SQL query after 3 attempts.\n\nFinal error: {error_message}\n\nLast SQL attempted:\n```sql\n{sql_query}\n```"
-                
-                await self._update_conversation_history(user_id, channel_id, question, error_response, 'error')
-                return error_response, 'error'
+                # Conversational question: Direct response from Assistant API
+                response = await self.model_provider.handle_conversational(question)
+                await self._update_conversation_history(user_id, channel_id, question, response, 'conversational')
+                return response, 'conversational'
             
         except Exception as e:
             print(f"❌ Error handling question with Assistant API: {e}")
@@ -553,6 +560,51 @@ SLACK FORMATTING:
                 )
         except Exception as e:
             print(f"⚠️ Error updating conversation history: {e}")
+    
+    def _requires_sql_query(self, question: str) -> bool:
+        """Smart classification to determine if question requires SQL query"""
+        question_lower = question.lower()
+        
+        # Definition/explanation questions (clearly conversational)
+        definition_patterns = [
+            'what is', 'what does', 'what are', 'define', 'explain',
+            'tell me about', 'help', 'guide', 'how to', 'process', 
+            'policy', 'procedure', 'workflow', 'meaning of'
+        ]
+        
+        # Check for definition questions first
+        if any(pattern in question_lower for pattern in definition_patterns):
+            # But check if it's asking about data/metrics specifically
+            data_context = [
+                'performance', 'score', 'aht', 'handle time', 'tickets',
+                'adherence', 'qa score', 'fcr', 'resolution', 'agents'
+            ]
+            
+            time_context = ['week', 'today', 'yesterday', 'month', 'last', 'this']
+            
+            # If it has both definition words AND data + time context, it might need SQL
+            # e.g., "What is John's performance this week?"
+            has_data_context = any(ctx in question_lower for ctx in data_context)
+            has_time_context = any(time_word in question_lower for time_word in time_context)
+            
+            if has_data_context and has_time_context:
+                return True  # "What is John's performance this week?" needs SQL
+            else:
+                return False  # "What is HCF?" is pure definition
+        
+        # Data query keywords
+        sql_keywords = [
+            'average', 'avg', 'count', 'total', 'sum', 'max', 'min',
+            'show me', 'list', 'how many', 'give me', 'find',
+            'last week', 'this week', 'today', 'yesterday'
+        ]
+        
+        # Check for SQL patterns
+        if any(keyword in question_lower for keyword in sql_keywords):
+            return True
+            
+        # Default to conversational for unclear cases
+        return False
     
     async def _summarize_sql_results(self, question: str, df, sql_query: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
         """Summarize SQL execution results"""
