@@ -105,8 +105,8 @@ class LLMOrchestrator:
             # Build curated context from conversation history
             curated_context = await self._build_curated_context(user_id, channel_id)
             
-            # First determine if this needs SQL or is conversational
-            if self._requires_sql_query(question):
+            # Use OpenAI to classify the question type
+            if await self._requires_sql_query_ai(question):
                 # Data question: Use retry mechanism for SQL generation
                 sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
                     question, max_retries=3, context=curated_context
@@ -561,50 +561,40 @@ SLACK FORMATTING:
         except Exception as e:
             print(f"⚠️ Error updating conversation history: {e}")
     
-    def _requires_sql_query(self, question: str) -> bool:
-        """Smart classification to determine if question requires SQL query"""
-        question_lower = question.lower()
-        
-        # Definition/explanation questions (clearly conversational)
-        definition_patterns = [
-            'what is', 'what does', 'what are', 'define', 'explain',
-            'tell me about', 'help', 'guide', 'how to', 'process', 
-            'policy', 'procedure', 'workflow', 'meaning of'
-        ]
-        
-        # Check for definition questions first
-        if any(pattern in question_lower for pattern in definition_patterns):
-            # But check if it's asking about data/metrics specifically
-            data_context = [
-                'performance', 'score', 'aht', 'handle time', 'tickets',
-                'adherence', 'qa score', 'fcr', 'resolution', 'agents'
-            ]
+    async def _requires_sql_query_ai(self, question: str) -> bool:
+        """Use AI to classify if question requires SQL query or is conversational"""
+        try:
+            classification_prompt = f"""Analyze this question and determine if it requires executing a SQL query against a database or if it's asking for definitions/explanations.
+
+Question: {question}
+
+Context: This is a business intelligence bot that can either:
+1. Query databases for specific data/metrics (tickets, performance, schedules, etc.)
+2. Provide explanations about business terms, processes, or definitions
+
+Respond with exactly one word:
+- "SQL" if this requires querying database tables for specific data/metrics/counts
+- "CONVERSATIONAL" if this is asking for definitions, explanations, or general information
+
+Examples:
+- "What is HCF?" → CONVERSATIONAL (asking for definition)
+- "What does FCR mean?" → CONVERSATIONAL (asking for definition)  
+- "How many tickets today?" → SQL (needs database query)
+- "What is John's performance this week?" → SQL (needs database query)
+- "Show me handle time for agents" → SQL (needs database query)
+- "Explain the escalation process" → CONVERSATIONAL (asking for explanation)"""
+
+            classification = await self.model_provider.handle_conversational(classification_prompt)
+            classification = classification.strip().upper()
             
-            time_context = ['week', 'today', 'yesterday', 'month', 'last', 'this']
+            print(f"🤖 AI Classification for '{question}': {classification}")
             
-            # If it has both definition words AND data + time context, it might need SQL
-            # e.g., "What is John's performance this week?"
-            has_data_context = any(ctx in question_lower for ctx in data_context)
-            has_time_context = any(time_word in question_lower for time_word in time_context)
+            return "SQL" in classification
             
-            if has_data_context and has_time_context:
-                return True  # "What is John's performance this week?" needs SQL
-            else:
-                return False  # "What is HCF?" is pure definition
-        
-        # Data query keywords
-        sql_keywords = [
-            'average', 'avg', 'count', 'total', 'sum', 'max', 'min',
-            'show me', 'list', 'how many', 'give me', 'find',
-            'last week', 'this week', 'today', 'yesterday'
-        ]
-        
-        # Check for SQL patterns
-        if any(keyword in question_lower for keyword in sql_keywords):
-            return True
-            
-        # Default to conversational for unclear cases
-        return False
+        except Exception as e:
+            print(f"⚠️ Error in AI classification: {e}")
+            # Fallback to conversational for safety
+            return False
     
     async def _summarize_sql_results(self, question: str, df, sql_query: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
         """Summarize SQL execution results"""
