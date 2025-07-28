@@ -170,8 +170,14 @@ class OpenAIProvider(BaseModelProvider):
             if len(history) >= 2:
                 messages.extend(history[-2:])  # Last Q&A pair
         
-        # Add current question
-        messages.append({"role": "user", "content": question})
+        # Handle retry context
+        if context and 'retry_info' in context:
+            retry_info = context['retry_info']
+            retry_prompt = await self._build_retry_prompt(retry_info)
+            messages.append({"role": "user", "content": retry_prompt})
+        else:
+            # Add current question
+            messages.append({"role": "user", "content": question})
         
         # Use Chat Completions API directly with fine-tuned model
         response = await self._generate_with_chat_completion(messages)
@@ -185,7 +191,235 @@ class OpenAIProvider(BaseModelProvider):
         if sql.endswith('```'):
             sql = sql[:-3]
         
-        return sql.strip()
+        return sql
+    
+    async def generate_sql_with_retry(self, question: str, max_retries: int = 3, context: Dict[str, Any] = None) -> Tuple[str, bool, str]:
+        """
+        Generate SQL with progressive retry mechanism
+        Returns: (sql_query, success, error_message)
+        """
+        last_error = ""
+        last_sql = ""
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"🔄 SQL Generation Attempt {attempt + 1}/{max_retries}")
+                
+                # Build context for this attempt
+                retry_context = self._build_retry_context(
+                    question, attempt, last_sql, last_error, context
+                )
+                
+                # Generate SQL query
+                sql_query = await self.generate_sql(question, context=retry_context)
+                
+                # Execute the query to test it
+                from app.snowflake_runner import run_query
+                result = run_query(sql_query)
+                
+                # Check if execution was successful
+                if isinstance(result, str):
+                    # Query failed
+                    last_error = result
+                    last_sql = sql_query
+                    print(f"❌ Attempt {attempt + 1} failed: {result[:100]}...")
+                    continue
+                else:
+                    # Query succeeded
+                    print(f"✅ SQL generation succeeded on attempt {attempt + 1}")
+                    return sql_query, True, ""
+                    
+            except Exception as e:
+                last_error = str(e)
+                print(f"❌ Attempt {attempt + 1} error: {e}")
+                continue
+        
+        # All attempts failed
+        return last_sql, False, last_error
+    
+    def _build_retry_context(self, question: str, attempt: int, last_sql: str, last_error: str, original_context: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Build context for retry attempts"""
+        retry_context = {}
+        
+        # Include original context if available
+        if original_context:
+            retry_context.update(original_context)
+        
+        if attempt == 0:
+            # First attempt - use original context only
+            return retry_context
+        
+        # Retry attempts - add error feedback
+        retry_info = {
+            "retry_attempt": attempt + 1,
+            "previous_sql": last_sql,
+            "error_message": last_error,
+            "original_question": question
+        }
+        
+        if attempt == 2:  # Third attempt (0-indexed)
+            # Enhanced retry with schema and training examples
+            retry_info["enhanced_retry"] = True
+            
+        retry_context["retry_info"] = retry_info
+        return retry_context
+    
+    async def _build_retry_prompt(self, retry_info: Dict[str, Any]) -> str:
+        """Build retry prompt with error feedback and enhanced context"""
+        attempt = retry_info["retry_attempt"]
+        question = retry_info["original_question"]
+        error = retry_info["error_message"]
+        previous_sql = retry_info["previous_sql"]
+        
+        base_prompt = f"""The previous SQL query failed with an error. Please regenerate a corrected query.
+
+Original Question: {question}
+
+Previous Failed Query:
+{previous_sql}
+
+Error Message:
+{error}
+
+Please generate a corrected SQL query that fixes this error."""
+        
+        # Enhanced retry (attempt 3) with schema and training examples
+        if retry_info.get("enhanced_retry", False):
+            enhanced_context = await self._get_enhanced_retry_context(previous_sql, question, error)
+            base_prompt += f"\n\n{enhanced_context}"
+        
+        return base_prompt
+    
+    async def _get_enhanced_retry_context(self, failed_sql: str, question: str, error: str) -> str:
+        """Get enhanced context for final retry: schema + training examples"""
+        enhanced_parts = []
+        
+        # 1. Get table schema using DESCRIBE
+        table_name = self._extract_table_name(failed_sql)
+        if table_name:
+            schema_info = await self._get_table_schema(table_name)
+            if schema_info:
+                enhanced_parts.append(f"TABLE SCHEMA:\n{schema_info}")
+        
+        # 2. Get relevant training examples
+        training_examples = await self._get_relevant_training_examples(question)
+        if training_examples:
+            enhanced_parts.append(f"RELEVANT TRAINING EXAMPLES:\n{training_examples}")
+        
+        return "\n\n".join(enhanced_parts)
+    
+    def _extract_table_name(self, sql: str) -> str:
+        """Extract main table name from SQL query"""
+        import re
+        
+        # Look for FROM clause patterns
+        from_match = re.search(r'FROM\s+([A-Za-z0-9_.]+)', sql, re.IGNORECASE)
+        if from_match:
+            return from_match.group(1)
+        
+        return ""
+    
+    async def _get_table_schema(self, table_name: str) -> str:
+        """Get table schema using DESCRIBE query"""
+        try:
+            from app.snowflake_runner import run_query
+            
+            describe_sql = f"DESCRIBE TABLE {table_name}"
+            result = run_query(describe_sql)
+            
+            if isinstance(result, str):
+                return f"Error getting schema: {result}"
+            
+            # Format the schema nicely
+            if hasattr(result, 'to_string'):
+                return result.to_string(index=False)
+            
+            return str(result)
+            
+        except Exception as e:
+            return f"Error getting schema: {str(e)}"
+    
+    async def _get_relevant_training_examples(self, question: str) -> str:
+        """Get relevant examples from training dataset based on keywords"""
+        try:
+            # Extract keywords from question
+            keywords = self._extract_keywords(question)
+            
+            # Search training dataset
+            examples = await self._search_training_dataset(keywords)
+            
+            return examples
+            
+        except Exception as e:
+            return f"Error getting training examples: {str(e)}"
+    
+    def _extract_keywords(self, question: str) -> List[str]:
+        """Extract relevant keywords from question"""
+        question_lower = question.lower()
+        
+        # Important BI keywords
+        keywords = []
+        keyword_patterns = [
+            'average', 'avg', 'handle time', 'aht', 'agent', 'tickets',
+            'chat', 'voice', 'email', 'qa score', 'adherence', 'performance',
+            'team', 'supervisor', 'count', 'total', 'last week', 'this week',
+            'today', 'yesterday', 'fcr', 'resolution', 'schedule'
+        ]
+        
+        for keyword in keyword_patterns:
+            if keyword in question_lower:
+                keywords.append(keyword)
+        
+        return keywords[:5]  # Limit to top 5 keywords
+    
+    async def _search_training_dataset(self, keywords: List[str]) -> str:
+        """Search training dataset for relevant examples"""
+        try:
+            import json
+            
+            # Read training dataset
+            training_file = "DEFINITIVE_100_PERCENT_DATASET.jsonl"
+            relevant_examples = []
+            
+            with open(training_file, 'r') as f:
+                for line in f:
+                    try:
+                        example = json.loads(line)
+                        if 'messages' in example:
+                            user_message = ""
+                            assistant_message = ""
+                            
+                            for msg in example['messages']:
+                                if msg['role'] == 'user':
+                                    user_message = msg['content']
+                                elif msg['role'] == 'assistant':
+                                    assistant_message = msg['content']
+                            
+                            # Check if any keywords match
+                            user_lower = user_message.lower()
+                            if any(keyword in user_lower for keyword in keywords):
+                                relevant_examples.append({
+                                    'question': user_message,
+                                    'sql': assistant_message
+                                })
+                                
+                                if len(relevant_examples) >= 2:  # Limit to 2 examples
+                                    break
+                    except:
+                        continue
+            
+            # Format examples
+            if relevant_examples:
+                formatted = []
+                for i, ex in enumerate(relevant_examples, 1):
+                    formatted.append(f"Example {i}:\nQuestion: {ex['question']}\nSQL: {ex['sql']}")
+                
+                return "\n\n".join(formatted)
+            
+            return "No relevant training examples found."
+            
+        except Exception as e:
+            return f"Error searching training dataset: {str(e)}"
     
     async def summarize_results(self, question: str, results: str, sql_query: str = None, context: Dict[str, Any] = None) -> str:
         """Summarize query results using OpenAI"""

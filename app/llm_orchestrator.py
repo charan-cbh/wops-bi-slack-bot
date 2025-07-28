@@ -105,22 +105,29 @@ class LLMOrchestrator:
             # Build curated context from conversation history
             curated_context = await self._build_curated_context(user_id, channel_id)
             
-            # Try SQL generation first with curated context
-            sql_query = await self.model_provider.generate_sql(question, context=curated_context)
+            # Use retry mechanism for SQL generation
+            sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
+                question, max_retries=3, context=curated_context
+            )
             
-            # Check if the response is a SQL query
-            if self._is_sql_response(sql_query):
-                # Execute the SQL and summarize results
-                result = await self._handle_sql_response(question, sql_query, user_id, channel_id, context)
+            if success:
+                # SQL generation and execution succeeded
+                from app.snowflake_runner import run_query
+                df = run_query(sql_query)
+                
+                # Summarize the results
+                result = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
                 
                 # Update conversation history with Q&A pair
                 await self._update_conversation_history(user_id, channel_id, question, sql_query, 'sql')
                 
                 return result
             else:
-                # If not SQL, treat as conversational response
-                await self._update_conversation_history(user_id, channel_id, question, sql_query, 'conversational')
-                return sql_query, 'conversational'
+                # All retries failed, return error with final attempt
+                error_response = f"❌ Failed to generate working SQL query after 3 attempts.\n\nFinal error: {error_message}\n\nLast SQL attempted:\n```sql\n{sql_query}\n```"
+                
+                await self._update_conversation_history(user_id, channel_id, question, error_response, 'error')
+                return error_response, 'error'
             
         except Exception as e:
             print(f"❌ Error handling question with Assistant API: {e}")
@@ -546,6 +553,49 @@ SLACK FORMATTING:
                 )
         except Exception as e:
             print(f"⚠️ Error updating conversation history: {e}")
+    
+    async def _summarize_sql_results(self, question: str, df, sql_query: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
+        """Summarize SQL execution results"""
+        try:
+            # Check if query returned an error
+            if isinstance(df, str):
+                return f"❌ Query execution failed: {df}", 'error'
+            
+            # Check if query returned no data
+            if hasattr(df, 'empty') and df.empty:
+                helpful_message = self._generate_helpful_empty_result_message(question, sql_query)
+                return helpful_message, 'sql_with_data'
+            
+            # Convert DataFrame to string for summarization
+            result_table = df.to_string(index=False, max_rows=50)
+            
+            # Summarize results using Assistant API
+            summary_prompt = f"""Provide a concise answer to this question based on the query results:
+
+Question: {question}
+
+Results:
+{result_table}
+
+Instructions:
+- Give a direct, brief answer to the user's question
+- Include the key numbers/metrics they asked for
+- Keep it concise - no technical explanations about tables or procedures
+- Format numbers clearly (e.g., "QA score: 85.2%", "AHT: 12.5 minutes")
+- Only mention insights if they are directly relevant and brief
+- Do not explain what QA scores mean or suggest follow-up actions unless asked
+
+SLACK FORMATTING:
+- Use *text* for bold (single asterisk), NOT **text**
+- Use - for bullet points
+- Keep formatting simple and Slack-compatible"""
+
+            final_response = await self.model_provider.handle_conversational(summary_prompt)
+            return final_response, 'sql_with_data'
+            
+        except Exception as e:
+            print(f"❌ Error summarizing SQL results: {e}")
+            return f"❌ Error processing results: {str(e)}", 'error'
     
     def _generate_helpful_empty_result_message(self, question: str, sql_query: str) -> str:
         """Generate helpful message for empty query results"""
