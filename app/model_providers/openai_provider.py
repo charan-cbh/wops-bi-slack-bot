@@ -155,18 +155,11 @@ class OpenAIProvider(BaseModelProvider):
         self.threads[user_id] = thread.id
         return thread.id
     
-    async def generate_sql(self, question: str, instructions: str, context: Dict[str, Any] = None) -> str:
+    async def generate_sql(self, question: str, instructions: str = None, context: Dict[str, Any] = None) -> str:
         """Generate SQL query using OpenAI with Assistant API and vector store when available"""
         
-        user_message = f"""Generate a SQL query to answer this question:
-
-Question: {question}
-
-Instructions: {instructions}
-
-{f"Additional Context: {json.dumps(context, indent=2)}" if context else ""}
-
-Please use the business intelligence knowledge base to understand the table structures and relationships. Return only the SQL query, no explanations."""
+        # Simple message - let the fine-tuned model and system prompt handle the rest
+        user_message = question
 
         messages = [{"role": "user", "content": user_message}]
         

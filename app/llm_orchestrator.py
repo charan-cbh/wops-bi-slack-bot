@@ -102,28 +102,15 @@ class LLMOrchestrator:
         For conversational questions: Assistant provides direct response
         """
         try:
-            # First, ask the Assistant whether this requires SQL or is conversational
-            classification_prompt = f"""Analyze this question and determine if it requires executing a SQL query against our database or if it's a conversational question about business processes/policies.
-
-Question: {question}
-
-Respond with either:
-- "DATA" if this requires querying our database tables for specific data
-- "CONVERSATIONAL" if this is about business processes, policies, or general information
-
-Consider questions about specific metrics, counts, performance data, or "show me" requests as DATA questions."""
-
-            classification = await self.model_provider.handle_conversational(classification_prompt)
-            classification = classification.strip().upper()
+            # Let the Assistant API handle everything - it knows when to generate SQL vs give conversational responses
+            response = await self.model_provider.handle_conversational(question)
             
-            print(f"🤖 Assistant classification: {classification}")
-            
-            if "DATA" in classification:
-                # Data question: Generate SQL using Assistant API, execute, then summarize
-                return await self._handle_data_question_with_assistant(question, user_id, channel_id, context)
+            # Check if the response is a SQL query
+            if self._is_sql_response(response):
+                # Execute the SQL and summarize results
+                return await self._handle_sql_response(question, response, user_id, channel_id, context)
             else:
-                # Conversational question: Direct response from Assistant API
-                response = await self.model_provider.handle_conversational(question, context)
+                # Direct conversational response
                 return response, 'conversational'
             
         except Exception as e:
@@ -135,10 +122,7 @@ Consider questions about specific metrics, counts, performance data, or "show me
         """Handle data questions using Assistant API for SQL generation and result summarization"""
         try:
             # Step 1: Generate SQL using Assistant API with vector store context
-            sql_query = await self.model_provider.generate_sql(
-                question, 
-                "Generate a SQL query for Snowflake execution to answer this question."
-            )
+            sql_query = await self.model_provider.generate_sql(question)
             
             print(f"🔍 Generated SQL: {sql_query[:100]}...")
             
@@ -392,11 +376,7 @@ Give a direct, brief answer with key numbers only."""
                     instructions = await self.sql_generator.build_enhanced_sql_instructions(intent, table, schema, question, user_id)
                     
                     # Use model provider to generate SQL
-                    sql = await self.model_provider.generate_sql(
-                        question, 
-                        instructions['instructions'],
-                        {'table': table, 'schema': schema, 'user_id': user_id}
-                    )
+                    sql = await self.model_provider.generate_sql(question)
                     
                     # Validate and fix SQL
                     validated_sql = self.sql_generator.validate_and_fix_sql(sql, question, table, schema.get('columns', []))
@@ -451,6 +431,64 @@ Return ONLY the SQL query, no explanations."""
         except Exception as e:
             print(f"❌ Error generating SQL: {e}")
             return f"-- Error generating SQL: {str(e)}"
+    
+    def _is_sql_response(self, response: str) -> bool:
+        """Check if the response from Assistant is a SQL query"""
+        response_clean = response.strip().upper()
+        
+        # Check if it starts with SQL keywords
+        sql_starters = ['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER']
+        
+        return any(response_clean.startswith(starter) for starter in sql_starters)
+    
+    async def _handle_sql_response(self, question: str, sql_query: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
+        """Execute SQL query and summarize results"""
+        try:
+            print(f"🔍 Generated SQL: {sql_query[:100]}...")
+            
+            # Execute SQL
+            from app.snowflake_runner import run_query
+            df = run_query(sql_query)
+            
+            # Check if query returned an error
+            if isinstance(df, str):
+                return f"❌ Query execution failed: {df}", 'error'
+            
+            # Check if query returned no data
+            if hasattr(df, 'empty') and df.empty:
+                helpful_message = self._generate_helpful_empty_result_message(question, sql_query)
+                return helpful_message, 'sql_with_data'
+            
+            # Convert DataFrame to string for summarization
+            result_table = df.to_string(index=False, max_rows=50)
+            
+            # Summarize results using Assistant API
+            summary_prompt = f"""Provide a concise answer to this question based on the query results:
+
+Question: {question}
+
+Results:
+{result_table}
+
+Instructions:
+- Give a direct, brief answer to the user's question
+- Include the key numbers/metrics they asked for
+- Keep it concise - no technical explanations about tables or procedures
+- Format numbers clearly (e.g., "QA score: 85.2%", "AHT: 12.5 minutes")
+- Only mention insights if they are directly relevant and brief
+- Do not explain what QA scores mean or suggest follow-up actions unless asked
+
+SLACK FORMATTING:
+- Use *text* for bold (single asterisk), NOT **text**
+- Use - for bullet points
+- Keep formatting simple and Slack-compatible"""
+
+            final_response = await self.model_provider.handle_conversational(summary_prompt)
+            return final_response, 'sql_with_data'
+            
+        except Exception as e:
+            print(f"❌ SQL execution error: {e}")
+            return f"❌ Error executing query: {str(e)}", 'error'
     
     def _generate_helpful_empty_result_message(self, question: str, sql_query: str) -> str:
         """Generate helpful message for empty query results"""
