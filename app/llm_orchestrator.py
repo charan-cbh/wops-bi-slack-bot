@@ -131,8 +131,8 @@ class LLMOrchestrator:
                     await self._update_conversation_history(user_id, channel_id, question, error_response, 'error')
                     return error_response, 'error'
             else:
-                # Conversational question: Direct response from Assistant API
-                response = await self.model_provider.handle_conversational(question)
+                # Conversational question: Use fine-tuned model with Chat Completions API
+                response = await self._handle_conversational_with_finetuned_model(question, curated_context)
                 await self._update_conversation_history(user_id, channel_id, question, response, 'conversational')
                 return response, 'conversational'
             
@@ -595,6 +595,34 @@ Examples:
             print(f"⚠️ Error in AI classification: {e}")
             # Fallback to conversational for safety
             return False
+    
+    async def _handle_conversational_with_finetuned_model(self, question: str, curated_context: Dict[str, Any] = None) -> str:
+        """Handle conversational questions using fine-tuned model via Chat Completions API"""
+        try:
+            # Build messages with system prompt and curated context
+            messages = [
+                {"role": "system", "content": "You are a specialized BI assistant for Worker Operations. Generate SQL queries for data analysis questions using the DBT_PRODUCTION schema, or provide conversational responses about business context. For SQL generation, return only the executable SQL query with right columns without markdown formatting."}
+            ]
+            
+            # Add curated context from previous conversation if available
+            if curated_context and 'conversation_history' in curated_context:
+                history = curated_context['conversation_history']
+                # Only include the last question-answer pair for follow-up context
+                if len(history) >= 2:
+                    messages.extend(history[-2:])  # Last Q&A pair
+            
+            # Add current question
+            messages.append({"role": "user", "content": question})
+            
+            # Use Chat Completions API directly with fine-tuned model
+            response = await self.model_provider._generate_with_chat_completion(messages)
+            
+            return response.strip()
+            
+        except Exception as e:
+            print(f"⚠️ Error in fine-tuned conversational response: {e}")
+            # Fallback to Assistant API
+            return await self.model_provider.handle_conversational(question)
     
     async def _summarize_sql_results(self, question: str, df, sql_query: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
         """Summarize SQL execution results"""
