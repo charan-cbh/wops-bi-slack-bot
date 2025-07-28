@@ -7,7 +7,7 @@ Implements the BaseModelProvider interface for OpenAI models (including GPT-4, A
 import os
 import json
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from .base_provider import BaseModelProvider, ModelProviderError, ModelProviderRateLimitError
 
 try:
