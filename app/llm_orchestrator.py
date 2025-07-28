@@ -102,16 +102,25 @@ class LLMOrchestrator:
         For conversational questions: Assistant provides direct response
         """
         try:
-            # Let the Assistant API handle everything - it knows when to generate SQL vs give conversational responses
-            response = await self.model_provider.handle_conversational(question)
+            # Build curated context from conversation history
+            curated_context = await self._build_curated_context(user_id, channel_id)
+            
+            # Try SQL generation first with curated context
+            sql_query = await self.model_provider.generate_sql(question, context=curated_context)
             
             # Check if the response is a SQL query
-            if self._is_sql_response(response):
+            if self._is_sql_response(sql_query):
                 # Execute the SQL and summarize results
-                return await self._handle_sql_response(question, response, user_id, channel_id, context)
+                result = await self._handle_sql_response(question, sql_query, user_id, channel_id, context)
+                
+                # Update conversation history with Q&A pair
+                await self._update_conversation_history(user_id, channel_id, question, sql_query, 'sql')
+                
+                return result
             else:
-                # Direct conversational response
-                return response, 'conversational'
+                # If not SQL, treat as conversational response
+                await self._update_conversation_history(user_id, channel_id, question, sql_query, 'conversational')
+                return sql_query, 'conversational'
             
         except Exception as e:
             print(f"❌ Error handling question with Assistant API: {e}")
@@ -489,6 +498,54 @@ SLACK FORMATTING:
         except Exception as e:
             print(f"❌ SQL execution error: {e}")
             return f"❌ Error executing query: {str(e)}", 'error'
+    
+    async def _build_curated_context(self, user_id: str, channel_id: str) -> Dict[str, Any]:
+        """Build curated context from conversation history for SQL generation"""
+        try:
+            # Get recent conversation history (last 2-3 exchanges)
+            if hasattr(self, 'conversation_manager') and self.conversation_manager:
+                recent_context = await self.conversation_manager.get_conversation_context(user_id, channel_id)
+                
+                # Build conversation history in OpenAI format
+                conversation_history = []
+                
+                if recent_context and 'last_question' in recent_context and 'last_response' in recent_context:
+                    # Only include the last Q&A pair to avoid contamination
+                    last_question = recent_context['last_question']
+                    last_response = recent_context['last_response']
+                    
+                    # Only include if it's not too old (within last 5 minutes)
+                    if 'timestamp' in recent_context:
+                        import time
+                        if time.time() - recent_context['timestamp'] < 300:  # 5 minutes
+                            conversation_history = [
+                                {"role": "user", "content": last_question},
+                                {"role": "assistant", "content": last_response}
+                            ]
+                
+                return {"conversation_history": conversation_history}
+            
+        except Exception as e:
+            print(f"⚠️ Error building curated context: {e}")
+        
+        return {}
+    
+    async def _update_conversation_history(self, user_id: str, channel_id: str, question: str, response: str, response_type: str):
+        """Update conversation history for future context"""
+        try:
+            if hasattr(self, 'conversation_manager') and self.conversation_manager:
+                # Only store the user question, not the SQL query itself to avoid contamination
+                if response_type == 'sql':
+                    # Store a clean representation instead of raw SQL
+                    clean_response = f"Generated SQL query for: {question}"
+                else:
+                    clean_response = response
+                    
+                await self.conversation_manager.update_conversation_context(
+                    user_id, channel_id, question, clean_response, response_type
+                )
+        except Exception as e:
+            print(f"⚠️ Error updating conversation history: {e}")
     
     def _generate_helpful_empty_result_message(self, question: str, sql_query: str) -> str:
         """Generate helpful message for empty query results"""

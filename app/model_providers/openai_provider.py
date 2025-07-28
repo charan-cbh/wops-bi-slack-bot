@@ -156,15 +156,25 @@ class OpenAIProvider(BaseModelProvider):
         return thread.id
     
     async def generate_sql(self, question: str, instructions: str = None, context: Dict[str, Any] = None) -> str:
-        """Generate SQL query using OpenAI with Assistant API and vector store when available"""
+        """Generate SQL query using Chat Completions API with curated context"""
         
-        # Simple message - let the fine-tuned model and system prompt handle the rest
-        user_message = question
-
-        messages = [{"role": "user", "content": user_message}]
+        # Build messages with system prompt and curated context
+        messages = [
+            {"role": "system", "content": "You are a specialized BI assistant for Worker Operations. Generate SQL queries for data analysis questions using the DBT_PRODUCTION schema, or provide conversational responses about business context. For SQL generation, return only the executable SQL query with right columns without markdown formatting."}
+        ]
         
-        # This will automatically use Assistant API with vector store if configured
-        response = await self.generate_response(messages)
+        # Add curated context from previous conversation if available
+        if context and 'conversation_history' in context:
+            history = context['conversation_history']
+            # Only include the last question-answer pair for follow-up context
+            if len(history) >= 2:
+                messages.extend(history[-2:])  # Last Q&A pair
+        
+        # Add current question
+        messages.append({"role": "user", "content": question})
+        
+        # Use Chat Completions API directly with fine-tuned model
+        response = await self._generate_with_chat_completion(messages)
         
         # Extract SQL from response (remove any markdown formatting)
         sql = response.strip()
