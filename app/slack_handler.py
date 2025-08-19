@@ -143,21 +143,32 @@ async def handle_slack_event(request: Request):
 async def handle_button_interaction(payload):
     """Handle button interactions like View Query"""
     try:
+        print(f"🔍 Button interaction payload: {json.dumps(payload, indent=2)}")
+        
         user = payload.get("user", {})
-        channel = payload.get("container", {}).get("channel_id")
-        message_ts = payload.get("container", {}).get("message_ts")
+        user_id = user.get("id")
+        
+        # Try different payload structures
+        channel = payload.get("channel", {}).get("id") or payload.get("container", {}).get("channel_id")
+        message_ts = payload.get("message_ts") or payload.get("container", {}).get("message_ts")
         
         actions = payload.get("actions", [])
         if not actions:
+            print("❌ No actions found in payload")
             return
         
         action = actions[0]
         action_id = action.get("action_id")
         
+        print(f"📊 Action ID: {action_id}, User: {user_id}, Channel: {channel}")
+        
         if action_id == "view_query_button":
             sql_query = action.get("value")
-            user_id = user.get("id")
             
+            if not sql_query:
+                print("❌ No SQL query found in button value")
+                return
+                
             print(f"📊 User {user_id} clicked View Query button")
             
             # Send the SQL query in a thread
@@ -172,6 +183,8 @@ async def handle_button_interaction(payload):
             
     except Exception as e:
         print(f"❌ Error handling button interaction: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 async def process_reaction_added(event):

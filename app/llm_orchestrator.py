@@ -117,13 +117,13 @@ class LLMOrchestrator:
                     from app.snowflake_runner import run_query
                     df = run_query(sql_query)
                     
-                    # Summarize the results
-                    result, response_type = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
-                    
-                    # Store SQL query for later use in response
+                    # Store SQL query for later use in response (BEFORE summarizing)
                     storage_key = f"{user_id}_{channel_id}"
                     from app.slack_handler import temp_sql_storage
                     temp_sql_storage[storage_key] = sql_query
+                    
+                    # Summarize the results
+                    result, response_type = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
                     
                     # Update conversation history with Q&A pair
                     await self._update_conversation_history(user_id, channel_id, question, sql_query, 'sql')
