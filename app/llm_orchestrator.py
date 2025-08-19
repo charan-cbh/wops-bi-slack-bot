@@ -241,35 +241,21 @@ Give a direct, brief answer with key numbers only."""
             return f"❌ Error processing data question: {str(e)}", 'error'
     
     async def _handle_sql_question(self, question: str, user_id: str, channel_id: str, assistant_id: str = None) -> str:
-        """Handle questions that require SQL generation"""
+        """Handle questions that require SQL generation using fine-tuned model directly"""
         try:
-            # Find relevant tables
-            candidate_tables = await self.table_discovery.find_relevant_tables_from_vector_store(
-                question, user_id, channel_id, top_k=8
-            )
-            
-            if not candidate_tables:
-                return "-- Error: No relevant tables found for this question"
-            
-            # Select best table
-            selected_table, reason = await self.table_discovery.select_best_table_using_samples(
-                question, candidate_tables, user_id, channel_id
-            )
-            
-            if not selected_table:
-                return "-- Error: Could not select appropriate table"
-            
-            # Discover table schema
-            schema = await self.table_discovery.discover_table_schema(selected_table)
-            
-            if schema.get('error'):
-                return f"-- Error: Could not discover schema for {selected_table}: {schema['error']}"
-            
-            # Generate SQL
-            sql = await self._generate_sql_for_table(question, selected_table, schema, user_id, channel_id)
-            
-            # Cache the table selection
-            await self.sql_generator.cache_table_selection(question, selected_table, reason, success=True)
+            # Use fine-tuned model directly with retry mechanism (same as Assistant API path)
+            if self.model_provider:
+                curated_context = await self._build_curated_context(user_id, channel_id)
+                sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
+                    question, max_retries=3, context=curated_context
+                )
+                
+                if not success:
+                    return f"-- Error: Failed to generate working SQL after 3 attempts: {error_message}"
+                
+                sql = sql_query
+            else:
+                return "-- Error: No model provider available"
             
             # Execute the SQL and get results
             try:
@@ -301,6 +287,9 @@ Give a direct, brief answer with key numbers only."""
                     final_response = await self.result_processor.summarize_with_assistant(
                         question, result_table, user_id, channel_id, assistant_id or "", sql
                     )
+                
+                # Extract table name from SQL for conversation context
+                selected_table = self._extract_table_name_from_sql(sql)
                 
                 # Update conversation context with successful results
                 await self.conversation_manager.update_conversation_context_with_sql(
@@ -463,6 +452,17 @@ Return ONLY the SQL query, no explanations."""
         sql_starters = ['SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'ALTER']
         
         return any(response_clean.startswith(starter) for starter in sql_starters)
+    
+    def _extract_table_name_from_sql(self, sql: str) -> str:
+        """Extract table name from SQL query for context tracking"""
+        import re
+        
+        # Look for FROM clause patterns
+        from_match = re.search(r'FROM\s+([A-Za-z0-9_.]+)', sql, re.IGNORECASE)
+        if from_match:
+            return from_match.group(1)
+        
+        return "unknown_table"
     
     async def _handle_sql_response(self, question: str, sql_query: str, user_id: str, channel_id: str, context: Dict[str, Any]) -> Tuple[str, str]:
         """Execute SQL query and summarize results"""
