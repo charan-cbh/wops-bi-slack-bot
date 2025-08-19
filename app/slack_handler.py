@@ -85,7 +85,29 @@ async def handle_slack_event(request: Request):
     body = await request.body()
     headers = request.headers
     body_str = body.decode("utf-8")
-    payload = json.loads(body_str)
+    
+    # Check if this is a form-encoded button interaction
+    content_type = headers.get("content-type", "")
+    print(f"🔍 Content-Type: {content_type}")
+    print(f"🔍 Body length: {len(body_str)}")
+    print(f"🔍 Body preview: {body_str[:200]}...")
+    
+    if "application/x-www-form-urlencoded" in content_type:
+        # Parse form data for button interactions
+        print("📋 Parsing form-encoded data for button interaction")
+        from urllib.parse import parse_qs
+        form_data = parse_qs(body_str)
+        print(f"🔍 Form data keys: {list(form_data.keys())}")
+        if "payload" in form_data:
+            payload = json.loads(form_data["payload"][0])
+            print(f"✅ Successfully parsed form payload")
+        else:
+            print(f"❌ No payload found in form data: {form_data}")
+            raise HTTPException(status_code=400, detail="No payload in form data")
+    else:
+        # Regular JSON payload for events
+        print("📋 Parsing JSON payload for regular event")
+        payload = json.loads(body_str)
 
     # Handle URL verification
     if payload.get("type") == "url_verification":
