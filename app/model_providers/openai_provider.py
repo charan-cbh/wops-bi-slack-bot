@@ -279,16 +279,55 @@ Previous Failed Query:
 {previous_sql}
 
 Error Message:
-{error}
-
-Please generate a corrected SQL query that fixes this error."""
+{error}"""
         
-        # Enhanced retry (attempt 3) with schema and training examples
+        # Check if this is a column/schema related error
+        is_schema_error = self._is_schema_error(error)
+        
+        if is_schema_error:
+            # Get table schema for any schema-related error (not just attempt 3)
+            print(f"🔍 Schema error detected, getting table schema for retry attempt {attempt}")
+            table_name = self._extract_table_name(previous_sql)
+            if table_name:
+                schema_info = await self._get_table_schema(table_name)
+                if schema_info and "Error" not in schema_info:
+                    base_prompt += f"""
+
+ACTUAL TABLE SCHEMA:
+{schema_info}
+
+Please regenerate the SQL query using ONLY the columns that exist in the above schema. Map the intended columns from your original query to the correct column names that actually exist in the table."""
+                else:
+                    base_prompt += f"\n\nNote: Could not retrieve schema for {table_name}. Please use standard column names."
+        
+        # Enhanced retry (attempt 3) with additional training examples
         if retry_info.get("enhanced_retry", False):
-            enhanced_context = await self._get_enhanced_retry_context(previous_sql, question, error)
-            base_prompt += f"\n\n{enhanced_context}"
+            training_examples = await self._get_relevant_training_examples(question)
+            if training_examples and "Error" not in training_examples:
+                base_prompt += f"""
+
+RELEVANT TRAINING EXAMPLES:
+{training_examples}"""
+        
+        base_prompt += "\n\nPlease generate a corrected SQL query that fixes this error."
         
         return base_prompt
+    
+    def _is_schema_error(self, error: str) -> bool:
+        """Check if the error is related to schema/column issues"""
+        error_lower = error.lower()
+        schema_error_keywords = [
+            'invalid identifier',
+            'column not found',
+            'unknown column',
+            'column does not exist',
+            'no such column',
+            'undefined column',
+            'invalid column',
+            'compilation error'
+        ]
+        
+        return any(keyword in error_lower for keyword in schema_error_keywords)
     
     async def _get_enhanced_retry_context(self, failed_sql: str, question: str, error: str) -> str:
         """Get enhanced context for final retry: schema + training examples"""
