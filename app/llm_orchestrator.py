@@ -118,12 +118,17 @@ class LLMOrchestrator:
                     df = run_query(sql_query)
                     
                     # Summarize the results
-                    result = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
+                    result, response_type = await self._summarize_sql_results(question, df, sql_query, user_id, channel_id, context)
+                    
+                    # Store SQL query for later use in response
+                    storage_key = f"{user_id}_{channel_id}"
+                    from app.slack_handler import temp_sql_storage
+                    temp_sql_storage[storage_key] = sql_query
                     
                     # Update conversation history with Q&A pair
                     await self._update_conversation_history(user_id, channel_id, question, sql_query, 'sql')
                     
-                    return result
+                    return result, response_type
                 else:
                     # All retries failed, return error with final attempt
                     error_response = f"❌ Failed to generate working SQL query after 3 attempts.\n\nFinal error: {error_message}\n\nLast SQL attempted:\n```sql\n{sql_query}\n```"

@@ -76,6 +76,8 @@ recent_event_ids = set()
 # Store message timestamps for feedback tracking
 message_to_question_map = {}  # {channel_ts: {question, sql, table}}
 processed_reactions = set()  # Track processed reactions to avoid duplicates
+# Store SQL queries temporarily for response tracking
+temp_sql_storage = {}  # {user_id_channel_id: sql_query}
 
 
 async def handle_slack_event(request: Request):
@@ -109,6 +111,11 @@ async def handle_slack_event(request: Request):
     if not hmac.compare_digest(my_signature, slack_signature):
         raise HTTPException(status_code=403, detail="Invalid request signature")
 
+    # Check if this is a button interaction
+    if payload.get("type") == "block_actions":
+        asyncio.create_task(handle_button_interaction(payload))
+        return {"message": "Button interaction received"}
+
     event = payload.get("event", {})
     event_type = event.get("type")
     event_id = payload.get("event_id")
@@ -131,6 +138,40 @@ async def handle_slack_event(request: Request):
         asyncio.create_task(process_reaction_removed(event))
 
     return {"message": "Slack event received"}
+
+
+async def handle_button_interaction(payload):
+    """Handle button interactions like View Query"""
+    try:
+        user = payload.get("user", {})
+        channel = payload.get("container", {}).get("channel_id")
+        message_ts = payload.get("container", {}).get("message_ts")
+        
+        actions = payload.get("actions", [])
+        if not actions:
+            return
+        
+        action = actions[0]
+        action_id = action.get("action_id")
+        
+        if action_id == "view_query_button":
+            sql_query = action.get("value")
+            user_id = user.get("id")
+            
+            print(f"📊 User {user_id} clicked View Query button")
+            
+            # Send the SQL query in a thread
+            query_message = f"📊 **SQL Query Used:**\n```sql\n{sql_query}\n```"
+            
+            await send_slack_message(
+                channel, 
+                query_message, 
+                thread_ts=message_ts,
+                include_feedback_hint=False
+            )
+            
+    except Exception as e:
+        print(f"❌ Error handling button interaction: {e}")
 
 
 async def process_reaction_added(event):
@@ -320,8 +361,16 @@ async def process_app_mention(event):
                     except:
                         pass
                 
-                # Send the final response directly
-                await send_slack_message(channel_id, response, include_feedback_hint=True)
+                # Get stored SQL query for this user/channel
+                storage_key = f"{user_id}_{channel_id}"
+                sql_query = temp_sql_storage.get(storage_key)
+                
+                # Send the final response directly with View Query button
+                await send_slack_message(channel_id, response, include_feedback_hint=True, sql_query=sql_query)
+                
+                # Clean up temp storage
+                if storage_key in temp_sql_storage:
+                    del temp_sql_storage[storage_key]
                 # Update conversation context
                 await update_conversation_context(user_id, channel_id, clean_question, response, 'sql_results')
             elif response_type == 'error':
@@ -1053,8 +1102,8 @@ async def execute_sql_final(clean_question: str, sql: str, channel_id: str, user
             await update_conversation_context(user_id, channel_id, clean_question, result_message, 'sql_results',
                                               selected_table)
 
-            # Send result
-            response = await send_slack_message(channel_id, result_message, include_feedback_hint=True)
+            # Send result with View Query button
+            response = await send_slack_message(channel_id, result_message, include_feedback_hint=True, sql_query=extracted_sql)
 
             # Store for feedback tracking only if successful
             if response and selected_table and result_count > 0:
@@ -1100,8 +1149,8 @@ async def handle_with_embeddings(clean_question: str, channel_id: str, user_id: 
     await execute_sql_and_respond(clean_question, sql, channel_id, user_id)
 
 
-async def send_slack_message(channel_id: str, message: str, thread_ts: str = None, include_feedback_hint: bool = False):
-    """Send message to Slack with error handling"""
+async def send_slack_message(channel_id: str, message: str, thread_ts: str = None, include_feedback_hint: bool = False, sql_query: str = None):
+    """Send message to Slack with error handling and optional SQL query button"""
     try:
         # Ensure message isn't too long for Slack (4000 char limit)
         if len(message) > 3900:
@@ -1116,11 +1165,45 @@ async def send_slack_message(channel_id: str, message: str, thread_ts: str = Non
             "text": message
         }
 
+        # Add View Query button if SQL query is provided
+        if sql_query:
+            # Truncate SQL query if too long for button value (max 2000 chars)
+            button_sql = sql_query[:1900] + "..." if len(sql_query) > 1900 else sql_query
+            
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": message
+                    }
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "📊 View Query",
+                                "emoji": True
+                            },
+                            "value": button_sql,
+                            "action_id": "view_query_button",
+                            "style": "primary"
+                        }
+                    ]
+                }
+            ]
+            params["blocks"] = blocks
+            # Remove text param when using blocks, but keep it as fallback
+            params["text"] = "Query result with View Query option"
+
         if thread_ts:
             params["thread_ts"] = thread_ts
 
         response = slack_client.chat_postMessage(**params)
-        print(f"📤 Sent message to channel {channel_id}")
+        print(f"📤 Sent message to channel {channel_id}{' with View Query button' if sql_query else ''}")
         return response
     except SlackApiError as e:
         print(f"❌ Slack API error: {e.response['error']}")
