@@ -75,3 +75,6 @@ test_finetuned*.py
 *FINE_TUNING*.md
 *TRAINING_DATASET*.md
 .env.finetuned
+
+# Claude context file (keep local only)
+CLAUDE_CONTEXT.md
