@@ -193,7 +193,7 @@ class OpenAIProvider(BaseModelProvider):
         
         return sql
     
-    async def generate_sql_with_retry(self, question: str, max_retries: int = 3, context: Dict[str, Any] = None) -> Tuple[str, bool, str]:
+    async def generate_sql_with_retry(self, question: str, max_retries: int = 5, context: Dict[str, Any] = None) -> Tuple[str, bool, str]:
         """
         Generate SQL with progressive retry mechanism
         Returns: (sql_query, success, error_message)
@@ -260,6 +260,10 @@ class OpenAIProvider(BaseModelProvider):
         if attempt == 2:  # Third attempt (0-indexed)
             # Enhanced retry with schema and training examples
             retry_info["enhanced_retry"] = True
+        elif attempt >= 3:  # Fourth and fifth attempts (0-indexed)
+            # Data context retry with sample data
+            retry_info["data_context_retry"] = True
+            retry_info["sample_data_needed"] = True
             
         retry_context["retry_info"] = retry_info
         return retry_context
@@ -308,6 +312,34 @@ Please regenerate the SQL query using ONLY the columns that exist in the above s
 
 RELEVANT TRAINING EXAMPLES:
 {training_examples}"""
+        
+        # Data context retry (attempts 4-5) with sample data
+        if retry_info.get("data_context_retry", False):
+            print(f"🔍 Data context retry - getting sample data for attempt {attempt}")
+            table_names = self._extract_all_table_names(previous_sql)
+            
+            if table_names:
+                sample_data_sections = []
+                for table_name in table_names:
+                    table_samples = await self._get_table_samples(table_name)
+                    if table_samples and "Error" not in table_samples:
+                        sample_data_sections.append(f"""
+TABLE: {table_name}
+{table_samples}""")
+                
+                if sample_data_sections:
+                    base_prompt += f"""
+
+SAMPLE DATA CONTEXT:
+The following shows actual data from the table(s) to help you understand the data formats, types, and structure. Use this to generate a more accurate query.
+{''.join(sample_data_sections)}
+
+IMPORTANT: Use the exact column names and data formats shown in the sample data above. Pay attention to:
+- Column names (case sensitive)
+- Data types (TEXT, INTEGER, DECIMAL, TIMESTAMP, etc.)
+- Date/timestamp formats
+- NULL vs empty values
+- Actual value patterns"""
         
         base_prompt += "\n\nPlease generate a corrected SQL query that fixes this error."
         
@@ -362,6 +394,33 @@ RELEVANT TRAINING EXAMPLES:
             return from_match.group(1)
         
         return ""
+    
+    def _extract_all_table_names(self, sql: str) -> List[str]:
+        """Extract all table names from SQL query (handles JOINs and multiple tables)"""
+        import re
+        
+        table_names = set()
+        sql_upper = sql.upper()
+        
+        # Common table name patterns
+        patterns = [
+            r'FROM\s+([A-Za-z0-9_.]+)',  # FROM clause
+            r'JOIN\s+([A-Za-z0-9_.]+)',  # JOIN clauses
+            r'LEFT\s+JOIN\s+([A-Za-z0-9_.]+)',  # LEFT JOIN
+            r'RIGHT\s+JOIN\s+([A-Za-z0-9_.]+)',  # RIGHT JOIN  
+            r'INNER\s+JOIN\s+([A-Za-z0-9_.]+)',  # INNER JOIN
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, sql, re.IGNORECASE)
+            for match in matches:
+                # Clean up table name (remove aliases, schema prefixes if needed)
+                table_name = match.strip()
+                if table_name and not table_name.upper() in ['AS', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING']:
+                    table_names.add(table_name)
+        
+        # Remove duplicates and return as list
+        return list(table_names)[:3]  # Limit to first 3 tables to avoid too much data
     
     async def _get_table_schema(self, table_name: str) -> str:
         """Get table schema using DESCRIBE query"""

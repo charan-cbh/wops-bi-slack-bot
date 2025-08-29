@@ -13,7 +13,7 @@ from app.model_providers.provider_factory import get_model_provider, get_provide
 # Configuration
 USE_ASSISTANT_API = os.getenv("USE_ASSISTANT_API", "false").lower() == "true"
 ASSISTANT_ID = os.getenv("ASSISTANT_ID", "")
-MAX_SQL_ATTEMPTS = int(os.getenv("MAX_SQL_ATTEMPTS", "3"))
+MAX_SQL_ATTEMPTS = int(os.getenv("MAX_SQL_ATTEMPTS", "5"))
 ENABLE_CACHE = os.getenv("ENABLE_CACHE", "true").lower() == "true"
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "openai").lower()
 
@@ -109,7 +109,7 @@ class LLMOrchestrator:
             if await self._requires_sql_query_ai(question):
                 # Data question: Use retry mechanism for SQL generation
                 sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
-                    question, max_retries=3, context=curated_context
+                    question, max_retries=MAX_SQL_ATTEMPTS, context=curated_context
                 )
                 
                 if success:
@@ -131,7 +131,7 @@ class LLMOrchestrator:
                     return result, response_type
                 else:
                     # All retries failed, return error with final attempt
-                    error_response = f"❌ Failed to generate working SQL query after 3 attempts.\n\nFinal error: {error_message}\n\nLast SQL attempted:\n```sql\n{sql_query}\n```"
+                    error_response = f"❌ Failed to generate working SQL query after {MAX_SQL_ATTEMPTS} attempts.\n\nFinal error: {error_message}\n\nLast SQL attempted:\n```sql\n{sql_query}\n```"
                     
                     await self._update_conversation_history(user_id, channel_id, question, error_response, 'error')
                     return error_response, 'error'
@@ -252,11 +252,11 @@ Give a direct, brief answer with key numbers only."""
             if self.model_provider:
                 curated_context = await self._build_curated_context(user_id, channel_id)
                 sql_query, success, error_message = await self.model_provider.generate_sql_with_retry(
-                    question, max_retries=3, context=curated_context
+                    question, max_retries=MAX_SQL_ATTEMPTS, context=curated_context
                 )
                 
                 if not success:
-                    return f"-- Error: Failed to generate working SQL after 3 attempts: {error_message}"
+                    return f"-- Error: Failed to generate working SQL after {MAX_SQL_ATTEMPTS} attempts: {error_message}"
                 
                 sql = sql_query
             else:

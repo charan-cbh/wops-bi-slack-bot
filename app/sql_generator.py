@@ -5,7 +5,7 @@ import json
 from typing import Dict, Any, List, Tuple, Optional
 from app.cache_manager import cache_manager, SQL_CACHE_PREFIX, SQL_CACHE_TTL, FEEDBACK_PREFIX, FEEDBACK_CACHE_TTL, TABLE_SELECTION_PREFIX, TABLE_SELECTION_CACHE_TTL
 
-MAX_SQL_ATTEMPTS = int(os.getenv("MAX_SQL_ATTEMPTS", "3"))
+MAX_SQL_ATTEMPTS = int(os.getenv("MAX_SQL_ATTEMPTS", "5"))
 
 
 class SQLGenerator:
